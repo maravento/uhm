@@ -3,11 +3,27 @@
 #
 ################################################################################
 #
-# uhmwatch -- UniFi Hotspot Services Watchdog (optional)
+# uhmwatch -- UniFi Hotspot Services Watchdog
 #
 # DESCRIPTION:
-# Runs every 5 minutes via cron. Watches every service uhm depends on
-# and restarts whichever one is down. Each service check is fully
+# Mandatory -- installed automatically by uhmsetup.sh, not offered as a
+# yes/no prompt like uhmalert/uhmmon. Every unit it watches (uhmd,
+# pydhcpd, the UniFi backend) already has its own systemd Restart=
+# policy, but that alone gives up permanently once StartLimitBurst is
+# exhausted, with no further attempt and no alert -- see the
+# StartLimitBurst paragraph below. uhmwatch is the last line of defense
+# against that: it runs every minute, independent of whatever state
+# systemd itself gave up in, so uhm's essential services don't stay
+# down indefinitely just because systemd stopped trying.
+#
+# Runs every minute via cron. Watches every service uhm depends on
+# and restarts whichever one is down. Each restart is preceded by
+# `systemctl reset-failed` -- each unit already has its own Restart=
+# policy, so a persistent failure eventually exhausts its
+# StartLimitBurst and systemd stops trying on its own, leaving the
+# service down for good with no further notice. reset-failed clears
+# that state so this watchdog's own restart attempt isn't silently
+# rejected right when it's needed most. Each service check is fully
 # independent -- one check's failure/fix never skips or blocks the others
 # in the same run (unlike a naive watchdog that exits after the first fix).
 #
@@ -15,7 +31,14 @@
 # 1. uhmd.service -- always.
 # 2. uhmalert.service -- only if installed (optional component of uhm;
 # silently skipped if its unit file isn't present).
-# 3. UniFi backend -- branches on UNIFI_TYPE from uhm.env. Both branches
+# 3. pydhcpd.service -- always. External dependency (separate project),
+# not part of uhm's own codebase, same reasoning as watching the UniFi
+# backend below: pydhcpd's own Restart=on-failure eventually exhausts
+# its StartLimitBurst and gives up silently (see pydhcp's own README),
+# with no alerting of its own -- uhmd cannot function without it, so it
+# gets the same treatment as uhmd.service itself. is-active only, no
+# functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
+# 4. UniFi backend -- branches on UNIFI_TYPE from uhm.env. Both branches
 # first require systemctl is-active (start it if not), then run a
 # functional check: a real login against the API (same mechanism
 # uhmd.sh itself uses -- credentials via jq env, payload via curl
@@ -46,8 +69,8 @@
 # watchdog (if any); this one only knows about uhm's own dependencies.
 #
 # USAGE:
-# sudo ./uhmwatch.sh install Deploy to /etc/uhm/tools/uhmwatch.sh,
-# register cron entry (*/5 * * * *)
+# sudo ./uhmwatch.sh install Deploy to /etc/uhm/core/uhmwatch.sh,
+# register cron entry (* * * * *)
 # sudo ./uhmwatch.sh uninstall Remove the cron entry
 # uhmwatch.sh Run the checks directly (what cron invokes)
 # uhmwatch.sh -h, --help Show this help
@@ -106,13 +129,17 @@ for dep in curl jq iproute2 cron coreutils util-linux; do
     fi
 done
 
-TARGET="/etc/uhm/tools/uhmwatch.sh"
+TARGET="/etc/uhm/core/uhmwatch.sh"
+# Pre-restructure location -- uhmwatch.sh lived under tools/ before it
+# became mandatory. install_module() migrates a crontab entry still
+# pointing there instead of leaving it stale (see below).
+LEGACY_TARGET="/etc/uhm/tools/uhmwatch.sh"
 
 install_module() {
     echo ""
-    echo "=================================="
+    echo "==========================================="
     echo "Installing uhmwatch (uhm services watchdog)"
-    echo "=================================="
+    echo "==========================================="
     echo ""
 
     SELF="$(readlink -f "$0")"
@@ -122,27 +149,34 @@ install_module() {
         install -m 755 -o root -g root "$SELF" "$TARGET"
     fi
 
-    local cron_entry="*/5 * * * * $TARGET"
+    local cron_entry="* * * * * $TARGET"
     local current
     current=$(crontab -l 2>/dev/null || true)
+    if echo "$current" | grep -qF "$LEGACY_TARGET"; then
+        current=$(echo "$current" | grep -vF "$LEGACY_TARGET")
+        crontab - <<< "$current"
+        echo "Removed stale cron entry pointing to legacy path $LEGACY_TARGET"
+    fi
     if echo "$current" | grep -vE '^\s*#' | grep -qF "$TARGET"; then
         echo "Cron entry already present -- leaving it untouched."
     else
         { printf '%s\n%s\n' "$current" "$cron_entry"; } | crontab -
         echo "Cron entry registered: $cron_entry"
     fi
+    rm -f "$LEGACY_TARGET"
 
     echo ""
-    echo "Installed. First run happens on the next 5-minute mark."
+    echo "Installed. First run happens on the next minute mark."
     echo "Check the log with: tail -f $log_file"
     echo ""
 }
 
 uninstall_module() {
     echo "Removing uhmwatch cron entry..."
-    if crontab -l 2>/dev/null | grep -qF "$TARGET"; then
-        crontab -l 2>/dev/null | grep -vF "$TARGET" | crontab -
-        echo "Cron entry removed. $TARGET was left in place -- delete it manually if desired."
+    if crontab -l 2>/dev/null | grep -qF -e "$TARGET" -e "$LEGACY_TARGET"; then
+        crontab -l 2>/dev/null | grep -vF -e "$TARGET" -e "$LEGACY_TARGET" | crontab -
+        echo "Cron entry removed. $TARGET was left in place --"
+        echo "delete it manually if desired."
     else
         echo "No cron entry found for $TARGET."
     fi
@@ -190,7 +224,7 @@ _load_conf() {
             value="${value//\\\\/\\}"
         fi
         case "$key" in
-            UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN)
+            UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN|RECOVERY_COOLDOWN_SECONDS)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
@@ -198,6 +232,9 @@ _load_conf() {
 }
 _load_conf "$_UHM_CONF"
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
+_UH_UINT='^(0|[1-9][0-9]*)$'
+RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
+[[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || { log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- default 600"; RECOVERY_COOLDOWN_SECONDS=600; }
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
     UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
 else
@@ -206,11 +243,18 @@ fi
 
 check_uhmd() {
     if systemctl is-active --quiet uhmd.service; then
-        :
+        _clear_recovery_attempt "uhmd.service"
     else
         log "WARNING: uhmd OFFLINE"
+        if _recovery_on_cooldown "uhmd.service"; then
+            log "INFO: uhmd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "uhmd.service"
+        systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
-            log "uhmd FIX (restarted)"
+            log "FIX: uhmd restarted"
+            _clear_recovery_attempt "uhmd.service"
         else
             log "ERROR: uhmd restart FAILED"
         fi
@@ -224,20 +268,54 @@ check_ualert() {
         return
     fi
     if systemctl is-active --quiet uhmalert.service; then
-        :
+        _clear_recovery_attempt "uhmalert.service"
     else
         log "WARNING: uhmalert OFFLINE"
+        if _recovery_on_cooldown "uhmalert.service"; then
+            log "INFO: uhmalert recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "uhmalert.service"
+        systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
-            log "uhmalert FIX (restarted)"
+            log "FIX: uhmalert restarted"
+            _clear_recovery_attempt "uhmalert.service"
         else
             log "ERROR: uhmalert restart FAILED"
         fi
     fi
 }
 
+check_pydhcpd() {
+    # pydhcp is a separate project uhm depends on for DHCP -- same reasoning
+    # as watching the UniFi backend below: an external dependency this host
+    # can't function without, but that pydhcp's own systemd unit alone
+    # cannot fully self-heal (see pydhcp's README -- systemd gives up after
+    # its own StartLimitBurst and has no alerting of its own). No functional
+    # check here (pydhcpd exposes no HTTP API to probe like UniFi does) --
+    # is-active is the only signal available, same shape as check_uhmd above.
+    if systemctl is-active --quiet pydhcpd.service; then
+        _clear_recovery_attempt "pydhcpd.service"
+    else
+        log "WARNING: pydhcpd OFFLINE"
+        if _recovery_on_cooldown "pydhcpd.service"; then
+            log "INFO: pydhcpd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "pydhcpd.service"
+        systemctl reset-failed pydhcpd.service 2>/dev/null || true
+        if systemctl restart pydhcpd.service; then
+            log "FIX: pydhcpd restarted"
+            _clear_recovery_attempt "pydhcpd.service"
+        else
+            log "ERROR: pydhcpd restart FAILED"
+        fi
+    fi
+}
+
 # Returns 0 (true) if <service> became active less than RESTART_GRACE_SECONDS
 # ago -- gives it time to actually finish booting (UOS Server/UniFi Network
-# can take a couple of minutes) before the next cron tick (every 5 min)
+# can take a couple of minutes) before the next cron tick (every min)
 # restarts it again mid-boot, which would otherwise never let it converge.
 RESTART_GRACE_SECONDS=180
 _recently_restarted() {
@@ -248,6 +326,37 @@ _recently_restarted() {
     (( elapsed < RESTART_GRACE_SECONDS ))
 }
 
+# Recovery cooldown: distinct from _recently_restarted above, which only
+# tracks a *successful* start. This tracks the last recovery *attempt*
+# (reset-failed + restart) regardless of outcome, so a persistently broken
+# service (controller down, credentials wrong, etc.) isn't hammered with a
+# restart every single minute -- each unit's own StartLimitBurst would
+# otherwise get reset-failed straight through by this watchdog, effectively
+# disabling systemd's own circuit breaker. State lives under /run (tmpfs),
+# so a reboot naturally clears any stale cooldowns.
+RECOVERY_STATE_DIR="/run/uhmwatch"
+_recovery_on_cooldown() {
+    local svc="$1"
+    local state_file="${RECOVERY_STATE_DIR}/${svc}.attempted_at" last now
+    [[ -f "$state_file" ]] || return 1
+    last=$(cat "$state_file" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    (( (now - last) < RECOVERY_COOLDOWN_SECONDS ))
+}
+
+_mark_recovery_attempt() {
+    mkdir -p "$RECOVERY_STATE_DIR"
+    date +%s > "${RECOVERY_STATE_DIR}/${1}.attempted_at"
+}
+
+# Called once a service is confirmed healthy again -- without this, the
+# cooldown from a resolved incident would still throttle a genuinely new,
+# unrelated failure that happens to occur within RECOVERY_COOLDOWN_SECONDS
+# of the earlier (already-fixed) one.
+_clear_recovery_attempt() {
+    rm -f "${RECOVERY_STATE_DIR}/${1}.attempted_at" 2>/dev/null || true
+}
+
 check_uosserver() {
     # All-in-one container -- its internal MongoDB is bundled and managed by
     # the container itself, never a host-level service. Do not check/restart
@@ -256,8 +365,15 @@ check_uosserver() {
     # unrelated host-level Mongo issue.
     if ! systemctl is-active --quiet uosserver.service; then
         log "WARNING: UOS OFFLINE"
+        if _recovery_on_cooldown "uosserver.service"; then
+            log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "uosserver.service"
+        systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
-            log "UOS FIX (start)"
+            log "FIX: uosserver started"
+            _clear_recovery_attempt "uosserver.service"
         else
             log "ERROR: uosserver start FAILED"
         fi
@@ -279,14 +395,23 @@ check_uosserver() {
         if ! ss -lnt | grep -qE ':11443\b'; then
             log "WARNING: UOS BROKEN_PORTS"
             if _recently_restarted "uosserver.service"; then
-                log "INFO: uosserver.service restarted recently -- still within startup grace, not restarting again"
+                log "INFO: uosserver restarted recently -- skip (grace)"
                 return
             fi
+            if _recovery_on_cooldown "uosserver.service"; then
+                log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+                return
+            fi
+            _mark_recovery_attempt "uosserver.service"
+            systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
-                log "UOS FIX (restarted)"
+                log "FIX: uosserver restarted"
+                _clear_recovery_attempt "uosserver.service"
             else
                 log "ERROR: uosserver restart FAILED"
             fi
+        else
+            _clear_recovery_attempt "uosserver.service"
         fi
         return
     fi
@@ -302,21 +427,28 @@ check_uosserver() {
         --data-binary @- <<< "$payload" 2>/dev/null || true)
     http_code="${http_code:-000}"
     if [[ "$http_code" == "200" ]]; then
-        :
+        _clear_recovery_attempt "uosserver.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "uosserver.service"; then
-            log "INFO: uosserver.service restarted recently -- still within startup grace, not restarting again"
+            log "INFO: uosserver restarted recently -- skip (grace)"
             return
         fi
+        if _recovery_on_cooldown "uosserver.service"; then
+            log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "uosserver.service"
+        systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
-            log "UOS FIX (login failed)"
+            log "FIX: uosserver restarted (login failed)"
+            _clear_recovery_attempt "uosserver.service"
         else
             log "ERROR: uosserver restart FAILED"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: rate limited by controller (HTTP 429) -- too many login attempts, not a credentials problem"
-        log "Stop uhmd + uhmwatch cron before restarting the controller -- see README, uhmwatch: Controller lockout"
+        log "WARNING: rate limited (HTTP 429), not a credentials issue"
+        log "Stop uhmd+uhmwatch cron before restarting (see README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "Check uhm.env - UOS itself is responding"
@@ -326,8 +458,15 @@ check_uosserver() {
 check_unifi_classic() {
     if ! systemctl is-active --quiet unifi.service; then
         log "WARNING: UniFi (classic) OFFLINE"
+        if _recovery_on_cooldown "unifi.service"; then
+            log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "unifi.service"
+        systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
-            log "UniFi (classic) FIX (start)"
+            log "FIX: unifi started"
+            _clear_recovery_attempt "unifi.service"
         else
             log "ERROR: unifi.service start FAILED"
         fi
@@ -345,14 +484,23 @@ check_unifi_classic() {
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
             log "WARNING: UniFi (classic) BROKEN_PORTS"
             if _recently_restarted "unifi.service"; then
-                log "INFO: unifi.service restarted recently -- still within startup grace, not restarting again"
+                log "INFO: unifi restarted recently -- skip (grace)"
                 return
             fi
+            if _recovery_on_cooldown "unifi.service"; then
+                log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+                return
+            fi
+            _mark_recovery_attempt "unifi.service"
+            systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
-                log "UniFi (classic) FIX (restarted)"
+                log "FIX: unifi restarted"
+                _clear_recovery_attempt "unifi.service"
             else
                 log "ERROR: unifi.service restart FAILED"
             fi
+        else
+            _clear_recovery_attempt "unifi.service"
         fi
         return
     fi
@@ -368,21 +516,28 @@ check_unifi_classic() {
         --data-binary @- <<< "$payload" 2>/dev/null || true)
     http_code="${http_code:-000}"
     if [[ "$http_code" == "200" ]]; then
-        :
+        _clear_recovery_attempt "unifi.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "unifi.service"; then
-            log "INFO: unifi.service restarted recently -- still within startup grace, not restarting again"
+            log "INFO: unifi restarted recently -- skip (grace)"
             return
         fi
+        if _recovery_on_cooldown "unifi.service"; then
+            log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
+            return
+        fi
+        _mark_recovery_attempt "unifi.service"
+        systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
-            log "UniFi (classic) FIX (login failed)"
+            log "FIX: unifi restarted (login failed)"
+            _clear_recovery_attempt "unifi.service"
         else
             log "ERROR: unifi.service restart FAILED"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: rate limited by controller (HTTP 429) -- too many login attempts, not a credentials problem"
-        log "Stop uhmd + uhmwatch cron before restarting the controller -- see README, uhmwatch: Controller lockout"
+        log "WARNING: rate limited (HTTP 429), not a credentials issue"
+        log "Stop uhmd+uhmwatch cron before restarting (see README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "Check uhm.env - unifi.service is responding"
@@ -391,6 +546,7 @@ check_unifi_classic() {
 
 check_uhmd
 check_ualert
+check_pydhcpd
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
     check_uosserver
 else

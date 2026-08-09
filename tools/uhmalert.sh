@@ -160,7 +160,8 @@ install_module() {
 NTFY_TOPIC=\"$gen_topic\"
 API_FAIL_THRESHOLD=3
 UALERT_QUIET_PERIOD_SECONDS=120"
-        echo "Added NTFY_TOPIC, API_FAIL_THRESHOLD and UALERT_QUIET_PERIOD_SECONDS to $CONFIG_FILE"
+        echo "Added NTFY_TOPIC, API_FAIL_THRESHOLD and"
+        echo "UALERT_QUIET_PERIOD_SECONDS to $CONFIG_FILE"
     fi
     # Insert right after their neighbor in the Alert block (not a plain
     # >> append) so upgrading an older install doesn't scatter these
@@ -226,7 +227,8 @@ uninstall_module() {
     systemctl disable uhmalert.service 2>/dev/null || true
     rm -f "$UNIT_PATH"
     systemctl daemon-reload
-    echo "uhmalert.service removed. $TARGET was left in place -- delete it manually if desired."
+    echo "uhmalert.service removed. $TARGET was left in place --"
+        echo "delete it manually if desired."
 }
 
 case "${1:-}" in
@@ -264,8 +266,10 @@ _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
 _gdigit="${_perms: -2:1}"
 _odigit="${_perms: -1}"
 if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: $CONFIG_FILE has unsafe owner/permissions (owner=$_owner perms=$_perms)"
-    log "ERROR: must be owned by root with no group/other access (600)"
+    log "ERROR: $CONFIG_FILE has unsafe owner/permissions"
+    log "  (owner=$_owner perms=$_perms)"
+    log "ERROR: must be owned by root with no group/other access"
+    log "  (600)"
     exit 1
 fi
 # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
@@ -390,11 +394,14 @@ while true; do
 
         # Generic catch-all: any other ERROR/WARNING line, from
         # uhmd.sh or the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain
-        # (shared log) -- fires immediately, no streak needed.
-        if (( is_connectivity == 0 )) && { [[ "$msg" == ERROR:* ]] || [[ "$msg" == WARNING:* ]]; }; then
+        # (shared log) -- fires immediately, no streak needed. FIX: lines
+        # come only from uhmwatch.sh (any of the services it manages) --
+        # a successful recovery closing out an earlier WARNING/ERROR alert.
+        if (( is_connectivity == 0 )) && { [[ "$msg" == ERROR:* ]] || [[ "$msg" == WARNING:* ]] || [[ "$msg" == FIX:* ]]; }; then
             _now_epoch=$(date +%s)
             if [[ "$msg" == "$last_generic_msg" ]] && (( _now_epoch - last_generic_time < DEDUP_WINDOW )); then
-                log "INFO: suppressing repeated alert (same message within ${DEDUP_WINDOW}s) -- $msg"
+                log "INFO: suppressing repeated alert"
+                log "  (same message within ${DEDUP_WINDOW}s) -- $msg"
                 continue
             fi
             last_generic_msg="$msg"
@@ -422,12 +429,14 @@ while true; do
         if (( streak == FAIL_THRESHOLD )) && (( alerted == 0 )); then
             uhmd_start=$(uhmd_started_at)
             if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UALERT_QUIET_PERIOD )); then
-                log "INFO: $streak consecutive failures within uhmd startup grace window (${UALERT_QUIET_PERIOD}s)"
+                log "INFO: $streak consecutive failures within uhmd startup grace"
+            log "  window (${UALERT_QUIET_PERIOD}s)"
                 log "INFO: suppressing alert"
                 streak=0
             else
                 notify "uhm: $streak consecutive failed cycles reaching the controller (since $ts)"
-                log "ALERT: sent -- $streak consecutive cycle failures, latest at $ts"
+                log "ALERT: sent -- $streak consecutive cycle failures"
+            log "  latest at $ts"
                 alerted=1
             fi
         fi

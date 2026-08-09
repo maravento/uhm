@@ -18,23 +18,26 @@
 # ./core/uhmd.service
 # ./core/uhmreload.sh
 # ./core/uhmleases.sh
+# ./core/uhmwatch.sh
 # ./tools/uhmaudit.sh
 # ./tools/uhmcheck.sh
 # ./tools/uhmmon.sh
 # ./tools/uhmalert.sh
-# ./tools/uhmwatch.sh
 # ./tools/uhmiptables_example.sh (reference template only -- see below,
 # not required, not deployed)
 # ./acl/uhm-auth.txt
 # ./acl/uhm-queue.txt
 # ./acl/uhm-grace.txt
 #
-# core/ holds the reload mechanism itself (uhmleases.sh reconciles ACLs/leases,
+# core/ holds the reload mechanism (uhmleases.sh reconciles ACLs/leases,
 # uhmreload.sh invokes it, uhmd.sh/.service run the daemon that calls
-# uhmreload.sh) -- uhm cannot function without any of these. tools/ holds
-# independent, optional utilities (auditing, monitoring, alerting) that
-# uhm runs fine without. acl/ holds uhm's own data files (empty
-# templates in the repo, deployed once and never overwritten afterward) --
+# uhmreload.sh) plus uhmwatch.sh -- mandatory too, but for a different
+# reason: it is the services watchdog, not part of the reload chain (see
+# its own header). uhm cannot function correctly without any of these
+# five. tools/ holds independent, optional utilities (auditing,
+# monitoring, alerting) that uhm runs fine without. acl/ holds uhm's own
+# data files (empty templates in the repo, deployed once and never
+# overwritten afterward) --
 # not to be confused with /etc/acl, which belongs to pydhcp/iptables.
 #
 # tools/uhmiptables_example.sh is a reference template, not a functional
@@ -121,7 +124,7 @@ REPO_UHMD="${REPO_CORE}/uhmd.sh"
 REPO_SERVICE="${REPO_CORE}/uhmd.service"
 
 # --- Required apt packages ----------------------------------------------------
-APT_DEPS=(curl jq ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2)
+APT_DEPS=(curl jq ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron)
 
 # --- Discovered runtime values (filled during install) -----------------------
 DHCP_BACKEND="" # "pydhcpd"
@@ -252,7 +255,7 @@ detect_dhcp_backend() {
         info "DHCP backend detected: pydhcpd"
     else
         err "pydhcpd is not active."
-        err "Install and start pydhcpd from https://github.com/maravento/pydhcp"
+        err "Install pydhcpd from https://github.com/maravento/pydhcp"
         abort "Aborting: DHCP backend required."
     fi
 }
@@ -477,7 +480,8 @@ run_setup_wizard() {
     ask_interface "WAN interface" "eth0" CFG_WAN_IF
 
     step "pydhcp network configuration"
-    info "Loaded from $PYDHCP_ENV -- Server IP: $CFG_SERVER_IP  Mask: $CFG_SERV_MASK  DNS: $CFG_SERV_DNS"
+    info "Loaded from $PYDHCP_ENV"
+    info "  Server IP: $CFG_SERVER_IP  Mask: $CFG_SERV_MASK  DNS: $CFG_SERV_DNS"
 
     step "Hotspot IP range"
     CFG_IP_RANGE=$(echo "$CFG_SERVER_IP" | cut -d'.' -f1-3)
@@ -489,12 +493,14 @@ run_setup_wizard() {
         ask_octet "Range start (last octet)" "160" CFG_RANGE_START
         ask_octet "Range end (last octet)" "199" CFG_RANGE_END "$CFG_RANGE_START"
         if (( server_octet >= CFG_RANGE_START && server_octet <= CFG_RANGE_END )); then
-            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} includes the server's own IP (.${server_octet}). Choose a different range."
+            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} includes the server's own IP"
+            err "  (.${server_octet}). Choose a different range."
             continue
         fi
         if ranges_overlap "${CFG_IP_RANGE}.${CFG_RANGE_START}" "${CFG_IP_RANGE}.${CFG_RANGE_END}" \
                            "$CFG_SERV_INI_RANGE_BLOCK" "$CFG_SERV_END_RANGE_BLOCK"; then
-            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} overlaps pydhcp's own pool (${pydhcp_pool_start_oct}-${pydhcp_pool_end_oct}). Choose a different range."
+            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} overlaps pydhcp's own pool"
+            err "  (${pydhcp_pool_start_oct}-${pydhcp_pool_end_oct}). Choose a different range."
             continue
         fi
         break
@@ -534,7 +540,7 @@ run_setup_wizard() {
         CFG_ESSID="${ssid_list[0]}"
         info "SSID detected: $CFG_ESSID"
     elif (( ${#ssid_list[@]} > 1 )); then
-        echo "Multiple SSIDs found on the controller -- select the one used by the captive portal:"
+        echo "Multiple SSIDs found -- select the one used by the captive portal:"
         select CFG_ESSID in "${ssid_list[@]}"; do
             [[ -n "$CFG_ESSID" ]] && break
             echo "Invalid selection -- enter the number of one of the SSIDs listed above."
@@ -564,7 +570,8 @@ run_setup_wizard() {
     if ! version_ge "$detected_version" "$min_version"; then
         abort "Detected UniFi version ${detected_version} (${found_type}) is below the minimum tested version ${min_version}. uhm only supports ${min_version} and above for this type -- install aborted."
     fi
-    info "UniFi version ${detected_version} (${found_type}) meets the minimum tested version (${min_version})"
+    info "UniFi version ${detected_version} (${found_type}) meets minimum"
+        info "  tested version (${min_version})"
 
     step "TLS certificate pin"
     local CFG_CERT_PIN=""
@@ -584,7 +591,8 @@ run_setup_wizard() {
         CFG_CERT_PIN="sha256//${CFG_CERT_PIN}"
         info "TLS certificate pinned"
     else
-        warn "Could not compute TLS certificate pin -- uhmd will connect without pinning"
+        warn "Could not compute TLS certificate pin"
+        warn "  uhmd will connect without pinning"
     fi
 
     step "Reload script"
@@ -603,7 +611,8 @@ run_setup_wizard() {
     echo "Files are stored in /etc/acl/acl_mac/ and managed manually."
     mkdir -p /etc/acl/acl_mac /etc/acl/acl_dhcp /etc/acl/acl_ipt
     chmod 700 /etc/acl/acl_mac /etc/acl/acl_dhcp /etc/acl/acl_ipt
-    info "Directory /etc/acl/acl_mac created -- add your mac-*.txt files there"
+    info "Directory /etc/acl/acl_mac created"
+    info "  add your mac-*.txt files there"
 
     step "Writing $CONFIG_FILE"
     (
@@ -660,6 +669,8 @@ POLL_INTERVAL=${CFG_POLL_INTERVAL}
 STARTUP_GRACE_SECONDS=120
 RELOAD_SAFETY_INTERVAL_SECONDS=3600
 BLOCKDHCP_GRACE_SECONDS=${CFG_GRACE_SECONDS}
+# -- uhmwatch ------------------------------------------------------------
+RECOVERY_COOLDOWN_SECONDS=600
 # =============================================================================
 EOF
     )
@@ -705,6 +716,10 @@ deploy_scripts() {
     install -m 755 -o root -g root "$REPO_UHMD" "${CORE_DIR}/uhmd.sh"
     install -m 755 -o root -g root "${REPO_CORE}/uhmreload.sh" "${CORE_DIR}/uhmreload.sh"
     install -m 755 -o root -g root "${REPO_CORE}/uhmleases.sh" "${CORE_DIR}/uhmleases.sh"
+    # uhmwatch.sh lives under core/ (not tools/) because it is mandatory,
+    # not an optional utility -- deployed explicitly here for that reason,
+    # same as the other three core scripts above.
+    install -m 755 -o root -g root "${REPO_CORE}/uhmwatch.sh" "${CORE_DIR}/uhmwatch.sh"
     local f
     for f in "${REPO_TOOLS}/"*.sh; do
         # uhmiptables_example.sh is a reference template for the administrator
@@ -715,8 +730,9 @@ deploy_scripts() {
     done
     # Remove any copy left at the pre-restructure locations (directly under
     # $HOTSPOT_DIR / $TOOLS_DIR instead of core/), so at most one copy of
-    # each script exists on disk.
-    rm -f "${HOTSPOT_DIR}/uhmd.sh" "${TOOLS_DIR}/uhmreload.sh" "${TOOLS_DIR}/uhmleases.sh"
+    # each script exists on disk. uhmwatch.sh's own pre-restructure location
+    # is tools/ (where it lived before becoming mandatory), not $HOTSPOT_DIR.
+    rm -f "${HOTSPOT_DIR}/uhmd.sh" "${TOOLS_DIR}/uhmreload.sh" "${TOOLS_DIR}/uhmleases.sh" "${CORE_DIR}/uhmwatch.sh"
     info "Scripts deployed to ${HOTSPOT_DIR}"
 }
 
@@ -800,7 +816,8 @@ deregister_cron() {
     local ureload_path_old="${HOTSPOT_DIR}/tools/uhmreload.sh"
     if crontab -l 2>/dev/null | grep -qF -e "$ureload_path_new" -e "$ureload_path_old"; then
         crontab -l 2>/dev/null | grep -vF -e "$ureload_path_new" -e "$ureload_path_old" | crontab - || true
-        info "Removed stale @hourly uhmreload.sh cron entry (now handled by uhmd.sh internally)"
+        info "Removed stale @hourly uhmreload.sh cron entry"
+        info "  (now handled by uhmd.sh internally)"
     fi
 }
 
@@ -809,7 +826,8 @@ final_sanity_check() {
     local issues=0
 
     if [[ ! -x "$UIPTABLES_STUB" ]] || grep -qF "UHM_STUB_MARKER" "$UIPTABLES_STUB" 2>/dev/null; then
-        warn "uhmiptables.sh is not configured -- ACL changes will not reach the firewall"
+        warn "uhmiptables.sh is not configured"
+        warn "  ACL changes will not reach the firewall"
         (( issues++ )) || true
     fi
 
@@ -861,15 +879,24 @@ do_install() {
     step "Systemd service"
     install_systemd_service
 
+    step "uhmwatch"
+    # Mandatory, not optional -- uhmd/pydhcpd/UniFi backend all rely on it
+    # to recover from a persistent failure systemd itself gives up on (see
+    # core/uhmwatch.sh header). cron is a hard dependency (APT_DEPS above)
+    # precisely so this step can never fail here.
+    bash "${CORE_DIR}/uhmwatch.sh" install
+
     step "Optional components"
     if confirm "Install uhmalert (ntfy push notifications on connectivity loss)?" "n"; then
         bash "${TOOLS_DIR}/uhmalert.sh" install
     fi
-    if confirm "Install uhmwatch (5-minute cron watchdog for uhmd/uhmalert)?" "n"; then
-        bash "${TOOLS_DIR}/uhmwatch.sh" install
-    fi
-    if confirm "Install the Webmin log viewer module (requires Webmin already installed)?" "n"; then
-        bash "${TOOLS_DIR}/uhmmon.sh" install
+    if dpkg -s webmin &>/dev/null; then
+        if confirm "Install the Webmin log viewer module?" "n"; then
+            bash "${TOOLS_DIR}/uhmmon.sh" install
+        fi
+    else
+        info "Webmin not detected -- skipping Webmin module prompt"
+        info "  install Webmin first, run: bash tools/uhmmon.sh install"
     fi
 
     step "Cron"
@@ -938,13 +965,15 @@ do_update() {
     # process that may still be mid-cycle. pydhcpd is deliberately left
     # alone: it is a separate project this update never modifies, and
     # stopping it would cut DHCP for the whole LAN, not just the hotspot.
-    local uwatch_path="${TOOLS_DIR}/uhmwatch.sh"
+    local uwatch_path="${CORE_DIR}/uhmwatch.sh"
+    local uwatch_path_legacy="${TOOLS_DIR}/uhmwatch.sh"
     local _uhmd_was_active=0 _ualert_was_active=0 _uwatch_was_active=0
     systemctl is-active --quiet uhmd 2>/dev/null && _uhmd_was_active=1
     if [[ -f /etc/systemd/system/uhmalert.service ]]; then
         systemctl is-active --quiet uhmalert 2>/dev/null && _ualert_was_active=1
     fi
-    if crontab -l 2>/dev/null | awk -v p="$uwatch_path" '(index($0,p)>0 && substr($0,1,1)!="#"){f=1} END{exit !f}'; then
+    if crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v pl="$uwatch_path_legacy" \
+        '((index($0,p)>0 || index($0,pl)>0) && substr($0,1,1)!="#"){f=1} END{exit !f}'; then
         _uwatch_was_active=1
     fi
 
@@ -955,13 +984,15 @@ do_update() {
         systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert -- continuing anyway"
     fi
     if (( _uwatch_was_active )); then
-        # Tagged with a distinctive marker (not a bare "#") so Resume below
-        # restores only the line this run paused -- never an unrelated
-        # uhmwatch line the administrator had already commented out on purpose
-        # (e.g. a disabled alternate schedule left in the crontab).
-        crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v m="#uhm-paused#" \
-            '(index($0,p)>0 && substr($0,1,1)!="#"){print m $0; next} {print}' | crontab -
-        info "uhmwatch cron entry commented out for update"
+        # Remove the active line outright (whichever path it used, current
+        # or the pre-restructure tools/ one) instead of just commenting it
+        # out -- Resume below re-registers a clean entry at the current
+        # path via `uhmwatch.sh install`, which also self-migrates away
+        # any stale legacy-path entry. Simpler and correct across the
+        # core/-relocation than trying to text-surgery two possible paths.
+        crontab -l 2>/dev/null | grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" | crontab -
+        info "uhmwatch cron entry removed for update"
+        info "  (re-registered on resume)"
     fi
 
     step "Deploy updated scripts"
@@ -999,12 +1030,17 @@ do_update() {
         systemctl start uhmalert && info "uhmalert restarted" || warn "Could not restart uhmalert -- check: systemctl status uhmalert"
     fi
     if (( _uwatch_was_active )); then
-        # Only strips the "#uhm-paused#" marker this run's Pause step
-        # added above -- never touches a plain "#"-commented line, so a
-        # schedule the administrator disabled on purpose stays disabled.
-        crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v m="#uhm-paused#" \
-            '(index($0,m)==1 && index($0,p)>0){print substr($0, length(m)+1); next} {print}' | crontab -
+        # Re-registers a clean entry at the current core/ path -- also
+        # self-migrates away any stale legacy tools/ entry, though Pause
+        # above already removed the one this run knew was active.
+        bash "${CORE_DIR}/uhmwatch.sh" install
         info "uhmwatch cron entry restored"
+    elif ! crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
+        # No entry at all (active or commented) -- this install predates
+        # uhmwatch becoming mandatory. Install it now rather than leaving
+        # an update-in-place without it.
+        bash "${CORE_DIR}/uhmwatch.sh" install
+        info "uhmwatch installed (was missing -- now mandatory)"
     fi
 
     step "Cron"
@@ -1022,7 +1058,8 @@ do_update() {
     echo ""
     echo "Paused for the update, then resumed to their prior state:"
     echo "- uhmd.service, uhmalert.service (if it was active)"
-    echo "- uhmwatch cron entry (if it was active)"
+    echo "- uhmwatch cron entry (if it was active, or installed"
+    echo "  now if this update predates it becoming mandatory)"
     echo ""
     echo "Stale @hourly uhmreload.sh cron entry removed if present"
     echo ""
@@ -1043,15 +1080,21 @@ do_remove() {
     warn "This will permanently remove, without asking again:"
     warn "  - uhmd.service (stopped and disabled) and $SERVICE_DEST"
     warn "  - cron entries pointing to ${HOTSPOT_DIR}/core/uhmreload.sh"
-    warn "  - uhmalert.service and the uhmwatch cron entry (if installed)"
+    warn "  - the uhmwatch cron entry"
+    warn "  - uhmalert.service if installed"
     warn "  - Webmin module (uhmmon) if installed"
     warn "  - ${LOGROTATE_FILE}"
-    warn "  - ${HOTSPOT_DIR} entirely: $CONFIG_FILE (credentials), ${ACL_DIR}/"
+    warn "  - ${HOTSPOT_DIR} entirely: $CONFIG_FILE"
+    warn "  (credentials), ${ACL_DIR}/"
     warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UIPTABLES_STUB"
-    warn "    (YOUR firewall script -- back it up first if needed), ${HOTSPOT_DIR}/bak/"
-    warn "    (script backups from --update runs), and everything else in it"
-    warn "  - ${LOG_FILE}, rotated logs, uhmaudit.log and reload failure traces"
-    warn "Package dependencies (curl, jq, iptables, ipset, etc.) are NOT removed."
+    warn "    (YOUR firewall script"
+    warn "  back it up first if needed), ${HOTSPOT_DIR}/bak/"
+    warn "    (script backups from --update runs)"
+    warn "    and everything else in it"
+    warn "  - ${LOG_FILE}, rotated logs"
+    warn "  - uhmaudit.log and reload failure traces"
+    warn "Package dependencies"
+    warn "  (curl, jq, iptables, ipset, etc.) are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" || { info "Aborted by user."; exit 0; }
 
@@ -1100,11 +1143,13 @@ _perform_remove() {
         info "uhmalert.service not installed"
     fi
 
-    # uhmwatch (optional component)
+    # uhmwatch (mandatory component, but --remove uninstalls everything
+    # regardless -- defensive check in case it was manually uninstalled)
     step "uhmwatch"
-    local uwatch_path="${TOOLS_DIR}/uhmwatch.sh"
-    if crontab -l 2>/dev/null | grep -qF "$uwatch_path"; then
-        crontab -l 2>/dev/null | grep -vF "$uwatch_path" | crontab - || true
+    local uwatch_path="${CORE_DIR}/uhmwatch.sh"
+    local uwatch_path_legacy="${TOOLS_DIR}/uhmwatch.sh"
+    if crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
+        crontab -l 2>/dev/null | grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" | crontab - || true
         info "uhmwatch cron entry removed"
     else
         info "No uhmwatch cron entry found"
@@ -1116,7 +1161,8 @@ _perform_remove() {
         if [[ -f "${TOOLS_DIR}/uhmmon.sh" ]]; then
             bash "${TOOLS_DIR}/uhmmon.sh" uninstall || warn "uhmmon.sh uninstall failed -- remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
         else
-            warn "Webmin module found but ${TOOLS_DIR}/uhmmon.sh is missing -- remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
+            warn "Webmin module found but ${TOOLS_DIR}/uhmmon.sh is missing"
+            warn "  remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
         fi
     else
         info "Webmin module not installed"

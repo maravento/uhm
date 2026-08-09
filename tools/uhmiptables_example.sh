@@ -557,7 +557,8 @@ if [ -n "$mac2ip" ]; then
             { arptables -A INPUT -i "$lan" --source-ip "$_arp_ip" ! --source-mac "$_arp_mac" -j DROP || true; }
     done
 else
-    log "WARNING: No static DHCP entries found in $dhcp_conf; macip binding skipped"
+    log "WARNING: No static DHCP entries found in $dhcp_conf"
+    log "  macip binding skipped"
 fi
 
 # MACUNLIMITED (MAC + IP for Access Points, Switch, etc.)
@@ -595,7 +596,8 @@ if [ -f "$hotspot_path/acl/uhm-auth.txt" ]; then
         is_valid_mac "$mac" && ipset add macports "$mac" -exist
     done
 else
-    log "WARNING: $hotspot_path/acl/uhm-auth.txt not found -- skipping macports"
+    log "WARNING: $hotspot_path/acl/uhm-auth.txt not found"
+    log "  skipping macports"
 fi
 
 # NTP
@@ -694,7 +696,8 @@ if [ -f "$hotspot_path/acl/uhm-auth.txt" ]; then
         is_valid_mac "$mac" && ipset add machotspot "$mac" -exist
     done
 else
-    log "WARNING: $hotspot_path/acl/uhm-auth.txt not found -- skipping machotspot"
+    log "WARNING: $hotspot_path/acl/uhm-auth.txt not found"
+    log "  skipping machotspot"
 fi
 # UNIFI PORTAL ACCESS + PAC (18100)
 iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set machotspot src -p tcp -m multiport --dports "$cpd_tcp,18100,80,$squid_port" -j ACCEPT

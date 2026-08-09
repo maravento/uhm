@@ -99,11 +99,12 @@
 # SERVICE: systemctl status uhmd
 #
 # LOCATION:
-# Installed at /etc/uhm/core/uhmd.sh, alongside uhmd.service,
-# uhmreload.sh and uhmleases.sh -- these four are the reload mechanism itself,
-# not auxiliary tools. /etc/uhm/tools/ holds independent, optional
-# scripts uhm runs fine without (uhmaudit.sh, uhmcheck.sh, uhmmon.sh,
-# uhmwatch.sh, uhmalert.sh, plus the admin-provided uhmiptables.sh). The reload
+# Installed at /etc/uhm/core/uhmd.sh, alongside uhmd.service, uhmreload.sh,
+# uhmleases.sh, and uhmwatch.sh -- these five are mandatory, either as the
+# reload mechanism itself or (uhmwatch.sh) as the services watchdog (see
+# its own header for why). /etc/uhm/tools/ holds independent, optional
+# scripts (uhmaudit.sh, uhmcheck.sh, uhmmon.sh, uhmalert.sh, plus the
+# admin-provided uhmiptables.sh) -- uhm runs fine without any of those. The reload
 # script path itself is read from SERVER_RELOAD_SCRIPT in uhm.env
 # (set by uhmsetup.sh, default /etc/uhm/core/uhmreload.sh) -- nothing here
 # hardcodes it, so relocating core/ only requires updating that one value.
@@ -339,7 +340,8 @@ load_config() {
     fi
 
     if [[ "${UNIFI_TYPE:-}" != "unifi-os" && "${UNIFI_TYPE:-}" != "classic" ]]; then
-        log "ERROR: UNIFI_TYPE must be 'unifi-os' or 'classic', got: ${UNIFI_TYPE:-unset}"
+        log "ERROR: UNIFI_TYPE must be 'unifi-os' or 'classic'"
+        log "  got: ${UNIFI_TYPE:-unset}"
         exit 1
     fi
 
@@ -351,13 +353,15 @@ load_config() {
     fi
 
     if ! [[ "$HOTSPOT_RANGE_START" =~ $_UH_OCT ]] || ! [[ "$HOTSPOT_RANGE_END" =~ $_UH_OCT ]]; then
-        log "ERROR: HOTSPOT_RANGE_START/HOTSPOT_RANGE_END must each be a valid IPv4 octet (0-255, no leading zeros)"
+        log "ERROR: HOTSPOT_RANGE_START/END must be a valid octet"
+        log "  (0-255, no leading zeros)"
         log "ERROR: got: '$HOTSPOT_RANGE_START'/'$HOTSPOT_RANGE_END'"
         exit 1
     fi
 
     if (( HOTSPOT_RANGE_START > HOTSPOT_RANGE_END )); then
-        log "ERROR: HOTSPOT_RANGE_START ($HOTSPOT_RANGE_START) is greater than HOTSPOT_RANGE_END ($HOTSPOT_RANGE_END)"
+        log "ERROR: HOTSPOT_RANGE_START"
+        log "  ($HOTSPOT_RANGE_START) is greater than HOTSPOT_RANGE_END ($HOTSPOT_RANGE_END)"
         exit 1
     fi
 }
@@ -489,7 +493,8 @@ unifi_login() {
 
     if [[ "$http_code" != "200" ]]; then
         if [[ "$quiet" == "quiet" ]]; then
-            log "INFO: UniFi login attempt failed (HTTP $http_code) -- still within startup grace window"
+            log "INFO: UniFi login attempt failed (HTTP $http_code)"
+            log "  still within startup grace window"
         else
             log "ERROR: UniFi login failed (HTTP $http_code)"
         fi
@@ -578,7 +583,8 @@ api_get() {
     rm -f "$hdr"
 
     if [[ -z "$code" ]]; then
-        log "WARNING: API GET $url -> no response (timeout or network error)"
+        log "WARNING: API GET $url -> no response"
+        log "  (timeout or network error)"
         echo "{}"
         return 0
     fi
@@ -693,7 +699,8 @@ queue_lease_removal() {
         log "INFO: Queued lease removal for $lc_mac"
         return 0
     fi
-    log "WARNING: queue_lease_removal: failed to write $lc_mac to $UQUEUE_FILE"
+    log "WARNING: queue_lease_removal: failed to write $lc_mac"
+        log "  to $UQUEUE_FILE"
     return 1
 }
 
@@ -788,7 +795,8 @@ dedup_mac_lists() {
                     echo "a;${bmac};${bip};${bhostname};" >> "$tmp_block"
                     (( sanitized_block++ )) || true
                 else
-                    log "WARNING: dedup -> discarding malformed blockdhcp.txt line: $line"
+                    log "WARNING: dedup -> discarding malformed blockdhcp.txt line"
+            log "  $line"
                     (( discarded_block++ )) || true
                 fi
             else
@@ -798,7 +806,8 @@ dedup_mac_lists() {
         local after_lines
         after_lines=$(wc -l < "$tmp_block" 2>/dev/null || echo -1)
         if (( after_lines < 0 )); then
-            log "ERROR: dedup_mac_lists: failed to validate temp file -- skipping blockdhcp update"
+            log "ERROR: dedup_mac_lists: failed to validate temp file"
+            log "  skipping blockdhcp update"
             rm -f "$tmp_block"
         else
             mv "$tmp_block" "$BLOCK_DHCP" && chmod 600 "$BLOCK_DHCP"
@@ -809,7 +818,7 @@ dedup_mac_lists() {
         log "INFO: dedup -> sanitized $sanitized_block blockdhcp entries"
     fi
     if (( discarded_block > 0 )); then
-        log "INFO: dedup -> discarded $discarded_block malformed blockdhcp entries"
+        log "INFO: dedup discarded $discarded_block malformed entries"
     fi
 }
 
@@ -822,7 +831,8 @@ sort_acl_files() {
         TEMP_FILES_TO_CLEAN+=("${tmp}")
         sort -t';' -k3,3V "$UMACAUTH_FILE" | uniq > "$tmp"
         if [[ ! -s "$tmp" ]]; then
-            log "ERROR: sort_acl_files: sorted output is empty -- skipping update of $UMACAUTH_FILE"
+            log "ERROR: sort_acl_files: sorted output is empty"
+            log "  skipping update of $UMACAUTH_FILE"
             return
         fi
         mv "$tmp" "$UMACAUTH_FILE" && chmod 600 "$UMACAUTH_FILE"
@@ -833,12 +843,14 @@ add_mac_to_acl() {
     local mac="$1" ip="$2" hostname="$3" end_time="$4"
 
     if [[ ! "$mac" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]]; then
-        log "ERROR: add_mac_to_acl: refusing malformed MAC '$mac' -- not added"
+        log "ERROR: add_mac_to_acl: bad MAC '$mac'"
+        log "  not added"
         return 1
     fi
 
     if [[ "$ip" == *';'* || "$hostname" == *';'* || "$end_time" == *';'* ]]; then
-        log "ERROR: Refusing ACL entry -- field contains ';' (mac=$mac)"
+        log "ERROR: Refusing ACL entry"
+        log "  field contains ';' (mac=$mac)"
         return 1
     fi
 
@@ -851,17 +863,21 @@ add_mac_to_acl() {
             local escaped_line
             escaped_line=$(printf '%s' "$new_line" | sed -e 's/[\&|/]/\\&/g')
             if ! sed -i "s|^a;${mac};.*|${escaped_line}|I" "$UMACAUTH_FILE"; then
-                log "ERROR: Failed to update end_time for $mac in $UMACAUTH_FILE (sed -i failed)"
+                log "ERROR: Failed to update end_time for $mac"
+                log "  (sed -i failed)"
                 return 1
             fi
-            log "INFO: Updated end_time for $mac ($existing_end -> $end_time)"
+            log "INFO: Updated end_time for $mac"
+            log "  ($existing_end -> $end_time)"
         fi
     else
         queue_lease_removal "$mac"
         echo "$new_line" >> "$UMACAUTH_FILE"
         local exp_human
         exp_human=$(date -d "@$end_time" 2>/dev/null || echo "$end_time")
-        log "INFO: Authorized $mac ip=$ip hostname=$hostname expires=$exp_human"
+        log "INFO: Authorized $mac"
+        log "  ip=$ip hostname=$hostname"
+        log "  expires=$exp_human"
     fi
 }
 
@@ -871,10 +887,12 @@ expire_from_hotspot() {
     # client via pydhcpd.leases and the client re-enters uhm-grace.txt with a
     # fresh grace timer, same as any other unclassified MAC.
     if ! queue_lease_removal "$mac"; then
-        log "WARNING: Expire $mac -- failed to queue lease removal, will retry"
+        log "WARNING: Expire $mac"
+        log "  failed to queue lease removal, will retry"
         return 1
     fi
-    log "INFO: Expired $mac -- released from uhm-auth.txt"
+    log "INFO: Expired $mac"
+    log "  released from uhm-auth.txt"
     return 0
 }
 
@@ -910,7 +928,8 @@ clean_expired_macs() {
         else
             log "INFO: Expired $mac at $(date -d "@$end_time" 2>/dev/null || echo "$end_time")"
             if ! expire_from_hotspot "$mac"; then
-                log "WARNING: clean_expired_macs: keeping $mac -- will retry"
+                log "WARNING: clean_expired_macs: keeping $mac"
+                log "  will retry"
                 echo "$line" >> "$tmp"
             else
                 (( moved++ )) || true
@@ -921,7 +940,8 @@ clean_expired_macs() {
     local after_count
     after_count=$(grep -c '^a;' "$tmp" 2>/dev/null); after_count=$(( ${after_count:-0} + 0 ))
     if (( before_count - after_count != moved )); then
-        log "ERROR: clean_expired_macs: count mismatch (before=$before_count after=$after_count moved=$moved) -- skipping"
+        log "ERROR: clean_expired_macs: count mismatch"
+        log "  (before=$before_count after=$after_count moved=$moved) -- skipping"
         rm -f "$tmp"
         return
     fi
@@ -967,7 +987,8 @@ process_new_leases() {
             [[ -z "$host" ]] && host="no_name_$(head -c100 /dev/urandom | sha1sum | head -c10)"
 
             if [[ -n "$ip" ]] && ! [[ "$ip" =~ $_UH_IPV4 ]]; then
-                log "WARNING: process_new_leases: skipping lease with invalid IP: $ip"
+                log "WARNING: process_new_leases: skipping lease"
+            log "  invalid IP: $ip"
                 ip=""
             fi
 
@@ -977,10 +998,13 @@ process_new_leases() {
                && ! grep -qi "^a;${mac};" "$BLOCK_DHCP" 2>/dev/null \
                && ! grep -qi "^a;${mac};" "$UGRACE_FILE" 2>/dev/null; then
                 echo "a;${mac};${ip};${host};$(date +%s);" >> "$UGRACE_FILE"
-                log "INFO: New client $mac ip=$ip hostname=$host -> uhm-grace.txt"
+                log "INFO: New client $mac ip=$ip"
+                log "  hostname=$host -> uhm-grace.txt"
                 (( added++ )) || true
             elif [[ -n "$mac" && -n "$ip" && "${ip%.*}" != "$HOTSPOT_IP_RANGE" ]]; then
-                log "WARNING: process_new_leases: lease IP $ip for $mac outside hotspot range $HOTSPOT_IP_RANGE -- skipping"
+                log "WARNING: new lease outside hotspot range"
+            log "  ip=$ip mac=$mac"
+            log "  hotspot range is $HOTSPOT_IP_RANGE -- skipping"
             fi
             current_lease=""
             lease_content=""
@@ -989,7 +1013,8 @@ process_new_leases() {
 
     if (( added > 0 )); then
         chmod 600 "$UGRACE_FILE" 2>/dev/null || true
-        log "INFO: process_new_leases -> added $added new client(s) to uhm-grace.txt"
+        log "INFO: process_new_leases -> added $added new client(s)"
+        log "  to uhm-grace.txt"
     fi
 }
 
@@ -1027,12 +1052,14 @@ process_sessions() {
     while IFS=$'\t' read -r mac end_time api_voucher_code; do
         [[ -z "$mac" || "$mac" == "null" ]] && continue
         if ! [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; then
-            log "WARNING: process_sessions: malformed mac from API ($mac) -- skipping"
+            log "WARNING: process_sessions: malformed mac from API"
+            log "  ($mac) -- skipping"
             continue
         fi
         [[ -z "$end_time" || "$end_time" == "null" ]] && continue
         if ! [[ "$end_time" =~ $_UH_UINT ]]; then
-            log "WARNING: process_sessions: malformed end_time for $mac ($end_time) -- skipping"
+            log "WARNING: malformed end_time for $mac"
+        log "  ($end_time) -- skipping"
             continue
         fi
         (( end_time <= now )) && continue
@@ -1062,8 +1089,10 @@ process_sessions() {
             # authorized -- only the expiration time is updated.
             # assign_ip_and_hostname() is never called here since no new
             # IP is needed.
-            log "INFO: process_sessions: renewal detected for $mac (end_time $existing_end -> $end_time)"
-            log "INFO: process_sessions: keeping ip=$existing_ip hostname=$existing_hostname for $mac"
+            log "INFO: renewal detected for $mac"
+        log "  (end_time $existing_end -> $end_time)"
+            log "INFO: keeping ip=$existing_ip for $mac"
+            log "  hostname=$existing_hostname"
             if add_mac_to_acl "$mac" "$existing_ip" "$existing_hostname" "$end_time"; then
                 (( added++ )) || true
             fi
@@ -1077,7 +1106,8 @@ process_sessions() {
         local assigned_ip="" assigned_hostname=""
         local iph
         if ! iph=$(assign_ip_and_hostname); then
-            log "WARNING: Range exhausted for $mac -- will retry next cycle"
+            log "WARNING: Range exhausted for $mac"
+            log "  will retry next cycle"
             continue
         fi
         assigned_ip=$(echo "$iph" | cut -d';' -f1)
@@ -1164,15 +1194,18 @@ revoke_unauthorized() {
     for mac in "${macs_to_revoke[@]+"${macs_to_revoke[@]}"}"; do
         [[ -z "$mac" ]] && continue
         if [[ ! "$mac" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]]; then
-            log "ERROR: revoke_unauthorized: refusing malformed MAC '$mac' -- skipping"
+            log "ERROR: revoke_unauthorized: bad MAC '$mac'"
+        log "  skipping"
             continue
         fi
-        log "INFO: Revoking $mac -- authorized=false in UniFi; releasing from uhm-auth"
+        log "INFO: Revoking $mac"
+        log "  authorized=false in UniFi; releasing from uhm-auth"
         queue_lease_removal "$mac"
         if sed -i "/^a;${mac};/Id" "$UMACAUTH_FILE" 2>/dev/null; then
             (( revoked++ )) || true
         else
-            log "WARNING: revoke_unauthorized: sed failed to remove $mac from $UMACAUTH_FILE -- will retry next cycle"
+            log "WARNING: sed failed to remove $mac"
+            log "  from $UMACAUTH_FILE -- will retry next cycle"
         fi
     done
 
@@ -1249,7 +1282,8 @@ check_and_reload_if_changed() {
             # they fire on the next real diff, not on this timer.
             _LAST_RELOAD_EPOCH=$now
             log "WARNING: $SERVER_RELOAD_SCRIPT exited with error (code $rc)"
-            log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s) -- will not retry every cycle"
+            log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s)"
+            log "  will not retry every cycle"
         fi
         unset UHM_RELOAD_ACTIVE
     else
@@ -1260,11 +1294,14 @@ check_and_reload_if_changed() {
         # every single cycle.
         _LAST_RELOAD_EPOCH=$now
         if (( acl_changed == 1 )); then
-            log "WARNING: ACLs changed but SERVER_RELOAD_SCRIPT is not set or not executable"
+            log "WARNING: ACLs changed but SERVER_RELOAD_SCRIPT is not set"
+        log "  or not executable"
         else
-            log "WARNING: safety-net reload due but SERVER_RELOAD_SCRIPT is not set or not executable"
+            log "WARNING: safety-net reload due but no reload script set"
+        log "  set or not executable"
         fi
-        log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s) -- will not retry every cycle"
+        log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s)"
+        log "  will not retry every cycle"
     fi
     return 0
 }
@@ -1288,9 +1325,11 @@ kick_newly_authorized() {
         # skip above -- this one firing at all means something upstream let a
         # managed MAC slip through, which is itself worth surfacing.
         if is_managed_mac "$mac"; then
-            log "WARNING: kick_newly_authorized: $mac is in mac-*.txt but reached NEWLY_AUTHORIZED_MACS -- not kicking."
+            log "WARNING: kick_newly_authorized: $mac"
+            log "  in mac-*.txt but reached NEWLY_AUTHORIZED_MACS"
+            log "  not kicking"
             log "WARNING: kick_newly_authorized: this should never happen;"
-            log "WARNING: process_sessions' own guard should have excluded it already."
+            log "WARNING: process_sessions' own guard should exclude this"
             continue
         fi
         if [[ "$rc" == "ok" ]]; then
@@ -1298,20 +1337,25 @@ kick_newly_authorized() {
                 .data[] | select((.mac | ascii_downcase) == $mac) | "yes"
             ' 2>/dev/null | head -1 || true)
             if [[ "$on_sta" != "yes" ]]; then
-                log "INFO: kick_newly_authorized: skipping $mac -- not currently connected, no kick needed"
+                log "INFO: kick_newly_authorized: skipping $mac"
+                log "  not currently connected, no kick needed"
                 continue
             fi
         else
-            log "INFO: kick_newly_authorized: stat/sta unavailable -- kicking $mac without presence check"
+            log "INFO: kick_newly_authorized: stat/sta unavailable"
+            log "  kicking $mac without presence check"
         fi
 
         kick_url=$(api_path "cmd/stamgr")
         http_code=$(api_post "$kick_url" "{\"cmd\":\"kick-sta\",\"mac\":\"${mac}\"}")
         if [[ "$http_code" == "200" ]]; then
-            log "INFO: kick_newly_authorized: kicked $mac (forcing reassociation with new fixed IP)"
+            log "INFO: kick_newly_authorized: kicked $mac"
+            log "  (forcing reassociation with new fixed IP)"
         else
-            log "WARNING: kick_newly_authorized: failed to kick $mac (HTTP $http_code)"
-            log "WARNING: kick_newly_authorized: client may keep its stale IP until its own DHCP renewal"
+            log "WARNING: kick_newly_authorized: failed to kick"
+            log "  $mac (HTTP $http_code)"
+            log "WARNING: kick_newly_authorized: client may keep its stale IP"
+            log "  until its own DHCP renewal"
         fi
     done
 }
@@ -1378,7 +1422,8 @@ run_cycle() {
         authorized_total=$(( ${authorized_total:-0} + 0 ))
         grace_total=$(grep -c "^a;" "${UGRACE_FILE:-/etc/uhm/acl/uhm-grace.txt}" 2>/dev/null || true)
         grace_total=$(( ${grace_total:-0} + 0 ))
-        log "STATS: vouchers=$VOUCHER_COUNT | authorized=$authorized_total | grace=$grace_total | new_auth=$SESSIONS_AUTHORIZED | revoked=$REVOKED"
+        log "STATS: vouchers=$VOUCHER_COUNT auth=$authorized_total grace=$grace_total"
+        log "  new_auth=$SESSIONS_AUTHORIZED | revoked=$REVOKED"
 
         if [[ "$_RELOAD_OK" == "1" && ${#NEWLY_AUTHORIZED_MACS[@]} -gt 0 ]]; then
             kick_newly_authorized "$sta_data"
@@ -1434,12 +1479,14 @@ main() {
         if "$SERVER_RELOAD_SCRIPT" >/dev/null 2>>"$LOG_FILE"; then
             _LAST_RELOAD_EPOCH=$(date +%s)
         else
-            log "WARNING: startup reload failed -- firewall may be incomplete until next ACL change"
+            log "WARNING: startup reload failed"
+            log "  firewall may be incomplete until next ACL change"
             _LAST_RELOAD_EPOCH=$(date +%s)
         fi
         unset UHM_RELOAD_ACTIVE
     else
-        log "WARNING: SERVER_RELOAD_SCRIPT not set or not executable -- firewall not rebuilt at startup"
+        log "WARNING: SERVER_RELOAD_SCRIPT not set or not executable"
+        log "  firewall not rebuilt at startup"
     fi
 
     while true; do

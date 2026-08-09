@@ -90,6 +90,7 @@
 | **iproute2** (`ip`) | `uhmsetup.sh` (install time only) | Detects network interfaces during the setup wizard | Detecta interfaces de red durante el wizard de instalación |
 | **ncurses-bin** (`clear`) | `uhmcheck.sh`, `uhmmon.sh` | Clears the terminal between screen refreshes | Limpia la terminal entre refrescos de pantalla |
 | **systemd** (`systemctl`) | `uhmd`, `uhmwatch.sh`, `uhmleases.sh` | Manages/checks the `uhmd`/`pydhcpd`/UniFi services | Gestiona/verifica los servicios `uhmd`/`pydhcpd`/UniFi |
+| **cron** | `uhmwatch.sh` (mandatory, installed automatically) | Runs the services watchdog every minute | Corre el vigilante de servicios cada minuto |
 
 ### Optional
 
@@ -195,35 +196,37 @@ sudo apt install -y squid apache2
 This is the layout of the cloned repository (`git clone ... && cd uhm`), not the installed path — `uhmsetup.sh` and `tools/uhmiptables_example.sh` never leave the clone; everything else under `core/` and `tools/` (except the example) is deployed by `uhmsetup.sh` to the matching subdirectory under `/etc/uhm/`.
 
 ```
-uhm/            # as cloned -- see note above
-├── uhmsetup.sh          # installer / updater / uninstaller (interactive);
-│                      # run from here, never deployed to /etc/uhm/
-├── core/              # the reload mechanism itself -- uhm cannot
-│                      # function without any of these
-│   ├── uhmd.sh         # main daemon -- UniFi API poller + ACL manager (systemd)
-│   ├── uhmd.service    # systemd service unit
-│   ├── uhmreload.sh           # wrapper invoked by uhmd after ACL changes;
-│   │                        # calls uhmleases.sh and triggers reload of services
-│   └── uhmleases.sh           # reimplementation of pydhcp's pyleases.sh,
-│                            # with built-in UniFi Hotspot integration
-├── tools/             # independent, optional utilities -- uhm runs
-│                      # fine without any of these
-│   ├── uhmcheck.sh            # interactive MAC diagnostic / consistency checker (menu-driven)
-│   ├── uhmaudit.sh            # UniFi clients/vouchers audit tool
-│   ├── uhmalert.sh            # optional standalone alert watcher -- tails the log,
-│   │                        # pushes notifications via ntfy.sh
-│   ├── uhmwatch.sh            # optional standalone services watchdog (uhmd,
-│   │                        # uhmalert, UniFi backend) -- installs its own cron entry
-│   ├── uhmmon.sh       # Webmin module installer/uninstaller — real-time log viewer
-│   │                        # for uhmd (AJAX polling, dark mode, level badges, grep)
-│   └── uhmiptables_example.sh # reference firewall ruleset -- ipsets/iptables/redirects
-│                            # (NOT deployed by uhmsetup.sh; the administrator copies it
-│                            # manually to tools/uhmiptables.sh and adapts it)
-└── acl/               # uhm's OWN data files -- empty templates in the repo,
-                       # deployed once by uhmsetup.sh and never overwritten again
-    ├── uhm-auth.txt         # authenticated clients with vouchers (fixed hotspot IP)
-    ├── uhm-queue.txt           # internal working file (uhmd.sh / uhmleases.sh only)
-    └── uhm-grace.txt           # grace-period clients (no voucher yet)
+uhm/                      # as cloned -- see note above
+├── uhmsetup.sh              # installer / updater / uninstaller (interactive);
+│                            # run from here, never deployed to /etc/uhm/
+├── core/                    # the reload mechanism, plus uhmwatch -- uhm cannot
+│                            # function correctly without any of these five
+│   ├── uhmd.sh                   # main daemon -- UniFi API poller + ACL manager (systemd)
+│   ├── uhmd.service              # systemd service unit
+│   ├── uhmreload.sh              # wrapper invoked by uhmd after ACL changes;
+│   │                             # calls uhmleases.sh and triggers reload of services
+│   ├── uhmleases.sh              # reimplementation of pydhcp's pyleases.sh,
+│   │                             # with built-in UniFi Hotspot integration
+│   └── uhmwatch.sh               # mandatory standalone services watchdog (uhmd,
+│                                 # pydhcpd, UniFi backend) -- installed automatically
+│                                 # by uhmsetup.sh, installs its own cron entry; lives
+│                                 # here (not tools/) precisely because it's mandatory
+├── tools/                   # independent, optional utilities -- uhm runs
+│                            # fine without any of these
+│   ├── uhmcheck.sh               # interactive MAC diagnostic / consistency checker (menu-driven)
+│   ├── uhmaudit.sh               # UniFi clients/vouchers audit tool
+│   ├── uhmalert.sh               # optional standalone alert watcher -- tails the log,
+│   │                             # pushes notifications via ntfy.sh
+│   ├── uhmmon.sh                 # Webmin module installer/uninstaller — real-time log viewer
+│   │                             # for uhmd (AJAX polling, dark mode, level badges, grep)
+│   └── uhmiptables_example.sh    # reference firewall ruleset -- ipsets/iptables/redirects
+│                                 # (NOT deployed by uhmsetup.sh; the administrator copies it
+│                                 # manually to tools/uhmiptables.sh and adapts it)
+└── acl/                     # uhm's OWN data files -- empty templates in the repo,
+                             # deployed once by uhmsetup.sh and never overwritten again
+    ├── uhm-auth.txt              # authenticated clients with vouchers (fixed hotspot IP)
+    ├── uhm-queue.txt             # internal working file (uhmd.sh / uhmleases.sh only)
+    └── uhm-grace.txt             # grace-period clients (no voucher yet)
 ```
 
 ### ACL / data files — path ownership
@@ -340,10 +343,10 @@ SERVER_RELOAD_SCRIPT
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (interfaces, hotspot IP range, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from `pydhcp.env`, not asked; uhm supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and three yes/no prompts (default no) offering to install <code>uhmalert</code>, <code>uhmwatch</code> and the Webmin log viewer module right there instead of as a separate manual step afterward. Make sure every item in <a href="#requirements">Requirements</a> (particularly the <a href="#mandatory">Mandatory</a> dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
+      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (interfaces, hotspot IP range, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from `pydhcp.env`, not asked; uhm supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and unconditional installation of <code>uhmwatch</code> (mandatory -- see <a href="#uhmwatch">uhmwatch</a> below for why), plus two yes/no prompts (default no) for the truly optional components: <code>uhmalert</code> right there instead of as a separate manual step afterward, and the Webmin log viewer module — only asked if Webmin is actually detected on the system, skipped with a message otherwise. Make sure every item in <a href="#requirements">Requirements</a> (particularly the <a href="#mandatory">Mandatory</a> dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaces, rango IP del hotspot, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de `pydhcp.env`, no se preguntan; uhm soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, y tres preguntas sí/no (default no) ofreciendo instalar <code>uhmalert</code>, <code>uhmwatch</code> y el módulo visor de log para Webmin ahí mismo en vez de como paso manual separado después. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de <a href="#requirements">Requirements</a> (en particular las dependencias de <a href="#mandatory">Mandatory</a>) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
+      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaces, rango IP del hotspot, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de `pydhcp.env`, no se preguntan; uhm soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, e instalación incondicional de <code>uhmwatch</code> (obligatorio -- ver <a href="#uhmwatch">uhmwatch</a> más abajo para el porqué), más dos preguntas sí/no (default no) para los componentes realmente opcionales: <code>uhmalert</code> ahí mismo en vez de como paso manual separado después, y el módulo visor de log de Webmin — solo se pregunta si Webmin está realmente detectado en el sistema, si no se salta con un mensaje. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de <a href="#requirements">Requirements</a> (en particular las dependencias de <a href="#mandatory">Mandatory</a>) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
     </td>
   </tr>
 </table>
@@ -357,10 +360,10 @@ sudo bash uhmsetup.sh
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The installer checks for required apt dependencies (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>) and aborts if any is missing — none of them are installed automatically. It also aborts if <code>pydhcp</code> is not active. It deploys <code>uhmd.sh</code>, <code>uhmreload.sh</code> and <code>uhmleases.sh</code> to <code>/etc/uhm/core/</code>, the optional tools to <code>/etc/uhm/tools/</code>, installs <code>uhmd.service</code> to <code>/etc/systemd/system/</code>, and enables and starts the daemon via <code>systemctl enable</code> + <code>restart uhmd</code>. No files are copied to <code>/etc/pydhcp</code>.
+      The installer checks for required apt dependencies (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>) and aborts if any is missing — none of them are installed automatically. It also aborts if <code>pydhcp</code> is not active. It deploys <code>uhmd.sh</code>, <code>uhmreload.sh</code> and <code>uhmleases.sh</code> to <code>/etc/uhm/core/</code>, the rest of the tools (mandatory <code>uhmwatch.sh</code> plus the optional ones) to <code>/etc/uhm/tools/</code>, installs <code>uhmd.service</code> to <code>/etc/systemd/system/</code>, and enables and starts the daemon via <code>systemctl enable</code> + <code>restart uhmd</code>. No files are copied to <code>/etc/pydhcp</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El instalador verifica las dependencias apt requeridas (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>) y aborta si falta alguna — ninguna se instala automáticamente. También aborta si <code>pydhcp</code> no está activo. Despliega <code>uhmd.sh</code>, <code>uhmreload.sh</code> y <code>uhmleases.sh</code> en <code>/etc/uhm/core/</code>, las herramientas opcionales en <code>/etc/uhm/tools/</code>, instala <code>uhmd.service</code> en <code>/etc/systemd/system/</code> y habilita e inicia el daemon con <code>systemctl enable</code> + <code>restart uhmd</code>. No se copian archivos a <code>/etc/pydhcp</code>.
+      El instalador verifica las dependencias apt requeridas (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>) y aborta si falta alguna — ninguna se instala automáticamente. También aborta si <code>pydhcp</code> no está activo. Despliega <code>uhmd.sh</code>, <code>uhmreload.sh</code> y <code>uhmleases.sh</code> en <code>/etc/uhm/core/</code>, el resto de las herramientas (el obligatorio <code>uhmwatch.sh</code> más las opcionales) en <code>/etc/uhm/tools/</code>, instala <code>uhmd.service</code> en <code>/etc/systemd/system/</code> y habilita e inicia el daemon con <code>systemctl enable</code> + <code>restart uhmd</code>. No se copian archivos a <code>/etc/pydhcp</code>.
     </td>
   </tr>
   <tr>
@@ -461,7 +464,7 @@ sudo bash uhmsetup.sh --remove
 |---|-----------------------------------------------------------|---------------------------------------------------------------|
 | 1 | Stop and disable `uhmd.service` and remove `/etc/systemd/system/uhmd.service` | Detiene y deshabilita `uhmd.service` y elimina `/etc/systemd/system/uhmd.service` |
 | 2 | Remove the `@hourly` cron entry for `/etc/uhm/core/uhmreload.sh` (or the pre-restructure `/etc/uhm/tools/uhmreload.sh` path, if upgrading from an older install) | Elimina la entrada de cron `@hourly` para `/etc/uhm/core/uhmreload.sh` (o la ruta previa a la reestructuración `/etc/uhm/tools/uhmreload.sh`, si se actualiza desde una instalación anterior) |
-| 3 | Stop, disable and remove `uhmalert.service` and the `uhmwatch` cron entry (if installed) | Detiene, deshabilita y elimina `uhmalert.service` y la entrada de cron de `uhmwatch` (si están instalados) |
+| 3 | Remove the `uhmwatch` cron entry, and stop/disable/remove `uhmalert.service` if installed | Elimina la entrada de cron de `uhmwatch`, y detiene/deshabilita/elimina `uhmalert.service` si está instalado |
 | 4 | Uninstall the Webmin module (`uhmmon.sh uninstall`, if installed) | Desinstala el módulo de Webmin (`uhmmon.sh uninstall`, si está instalado) |
 | 5 | Remove `/etc/logrotate.d/uhm` | Elimina `/etc/logrotate.d/uhm` |
 | 6 | Remove `/etc/uhm/` and **all its contents** including `uhm.env`, ACL files, your `uhmiptables.sh`, and `bak/` (script backups accumulated by `--update` runs) | Elimina `/etc/uhm/` y **todo su contenido**, incluyendo `uhm.env`, archivos ACL, su `uhmiptables.sh`, y `bak/` (backups de scripts acumulados por corridas de `--update`) |
@@ -482,6 +485,8 @@ sudo bash uhmsetup.sh --remove
 | Lease removal queue — path set by the `UQUEUE_FILE` config variable; internal working file for `uhmd.sh`/`uhmleases.sh`, not an ACL — do not edit its contents manually | Cola de remociones de leases — la ruta la fija la variable de configuración `UQUEUE_FILE`; archivo de trabajo interno de `uhmd.sh`/`uhmleases.sh`, no es una ACL — no debe editarse su contenido manualmente | `/etc/uhm/acl/uhm-queue.txt` |
 | Log file (unified) | Archivo de log (unificado) | `/var/log/uhm.log` |
 | Logrotate config | Config de logrotate | `/etc/logrotate.d/uhm` |
+| Services watchdog (mandatory) | Vigilante de servicios (obligatorio) | `/etc/uhm/core/uhmwatch.sh` |
+| Watchdog recovery-attempt timestamps — cleared on reboot, not persistent | Marcas de tiempo de intentos de recuperación del vigilante — se limpian en cada reinicio, no persisten | `/run/uhmwatch/` |
 | Webmin log viewer module | Módulo visor de log para Webmin | `/etc/uhm/tools/uhmmon.sh` |
 
 ### Config Reference (uhm.env)
@@ -523,6 +528,7 @@ sudo bash uhmsetup.sh --remove
 | `RELOAD_SAFETY_INTERVAL_SECONDS` | Force a reload even without an ACL change after this many seconds (default `3600` = 1h) | Fuerza un reload aunque no haya cambio de ACL tras esta cantidad de segundos (default `3600` = 1h) |
 | `STARTUP_GRACE_SECONDS` | Grace window (seconds) for `uhmd.sh`'s initial UniFi login retry and its wait for `pydhcpd` to come up (default `120`) — exclusive to `uhmd.sh`; `uhmalert.sh` has its own separate key, `UALERT_QUIET_PERIOD_SECONDS` | Ventana de gracia (segundos) para el reintento inicial de login a UniFi de `uhmd.sh` y su espera a que `pydhcpd` arranque (default `120`) — exclusiva de `uhmd.sh`; `uhmalert.sh` tiene su propia clave separada, `UALERT_QUIET_PERIOD_SECONDS` |
 | `UALERT_QUIET_PERIOD_SECONDS` | Grace window (seconds) for suppressing `uhmalert.sh` connectivity alerts right after `uhmd.service` starts (default `120`) | Ventana de gracia (segundos) para suprimir alertas de conectividad de `uhmalert.sh` justo después de que arranca `uhmd.service` (default `120`) |
+| `RECOVERY_COOLDOWN_SECONDS` | Minimum seconds `uhmwatch.sh` (mandatory) waits between recovery attempts on the same service after one fails to fix it -- prevents hammering a persistently broken service (e.g. controller genuinely down) with a restart every single cron tick (default `600` = 10 min) | Segundos mínimos que `uhmwatch.sh` (obligatorio) espera entre intentos de recuperación sobre el mismo servicio después de que uno no lo arregla -- evita machacar con un restart en cada corrida de cron a un servicio persistentemente roto (ej. el controlador realmente caído) (default `600` = 10 min) |
 | `CLEANUP_INTERVAL` | pydhcp's own value -- DHCP pool lease time in seconds, copied from `pydhcp.env` at install time (default `60`) | Valor propio de pydhcp -- tiempo de lease del pool DHCP en segundos, copiado desde `pydhcp.env` durante la instalación (default `60`) |
 | `AUTHORIZED_LEASE_TIME` | pydhcp's own value -- DHCP lease time for authorized clients in seconds, copied from `pydhcp.env` at install time (default `2592000` = 30 days) | Valor propio de pydhcp -- tiempo de lease DHCP para clientes autorizados en segundos, copiado desde `pydhcp.env` durante la instalación (default `2592000` = 30 días) |
 | `QUARANTINE_DURATION` | pydhcp's own value -- seconds an IP is held out of the pool after a DHCPDECLINE or `ping-check` conflict, copied from `pydhcp.env` at install time; written into `pydhcpd.conf` as `abandon-lease-time` (default `60`) | Valor propio de pydhcp -- segundos que una IP se aparta del pool tras un DHCPDECLINE o un conflicto de `ping-check`, copiado desde `pydhcp.env` durante la instalación; escrito en `pydhcpd.conf` como `abandon-lease-time` (default `60`) |
@@ -1201,14 +1207,18 @@ Losing a genuinely unrecoverable line is never a security gap, only a MAC that g
 ```
 
 ```text
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:01 uses 192.168.0.198, inside the hotspot range 192.168.0.180-220
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: that range is reserved for uhm-auth.txt -- move aa:bb:cc:dd:ee:01 outside it
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:01
+2026-07-18 20:32:50   inside hotspot range 192.168.0.180-220
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: reserved for uhm-auth.txt
+2026-07-18 20:32:50   move aa:bb:cc:dd:ee:01 outside it
 2026-07-18 20:32:50 ACL configuration error detected -- aborting
 ```
 
 ```text
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:02 uses 192.168.0.235, inside the blockdhcp pool range 192.168.0.230-192.168.0.239
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: that range is reserved for uhm-grace/blockdhcp -- move aa:bb:cc:dd:ee:02 outside it
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:02
+2026-07-18 20:32:50   inside the blockdhcp pool range 192.168.0.230-192.168.0.239
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: reserved for
+2026-07-18 20:32:50   uhm-grace/blockdhcp -- move aa:bb:cc:dd:ee:02 outside it
 2026-07-18 20:32:50 ACL configuration error detected -- aborting
 ```
 
@@ -1430,12 +1440,12 @@ Select option [1-6]: 5
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmalert.sh</b> is an <b>optional</b>, standalone alert watcher. It tails <code>/var/log/uhm.log</code> in real time and sends a push notification via <a href="https://ntfy.sh">ntfy.sh</a> on two kinds of events: (1) loss of connectivity to the UniFi controller, after <code>API_FAIL_THRESHOLD</code> consecutive cycles (default 3), followed by a recovery notice once it's back; and (2) any other <code>ERROR</code> or <code>WARNING</code> line in the shared log (from <code>uhmd.sh</code> or the <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code> chain) — fires immediately, no threshold.
+      <b>uhmalert.sh</b> is an <b>optional</b>, standalone alert watcher. It tails <code>/var/log/uhm.log</code> in real time and sends a push notification via <a href="https://ntfy.sh">ntfy.sh</a> on three kinds of events: (1) loss of connectivity to the UniFi controller, after <code>API_FAIL_THRESHOLD</code> consecutive cycles (default 3), followed by a recovery notice once it's back; (2) any other <code>ERROR</code> or <code>WARNING</code> line in the shared log (from <code>uhmd.sh</code> or the <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code> chain) — fires immediately, no threshold; and (3) any <code>FIX:</code> line, written only by <code>uhmwatch.sh</code> (installed by default) when it successfully recovers a service — closes out the corresponding <code>WARNING</code> alert with confirmation it was resolved.
       <br><br>
       Runs as its own systemd service (<code>uhmalert.service</code>), independent of <code>uhmd.sh</code> — it never reads or modifies the daemon or its source, only tails the log file it already writes. <code>uhmd.sh</code> stays byte-identical to upstream whether <code>uhmalert</code> is installed or not, and the daemon runs the same with or without it.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmalert.sh</b> es un vigilante de alertas <b>opcional</b> e independiente. Sigue <code>/var/log/uhm.log</code> en tiempo real y envia una notificacion push via <a href="https://ntfy.sh">ntfy.sh</a> ante dos tipos de eventos: (1) perdida de conectividad con el controlador UniFi, tras <code>API_FAIL_THRESHOLD</code> ciclos consecutivos (default 3), seguido de un aviso de recuperacion cuando vuelve; y (2) cualquier otra linea <code>ERROR</code> o <code>WARNING</code> en el log compartido (de <code>uhmd.sh</code> o la cadena <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code>) -- dispara de inmediato, sin umbral.
+      <b>uhmalert.sh</b> es un vigilante de alertas <b>opcional</b> e independiente. Sigue <code>/var/log/uhm.log</code> en tiempo real y envia una notificacion push via <a href="https://ntfy.sh">ntfy.sh</a> ante tres tipos de eventos: (1) perdida de conectividad con el controlador UniFi, tras <code>API_FAIL_THRESHOLD</code> ciclos consecutivos (default 3), seguido de un aviso de recuperacion cuando vuelve; (2) cualquier otra linea <code>ERROR</code> o <code>WARNING</code> en el log compartido (de <code>uhmd.sh</code> o la cadena <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code>) -- dispara de inmediato, sin umbral; y (3) cualquier linea <code>FIX:</code>, escrita solo por <code>uhmwatch.sh</code> (instalado por defecto) cuando recupera un servicio con éxito -- cierra la alerta <code>WARNING</code> correspondiente confirmando que se resolvió.
       <br><br>
       Corre como su propio servicio systemd (<code>uhmalert.service</code>), independiente de <code>uhmd.sh</code> -- nunca lee ni modifica el daemon ni su codigo fuente, solo sigue el archivo de log que ya escribe. <code>uhmd.sh</code> se mantiene identico al original este o no instalado <code>uhmalert</code>, y el daemon funciona igual con o sin el.
     </td>
@@ -1459,7 +1469,8 @@ sudo /etc/uhm/tools/uhmalert.sh install
 Installing uhmalert (uhm alert)
 ==================================
 
-Added NTFY_TOPIC, API_FAIL_THRESHOLD and UALERT_QUIET_PERIOD_SECONDS to /etc/uhm/uhm.env
+Added NTFY_TOPIC, API_FAIL_THRESHOLD and
+UALERT_QUIET_PERIOD_SECONDS to /etc/uhm/uhm.env
 Deploying script to /etc/uhm/tools/uhmalert.sh...
 Writing systemd unit (/etc/systemd/system/uhmalert.service)...
 
@@ -1566,12 +1577,12 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> is an <b>optional</b>, standalone services watchdog. Runs every 5 minutes via cron and checks every service <code>uhm</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run.
+      <b>uhmwatch.sh</b> is a <b>mandatory</b>, standalone services watchdog — installed automatically by <code>uhmsetup.sh</code>, not offered as a yes/no prompt like <code>uhmalert</code>/<code>uhmmon</code>. Every unit it watches already has its own systemd <code>Restart=</code> policy, but that alone gives up permanently once its <code>StartLimitBurst</code> is exhausted, with no further attempt and no alert of its own (see below). <code>uhmwatch</code> is the last line of defense against that — it runs every minute, independent of whatever state systemd itself gave up in, so <code>uhm</code>'s essential services don't stay down indefinitely just because systemd stopped trying. Checks every service <code>uhm</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), <code>pydhcpd.service</code> (always -- external dependency uhm cannot function without, watched here since pydhcp's own <code>Restart=on-failure</code> gives up silently after its burst with no alerting of its own), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run. Each recovery attempt runs <code>systemctl reset-failed</code> right before <code>start</code>/<code>restart</code> — every unit already carries its own <code>Restart=</code> policy with a <code>StartLimitBurst</code>, and once that burst is exhausted systemd stops trying on its own and stays quiet about it, which would otherwise make this watchdog's own restart attempt fail silently right when it's needed most. To avoid then hammering a persistently broken service every single minute, each restart attempt (successful or not) is timestamped per-service under <code>/run/uhmwatch/</code> (cleared on reboot), and a new attempt is skipped — logged only, not acted on — until <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) has passed since the last one.
       <br><br>
       Standalone — never reads or modifies <code>uhmd.sh</code>, only manages services via <code>systemctl</code>. Writes to the same shared <code>/var/log/uhm.log</code> as the rest of <code>uhm</code> (no separate log file or logrotate of its own). Silent on a healthy run — nothing is logged unless a check finds a problem or takes a fix action.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> es un vigilante de servicios <b>opcional</b> e independiente. Corre cada 5 minutos por cron y verifica cada servicio del que depende <code>uhm</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida.
+      <b>uhmwatch.sh</b> es un vigilante de servicios <b>obligatorio</b> e independiente — se instala automáticamente con <code>uhmsetup.sh</code>, no se ofrece como pregunta sí/no como <code>uhmalert</code>/<code>uhmmon</code>. Cada unidad que vigila ya tiene su propia política <code>Restart=</code> de systemd, pero eso solo se rinde para siempre en cuanto agota su <code>StartLimitBurst</code>, sin más intentos y sin aviso propio (ver más abajo). <code>uhmwatch</code> es la última línea de defensa contra eso — corre cada minuto, independiente del estado en que systemd se haya rendido, para que los servicios esenciales de <code>uhm</code> no queden caídos indefinidamente solo porque systemd dejó de intentarlo. Verifica cada servicio del que depende <code>uhm</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), <code>pydhcpd.service</code> (siempre -- dependencia externa sin la cual uhm no puede funcionar, vigilada acá porque el propio <code>Restart=on-failure</code> de pydhcp se rinde en silencio tras agotar su cupo, sin ningún aviso propio), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida. Cada intento de recuperación corre <code>systemctl reset-failed</code> justo antes de <code>start</code>/<code>restart</code> — cada unidad ya trae su propia política <code>Restart=</code> con un <code>StartLimitBurst</code>, y una vez agotado ese cupo systemd deja de reintentar por su cuenta y no avisa — lo que de otro modo haría fallar en silencio el intento de este vigilante justo cuando más se lo necesita. Para no machacar después con un restart cada minuto a un servicio persistentemente roto, cada intento de recuperación (exitoso o no) queda con marca de tiempo por servicio bajo <code>/run/uhmwatch/</code> (se limpia en cada reinicio), y un nuevo intento se salta -- solo se loguea, no se actúa -- hasta que pasen <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) desde el último.
       <br><br>
       Independiente — nunca lee ni modifica <code>uhmd.sh</code>, solo gestiona servicios vía <code>systemctl</code>. Escribe al mismo <code>/var/log/uhm.log</code> compartido con el resto de <code>uhm</code> (sin log ni logrotate propio). Silencioso en una corrida sana — no registra nada salvo que un chequeo encuentre un problema o tome una acción de reparación.
     </td>
@@ -1581,7 +1592,7 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 **Install:**
 
 ```bash
-sudo /etc/uhm/tools/uhmwatch.sh install
+sudo /etc/uhm/core/uhmwatch.sh install
 ```
 
 ```text
@@ -1589,10 +1600,10 @@ sudo /etc/uhm/tools/uhmwatch.sh install
 Installing uhmwatch (uhm services watchdog)
 ==================================
 
-Deploying script to /etc/uhm/tools/uhmwatch.sh...
-Cron entry registered: */5 * * * * /etc/uhm/tools/uhmwatch.sh
+Deploying script to /etc/uhm/core/uhmwatch.sh...
+Cron entry registered: * * * * * /etc/uhm/core/uhmwatch.sh
 
-Installed. First run happens on the next 5-minute mark.
+Installed. First run happens on the next minute mark.
   Check the log with: tail -f /var/log/uhm.log
 ```
 
@@ -1600,13 +1611,25 @@ Installed. First run happens on the next 5-minute mark.
 
 ```text
 2026-07-29 21:18:18 WARNING: uhmd OFFLINE
-2026-07-29 21:18:18 uhmd FIX (restarted)
+2026-07-29 21:18:18 FIX: uhmd restarted
 ```
+
+If `uhmalert.sh` is also installed, both lines reach your phone as separate push notifications — `uhmalert.sh` alerts on any `WARNING:`/`ERROR:` line (the problem) as well as any `FIX:` line (confirmation it was resolved), from any of the services `uhmwatch.sh` manages, not just `uhmd`. `uhmwatch.sh` and `uhmalert.sh` are independent, but this is what having both installed together looks like in practice / Si `uhmalert.sh` también está instalado, ambas líneas te llegan al teléfono como notificaciones push separadas — `uhmalert.sh` alerta ante cualquier línea `WARNING:`/`ERROR:` (el problema) y también ante cualquier línea `FIX:` (confirmación de que se resolvió), de cualquiera de los servicios que gestiona `uhmwatch.sh`, no solo `uhmd`. `uhmwatch.sh` y `uhmalert.sh` son independientes, pero así se ve en la práctica tenerlos instalados juntos:
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmalertwatch.png" width="50%"></a>
+</p>
+<p align="center"><i>uhmwatch fixing a downed service, relayed to your phone by uhmalert</i></p>
+<p align="center"><i>uhmwatch arreglando un servicio caído, retransmitido a tu teléfono por uhmalert</i></p>
+
+> The notification app may not display messages in chronological order (it can group same-minute notifications arbitrarily). Since it's only a notification, the recommendation is to check `/var/log/uhm.log` for the actual event order.
+>
+> Es posible que la app de notificaciones no muestre los mensajes en orden cronológico (puede agrupar notificaciones del mismo minuto de forma arbitraria). Al ser solo una notificación, se recomienda revisar `/var/log/uhm.log` para ver el orden real de los eventos.
 
 **Uninstall:**
 
 ```bash
-sudo /etc/uhm/tools/uhmwatch.sh uninstall
+sudo /etc/uhm/core/uhmwatch.sh uninstall
 ```
 
 <table>
@@ -1637,7 +1660,7 @@ sudo /etc/uhm/tools/uhmwatch.sh uninstall
 2026-07-31 23:59:04 INFO: UniFi login attempt failed (HTTP 429) -- still within startup grace window
 2026-07-31 23:59:04 ERROR: Could not log in to UniFi after 120s -- exiting
 
-# from uhmwatch.sh, on its next 5-minute check:
+# from uhmwatch.sh, on its next check:
 2026-07-31 23:59:15 WARNING: rate limited by controller (HTTP 429) -- too many login attempts, not a credentials problem
 2026-07-31 23:59:15 Stop uhmd + uhmwatch cron before restarting the controller -- see README, uhmwatch: Controller lockout
 ```
@@ -1645,29 +1668,29 @@ sudo /etc/uhm/tools/uhmwatch.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>HTTP 429</code> means the controller is throttling login attempts -- it is not a wrong password, and restarting a service will not fix it, it can make it worse. It typically happens after several rapid failed login attempts in a short window (UniFi's own anti-brute-force protection), and it is self-sustaining: <code>uhmd.service</code> ships with <code>Restart=always</code>/<code>RestartSec=10</code>, and <code>uhmd.sh</code> itself retries login every 10s for up to <code>STARTUP_GRACE_SECONDS</code> (default 120s) before exiting -- if the controller is already rate-limiting, this loop keeps re-triggering the lockout indefinitely, and <code>uhmwatch.sh</code>'s own 5-minute restart of <code>uhmd.service</code> (if it finds it down) feeds the same loop.
+      <code>HTTP 429</code> means the controller is throttling login attempts -- it is not a wrong password, and restarting a service will not fix it, it can make it worse. It typically happens after several rapid failed login attempts in a short window (UniFi's own anti-brute-force protection), and it is self-sustaining: <code>uhmd.service</code> ships with <code>Restart=always</code>/<code>RestartSec=10</code>, and <code>uhmd.sh</code> itself retries login every 10s for up to <code>STARTUP_GRACE_SECONDS</code> (default 120s) before exiting -- if the controller is already rate-limiting, this loop keeps re-triggering the lockout indefinitely, and <code>uhmwatch.sh</code>'s own 1-minute restart of <code>uhmd.service</code> (if it finds it down) feeds the same loop.
       <br><br>
       <b>Recovery procedure:</b>
       <ol>
-        <li>Stop everything that can attempt a login: <code>sudo systemctl stop uhmd</code>, then <code>sudo bash /etc/uhm/tools/uhmwatch.sh uninstall</code> (removes the cron entry so it doesn't restart <code>uhmd</code> for you mid-recovery).</li>
+        <li>Stop everything that can attempt a login: <code>sudo systemctl stop uhmd</code>, then <code>sudo bash /etc/uhm/core/uhmwatch.sh uninstall</code> (removes the cron entry so it doesn't restart <code>uhmd</code> for you mid-recovery).</li>
         <li>Confirm it stays down: <code>sudo systemctl status uhmd</code> should show <code>inactive (dead)</code> and stay that way.</li>
         <li>Restart the controller (<code>sudo systemctl restart uosserver.service</code> for <code>unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>).</li>
         <li>Wait -- give the controller a couple of minutes to fully come back up before trying anything against it again (<code>sleep 120</code>, or just wait and confirm via a manual browser login).</li>
         <li>Bring <code>uhmd</code> back up once: <code>sudo systemctl start uhmd</code>, and check <code>/var/log/uhm.log</code> for <code>UniFi login OK</code>.</li>
-        <li>Once stable, reinstall the watchdog: <code>sudo bash /etc/uhm/tools/uhmwatch.sh install</code>.</li>
+        <li>Once stable, reinstall the watchdog: <code>sudo bash /etc/uhm/core/uhmwatch.sh install</code>.</li>
       </ol>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>HTTP 429</code> significa que el controlador está limitando la tasa de intentos de login -- no es una contraseña incorrecta, y reiniciar un servicio no lo arregla, puede empeorarlo. Suele ocurrir después de varios intentos fallidos rápidos en poco tiempo (protección anti-fuerza-bruta propia de UniFi), y es autosostenido: <code>uhmd.service</code> viene con <code>Restart=always</code>/<code>RestartSec=10</code>, y <code>uhmd.sh</code> reintenta el login cada 10s durante hasta <code>STARTUP_GRACE_SECONDS</code> (default 120s) antes de salir -- si el controlador ya está limitando la tasa, este loop sigue disparando el bloqueo indefinidamente, y el propio reinicio de <code>uhmd.service</code> que hace <code>uhmwatch.sh</code> cada 5 minutos (si lo encuentra caído) alimenta el mismo loop.
+      <code>HTTP 429</code> significa que el controlador está limitando la tasa de intentos de login -- no es una contraseña incorrecta, y reiniciar un servicio no lo arregla, puede empeorarlo. Suele ocurrir después de varios intentos fallidos rápidos en poco tiempo (protección anti-fuerza-bruta propia de UniFi), y es autosostenido: <code>uhmd.service</code> viene con <code>Restart=always</code>/<code>RestartSec=10</code>, y <code>uhmd.sh</code> reintenta el login cada 10s durante hasta <code>STARTUP_GRACE_SECONDS</code> (default 120s) antes de salir -- si el controlador ya está limitando la tasa, este loop sigue disparando el bloqueo indefinidamente, y el propio reinicio de <code>uhmd.service</code> que hace <code>uhmwatch.sh</code> cada minuto (si lo encuentra caído) alimenta el mismo loop.
       <br><br>
       <b>Procedimiento de recuperación:</b>
       <ol>
-        <li>Detener todo lo que pueda intentar un login: <code>sudo systemctl stop uhmd</code>, luego <code>sudo bash /etc/uhm/tools/uhmwatch.sh uninstall</code> (quita la entrada de cron para que no te reinicie <code>uhmd</code> a mitad de la recuperación).</li>
+        <li>Detener todo lo que pueda intentar un login: <code>sudo systemctl stop uhmd</code>, luego <code>sudo bash /etc/uhm/core/uhmwatch.sh uninstall</code> (quita la entrada de cron para que no te reinicie <code>uhmd</code> a mitad de la recuperación).</li>
         <li>Confirmar que se queda detenido: <code>sudo systemctl status uhmd</code> debe mostrar <code>inactive (dead)</code> y quedarse así.</li>
         <li>Reiniciar el controlador (<code>sudo systemctl restart uosserver.service</code> para <code>unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>).</li>
         <li>Esperar -- darle al controlador un par de minutos para terminar de arrancar antes de intentar algo contra él de nuevo (<code>sleep 120</code>, o simplemente esperar y confirmar con un login manual por navegador).</li>
         <li>Levantar <code>uhmd</code> una sola vez: <code>sudo systemctl start uhmd</code>, y revisar <code>/var/log/uhm.log</code> buscando <code>UniFi login OK</code>.</li>
-        <li>Una vez estable, reinstalar el watchdog: <code>sudo bash /etc/uhm/tools/uhmwatch.sh install</code>.</li>
+        <li>Una vez estable, reinstalar el watchdog: <code>sudo bash /etc/uhm/core/uhmwatch.sh install</code>.</li>
       </ol>
     </td>
   </tr>
@@ -1702,14 +1725,16 @@ sudo /etc/uhm/tools/uhmwatch.sh uninstall
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
 2026-07-01 06:47:35 uhmreload start...
 2026-07-01 06:47:35 uhmleases start...
-2026-07-01 06:47:36 expire_grace_entries: expired 02:00:00:aa:bb:11 (age=43346s) -> blockdhcp
-2026-07-01 06:47:36 expire_grace_entries: queued lease removal for 02:00:00:aa:bb:11
+2026-07-01 06:47:36 expire_grace_entries: expired 02:00:00:aa:bb:11
+2026-07-01 06:47:36   (age=43346s) -> blockdhcp
+2026-07-01 06:47:36 expire_grace_entries: queued removal for 02:00:00:aa:bb:11
 2026-07-01 06:47:40 ACL: blockdhcp=67 | proxy=105 | unlimited=35 | hotspot=17 | grace=8
 2026-07-01 06:47:40 uhmleases done at: Wed Jul  1 06:47:40 -05 2026
 2026-07-01 06:47:40 uhmiptables start...
 2026-07-01 06:47:42 uhmiptables done at: Wed Jul  1 06:47:42 -05 2026
 2026-07-01 06:47:42 uhmreload done at: Wed Jul  1 06:47:42 -05 2026
-2026-07-01 06:47:42 STATS: vouchers=3 | authorized=17 | grace=8 | new_auth=0 | revoked=0
+2026-07-01 06:47:42 STATS: vouchers=3 auth=17 grace=8
+2026-07-01 06:47:42   new_auth=0 | revoked=0
 ```
 
 No client connected, no voucher redeemed, no grace entry expired? The log between two cycles is simply empty — nothing is written.
@@ -1844,7 +1869,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 |------------|------------|-----|-----|
 | **`stat/guest` doesn't distinguish deleted vs. quota-exhausted vouchers** | **`stat/guest` no distingue vouchers eliminados de vouchers con cuota agotada** | When a voucher is deleted manually from the UniFi UI, `stat/guest` still retains session records tagged with that `voucher_code`, indistinguishable from a voucher whose quota simply ran out. This lets affected clients reconnect without re-entering a code. Reported to Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigated in `uhmaudit.sh` by **Revoke by voucher code** (action 4), which cleans `stat/guest`/`stat/sta` directly instead of relying on `stat/voucher` state. | Cuando un voucher se elimina manualmente desde la UI de UniFi, `stat/guest` sigue reteniendo registros de sesión con ese `voucher_code`, indistinguibles de un voucher cuya cuota simplemente se agotó. Esto permite que los clientes afectados se reconecten sin volver a ingresar un código. Reportado a Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigado en `uhmaudit.sh` mediante **Revoke by voucher code** (acción 4), que limpia `stat/guest`/`stat/sta` directamente sin depender del estado de `stat/voucher`. |
 | **`stat/voucher` has no historical record of expired vouchers** | **`stat/voucher` no tiene registro histórico de vouchers expirados** | UniFi does not retain a voucher in `stat/voucher` once it expires or its quota is fully consumed; the entry disappears entirely instead of being marked expired. Verified directly against a live controller: five vouchers confirmed issued and consumed via `/var/log/uhm.log` (`Authorized`/`Expired` lines) returned zero matches when queried by code against `stat/voucher` after expiry. As a result, `uhmaudit.sh`'s Vouchers section and **Delete expired vouchers** (action 3) can only ever act on what the controller still tracks at query time — they cannot produce a historical report of all vouchers ever issued. The only durable record of past voucher activity is `/var/log/uhm.log`. | UniFi no retiene un voucher en `stat/voucher` una vez que expira o su cuota se consume por completo; la entrada desaparece por completo en vez de marcarse como expirada. Verificado directamente contra un controlador en vivo: cinco vouchers confirmados como emitidos y consumidos vía `/var/log/uhm.log` (líneas `Authorized`/`Expired`) devolvieron cero coincidencias al consultarlos por código contra `stat/voucher` después de expirar. Como consecuencia, la sección Vouchers de `uhmaudit.sh` y **Delete expired vouchers** (acción 3) solo pueden actuar sobre lo que el controlador todavía rastrea al momento de la consulta — no pueden producir un reporte histórico de todos los vouchers emitidos alguna vez. El único registro duradero de actividad histórica de vouchers es `/var/log/uhm.log`. |
-| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; both log lines are written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick e8:6f:38:7a:aa:bb (HTTP 400)` followed by `WARNING: kick_newly_authorized: client may keep its stale IP until its own DHCP renewal`. The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; ambas líneas de log las escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick e8:6f:38:7a:aa:bb (HTTP 400)` seguido de `WARNING: kick_newly_authorized: client may keep its stale IP until its own DHCP renewal`. El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
+| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; both log lines are written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick` / `e8:6f:38:7a:aa:bb (HTTP 400)` followed by `WARNING: kick_newly_authorized: client may keep its stale IP` / `until its own DHCP renewal` (each logged as two lines, per the 80-column limit on log messages). The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; ambas líneas de log las escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick` / `e8:6f:38:7a:aa:bb (HTTP 400)` seguido de `WARNING: kick_newly_authorized: client may keep its stale IP` / `until its own DHCP renewal` (cada uno logueado en dos líneas, por el límite de 80 columnas en mensajes de log). El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
 
 ### MongoDB - UniFi Controller Database
 

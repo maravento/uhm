@@ -211,7 +211,8 @@ check_mac() {
     fi
 
     if [ $in_hotspot -eq 1 ] && [ $in_grace -eq 1 ]; then
-        warn "In uhm-auth AND uhm-grace -- clean_grace_list should have removed it from uhm-grace"
+        warn "In uhm-auth AND uhm-grace"
+        warn "  clean_grace_list should have removed it from uhm-grace"
         warnings=$((warnings+1))
     fi
 
@@ -264,15 +265,7 @@ menu_grace_period() {
         if (( remaining > 0 )); then
             local h=$(( remaining/3600 ))
             local m=$(( (remaining%3600)/60 ))
-            local color
-            if (( remaining < 7200 )); then
-                color="$RED"
-            elif (( remaining < 21600 )); then
-                color="$YELLOW"
-            else
-                color="$GREEN"
-            fi
-            printf " %-20s %-18s %-25s ${color}%dh %dm${NC}\n" "$mac" "$ip" "$name" "$h" "$m"
+            printf " %-20s %-18s %-25s %dh %dm\n" "$mac" "$ip" "$name" "$h" "$m"
         else
             expired=$((expired+1))
             printf " %-20s %-18s %-25s ${BOLD}EXPIRED${NC}\n" "$mac" "$ip" "$name"
@@ -349,7 +342,8 @@ menu_consistency() {
         fi
         if [ $in_hotspot -eq 1 ] && [ $in_grace -eq 1 ]; then
             [ $w -eq 0 ] && printf "${BOLD}--- %s ---${NC}\n" "$mac"
-            warn "In uhm-auth AND uhm-grace -- clean_grace_list should have removed it from uhm-grace"
+            warn "In uhm-auth AND uhm-grace"
+            warn "  clean_grace_list should have removed it from uhm-grace"
             w=$((w+1))
         fi
         [ $w -gt 0 ] && echo ""
@@ -589,9 +583,9 @@ menu_unifi_unauthorized() {
 main_menu() {
     while true; do
         clear
-        printf "${BOLD}########################################${NC}\n"
+        printf "${BOLD}###################################${NC}\n"
         printf "${BOLD}# uhmcheck -- MAC Diagnostic Tool #${NC}\n"
-        printf "${BOLD}########################################${NC}\n"
+        printf "${BOLD}###################################${NC}\n"
         echo ""
         printf " 1. Check MAC\n"
         printf " 2. Grace period status\n"

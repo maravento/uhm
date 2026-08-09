@@ -93,8 +93,10 @@ _perms=$(stat -c '%a' "$CONFIG" 2>/dev/null)
 _gdigit="${_perms: -2:1}"
 _odigit="${_perms: -1}"
 if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: $CONFIG has unsafe owner/permissions (owner=$_owner perms=$_perms)"
-    log "ERROR: must be owned by root with no group/other access (600). Refusing to source it."
+    log "ERROR: $CONFIG has unsafe owner/permissions"
+    log "  (owner=$_owner perms=$_perms)"
+    log "ERROR: must be owned by root with no group/other access"
+    log "  (600). Refusing to source it."
     exit 1
 fi
 
@@ -121,7 +123,9 @@ load_config() {
 load_config "$CONFIG"
 
 if [ -z "${UNIFI_CONTROLLER_URL:-}" ] || [ -z "${UNIFI_USERNAME:-}" ] || [ -z "${UNIFI_PASSWORD:-}" ] || [ -z "${HOTSPOT_ESSID:-}" ]; then
-    log "ERROR: Missing required variables (UNIFI_CONTROLLER_URL, UNIFI_USERNAME, UNIFI_PASSWORD, HOTSPOT_ESSID) in $CONFIG"
+    log "ERROR: Missing required variables in $CONFIG"
+        log "  (UNIFI_CONTROLLER_URL, UNIFI_USERNAME,"
+        log "  UNIFI_PASSWORD, HOTSPOT_ESSID)"
     exit 1
 fi
 
@@ -158,7 +162,8 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$token" ]; then
-            log "ERROR: Authentication failed. Check credentials in $CONFIG"
+            log "ERROR: Authentication failed"
+    log "  check credentials in $CONFIG"
             exit 1
         fi
         SESSION_COOKIE="TOKEN=${token}"
@@ -181,7 +186,8 @@ do_login() {
     fi
 
     if [ -z "$SESSION_COOKIE" ]; then
-        log "ERROR: Authentication failed. Check credentials in $CONFIG"
+        log "ERROR: Authentication failed"
+    log "  check credentials in $CONFIG"
         exit 1
     fi
 }
@@ -265,7 +271,8 @@ VCH_RC=$(echo "$VOUCHER" | jq -r '.meta.rc // "error"' 2>/dev/null)
 # here instead of printing a report built on empty data with no visible
 # error.
 if [[ "$STA_RC" == "error" && "$GUEST_RC" == "error" && "$VCH_RC" == "error" ]]; then
-    log "ERROR: Authentication failed -- all API calls returned no data. Check credentials in $CONFIG."
+    log "ERROR: Authentication failed -- no data from API"
+    log "  check credentials in $CONFIG"
     exit 1
 fi
 
@@ -428,11 +435,13 @@ interactive_forget_no_voucher() {
     echo "============================================================================"
 
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC) -- aborting to prevent unintended mass-forget."
+        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
+        log "  aborting to prevent unintended mass-forget."
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC) -- aborting to prevent unintended mass-forget."
+        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
+        log "  aborting to prevent unintended mass-forget."
         return
     fi
 
@@ -517,15 +526,18 @@ interactive_delete_expired() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC) -- aborting."
+        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
+        log "  aborting."
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC) -- aborting to prevent unintended client disconnect."
+        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
+        log "  aborting to prevent unintended client disconnect."
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC) -- aborting to prevent unintended client forget."
+        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
+        log "  aborting to prevent unintended client forget."
         return
     fi
 
@@ -615,15 +627,18 @@ interactive_delete_expired() {
 # -- Interactive [5]: purge all vouchers and client history --------------------
 interactive_purge_all() {
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC) -- aborting purge."
+        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
+        log "  aborting purge."
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC) -- aborting purge."
+        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
+        log "  aborting purge."
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC) -- aborting purge."
+        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
+        log "  aborting purge."
         return
     fi
 
@@ -723,15 +738,18 @@ interactive_revoke_by_code() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC) -- aborting."
+        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
+        log "  aborting."
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC) -- aborting to prevent unintended client forget."
+        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
+        log "  aborting to prevent unintended client forget."
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC) -- aborting to prevent unintended client disconnect."
+        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
+        log "  aborting to prevent unintended client disconnect."
         return
     fi
 
@@ -795,7 +813,8 @@ interactive_revoke_by_code() {
             && log "Deleted voucher: $TARGET_CODE" \
             || log "WARNING: Failed to delete voucher from stat/voucher (rc=$rc)"
     else
-        log "Voucher not in stat/voucher (manually deleted) -- proceeding with cleanup..."
+        log "Voucher not in stat/voucher (manually deleted)"
+        log "  proceeding with cleanup..."
     fi
 
     mapfile -t GUEST_MACS < <(echo "$GUEST" | jq -r --arg code "$TARGET_CODE" '

@@ -13,8 +13,9 @@
 # Installed alongside uhmleases.sh and uhmd.sh under /etc/uhm/core/ --
 # these three plus uhmd.service are the reload mechanism itself, not
 # auxiliary tools (unlike /etc/uhm/tools/, which holds independent
-# scripts uhm runs fine without: uhmaudit.sh, uhmcheck.sh, uhmmon.sh,
-# uhmwatch.sh, uhmalert.sh, plus the admin-provided uhmiptables.sh).
+# scripts, mostly optional: uhmaudit.sh, uhmcheck.sh, uhmmon.sh,
+# uhmalert.sh, plus the admin-provided uhmiptables.sh -- uhmwatch.sh is
+# the one exception, installed there too but mandatory).
 # Runs uhmleases.sh (lease/ACL rebuild) then uhmiptables.sh (firewall rules), in
 # that order. The two are not treated the same on failure:
 # - uhmleases.sh: missing, not executable, or a genuine execution failure all
@@ -76,27 +77,31 @@ _UH_UINT='^(0|[1-9][0-9]*)$'
 CONFIG_FILE="/etc/uhm/uhm.env"
 ULEASES_TIMEOUT_SECONDS=$(grep -m1 '^ULEASES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$ULEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: ULEASES_TIMEOUT_SECONDS not set in $CONFIG_FILE -- using default 120"
+    log "WARNING: ULEASES_TIMEOUT_SECONDS not set in $CONFIG_FILE"
+    log "  using default 120"
     ULEASES_TIMEOUT_SECONDS=120
 fi
 [[ "$ULEASES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || ULEASES_TIMEOUT_SECONDS=120
 
 UIPTABLES_TIMEOUT_SECONDS=$(grep -m1 '^UIPTABLES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UIPTABLES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UIPTABLES_TIMEOUT_SECONDS not set in $CONFIG_FILE -- using default 60"
+    log "WARNING: UIPTABLES_TIMEOUT_SECONDS not set"
+    log "  using default 60"
     UIPTABLES_TIMEOUT_SECONDS=60
 fi
 [[ "$UIPTABLES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || UIPTABLES_TIMEOUT_SECONDS=60
 
 ULEASES_SCRIPT=$(grep -m1 '^ULEASES_SCRIPT=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$ULEASES_SCRIPT" ]]; then
-    log "WARNING: ULEASES_SCRIPT not set in $CONFIG_FILE -- using default /etc/uhm/core/uhmleases.sh"
+    log "WARNING: ULEASES_SCRIPT not set in $CONFIG_FILE"
+    log "  using default /etc/uhm/core/uhmleases.sh"
     ULEASES_SCRIPT="/etc/uhm/core/uhmleases.sh"
 fi
 
 UIPTABLES_SCRIPT=$(grep -m1 '^UIPTABLES_SCRIPT=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UIPTABLES_SCRIPT" ]]; then
-    log "WARNING: UIPTABLES_SCRIPT not set in $CONFIG_FILE -- using default /etc/uhm/tools/uhmiptables.sh"
+    log "WARNING: UIPTABLES_SCRIPT not set in $CONFIG_FILE"
+    log "  using default /etc/uhm/tools/uhmiptables.sh"
     UIPTABLES_SCRIPT="/etc/uhm/tools/uhmiptables.sh"
 fi
 
@@ -111,7 +116,8 @@ log "uhmreload start..."
 
 # Abort if uhmd isn't active -- nothing downstream should run blindly.
 if ! systemctl is-active --quiet uhmd; then
-    log "ERROR: uhmd is not active -- aborting (uhmleases.sh/uhmiptables.sh not invoked)"
+    log "ERROR: uhmd is not active"
+    log "  aborting (uhmleases.sh/uhmiptables.sh not invoked)"
     exit 1
 fi
 
@@ -126,7 +132,8 @@ fi
 run_step() {
     local script="$1" name="$2" step_timeout="$3"
     if [[ ! -x "$script" ]]; then
-        log "WARNING: $name not found or not executable: $script -- aborting"
+        log "WARNING: $name not found or not executable: $script"
+        log "  aborting"
         exit 1
     fi
     local trace_file
@@ -140,9 +147,11 @@ run_step() {
         local trace_dest="/var/log/${name%.sh}-failure.trace"
         mv -f "$trace_file" "$trace_dest" 2>/dev/null || { log "WARNING: failed to move trace to $trace_dest -- discarding"; rm -f "$trace_file"; }
         if [[ "$exit_code" == "124" ]]; then
-            log "WARNING: $name timed out after ${step_timeout}s -- aborting; trace saved to $trace_dest"
+            log "WARNING: $name timed out after ${step_timeout}s"
+            log "  aborting; trace saved to $trace_dest"
         else
-            log "WARNING: $name failed (exit $exit_code) -- aborting; trace saved to $trace_dest"
+            log "WARNING: $name failed (exit $exit_code)"
+            log "  aborting; trace saved to $trace_dest"
         fi
         exit 1
     fi
@@ -160,9 +169,11 @@ run_step "$ULEASES_SCRIPT" "uhmleases.sh" "$ULEASES_TIMEOUT_SECONDS"
 # absence must stop the reload chain; uhmiptables.sh only enforces at the
 # firewall level, and ACL classification keeps working correctly without it.
 if [[ ! -x "$UIPTABLES_SCRIPT" ]]; then
-    log "WARNING: uhmiptables.sh not found or not executable: $UIPTABLES_SCRIPT -- skipping"
+    log "WARNING: uhmiptables.sh not found or not executable"
+    log "  path: $UIPTABLES_SCRIPT -- skipping"
 elif grep -qF "UHM_STUB_MARKER" "$UIPTABLES_SCRIPT" 2>/dev/null; then
-    log "INFO: uhmiptables.sh not configured yet -- skipping firewall reload (see README)"
+    log "INFO: uhmiptables.sh not configured yet"
+    log "  skipping firewall reload (see README)"
 else
     run_step "$UIPTABLES_SCRIPT" "uhmiptables.sh" "$UIPTABLES_TIMEOUT_SECONDS"
 fi
