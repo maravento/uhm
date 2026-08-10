@@ -38,6 +38,11 @@
 # with no alerting of its own -- uhmd cannot function without it, so it
 # gets the same treatment as uhmd.service itself. is-active only, no
 # functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
+# Skipped (not restarted) if uhmleases.sh currently holds CYCLE_LOCK --
+# it stops/reconfigures/starts pydhcpd itself as part of a normal reload
+# (~1-3s), and a cron tick landing in that window would otherwise "fix"
+# a service that isn't actually broken, colliding with uhmleases.sh's own
+# pending restart and aborting that reload.
 # 4. UniFi backend -- branches on UNIFI_TYPE from uhm.env. Both branches
 # first require systemctl is-active (start it if not), then run a
 # functional check: a real login against the API (same mechanism
@@ -121,8 +126,29 @@ if ! flock -n 200; then
     exit 1
 fi
 
+# uhmd.sh/uhmleases.sh hold this same lock (CYCLE_LOCK in uhmd.sh) for the
+# ~1-3s a reload actively stops/reconfigures/starts pydhcpd -- a real,
+# expected gap, not a failure. Without this check, a cron tick landing in
+# that narrow window sees pydhcpd not-yet-restarted, restarts it itself, and
+# collides with uhmleases.sh's own pending `systemctl start pydhcpd`,
+# aborting that reload (uhmleases.sh exits 1). fd 250 is used only for this
+# instantaneous non-blocking probe -- always released right after, opened
+# fresh on every call so it never competes with SCRIPT_LOCK (fd 200) above.
+_UHM_CYCLE_LOCK="/var/lock/uhmd-cycle.lock"
+_uhm_reload_in_progress() {
+    [[ -e "$_UHM_CYCLE_LOCK" ]] || return 1
+    exec 250>"$_UHM_CYCLE_LOCK" 2>/dev/null || return 1
+    if flock -n 250; then
+        flock -u 250
+        exec 250>&-
+        return 1
+    fi
+    exec 250>&-
+    return 0
+}
+
 # DEPENDENCIES
-for dep in curl jq iproute2 cron coreutils util-linux; do
+for dep in curl jq iproute2 cron coreutils util-linux grep systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -234,7 +260,11 @@ _load_conf "$_UHM_CONF"
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 _UH_UINT='^(0|[1-9][0-9]*)$'
 RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
-[[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || { log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- default 600"; RECOVERY_COOLDOWN_SECONDS=600; }
+if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
+    log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid"
+    log "  ($RECOVERY_COOLDOWN_SECONDS) -- using default 600"
+    RECOVERY_COOLDOWN_SECONDS=600
+fi
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
     UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
 else
@@ -297,6 +327,10 @@ check_pydhcpd() {
     if systemctl is-active --quiet pydhcpd.service; then
         _clear_recovery_attempt "pydhcpd.service"
     else
+        if _uhm_reload_in_progress; then
+            log "INFO: pydhcpd down mid-reload (uhmleases.sh) -- skip"
+            return
+        fi
         log "WARNING: pydhcpd OFFLINE"
         if _recovery_on_cooldown "pydhcpd.service"; then
             log "INFO: pydhcpd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"

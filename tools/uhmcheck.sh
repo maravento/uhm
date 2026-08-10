@@ -15,14 +15,15 @@
 # sudo bash uhmcheck.sh
 #
 # MENU OPTIONS:
-# 1. Check MAC - verify a single MAC across all data sources
+# 1. Check MAC - verify a single MAC across all local data sources, plus
+# its live state directly from the UniFi API (essid,
+# authorized, is_guest, voucher_code)
 # 2. Grace period - list all MACs in grace period with time remaining
 # 3. Consistency check - check all MACs from all sources + system summary
 # 4. Search by IP/name - find MAC by IP or hostname and run consistency check
 # 5. UniFi unauthorized - clients connected to the hotspot ESSID that
 # UniFi reports as NOT authorized (direct query
-# to the UniFi API via stat/sta, not the local
-# ACL files)
+# to the UniFi API via stat/sta)
 # 6. Exit
 #
 # DATA SOURCES CHECKED:
@@ -31,9 +32,14 @@
 # blockdhcp.txt - Blocked MACs (grace expired without voucher)
 # acl_mac/*.txt - Permanent ACL lists (proxy, unlimited)
 # pydhcpd.leases - Active DHCP lease file
-# UniFi stat/sta - Live state of the UniFi controller (option 5 only;
-# requires UNIFI_* credentials in uhm.env, not
-# used elsewhere in the script)
+# UniFi stat/sta/ - Live state of the UniFi controller (options 1 and 5;
+# stat/guest requires UNIFI_* credentials in uhm.env). This is the
+# only source of truth for whether the AP is actually
+# holding a client at the captive portal -- a MAC can be
+# fully correct across every local ACL file above and
+# still be held at the portal if UniFi itself reports it
+# authorized=false on a Guest-type WLAN (see uhmd.sh's
+# MANAGED MACS note)
 #
 # CONSISTENCY RULES:
 # A MAC should appear in only one logical state at a time. The checker
@@ -75,8 +81,20 @@ if ! flock -n 200; then
     exit 1
 fi
 
+# UNIFI_TEMP_FILES accumulates temp files created by unifi_fetch_sta() (login
+# header, stat/sta and stat/guest bodies) -- cleaned up here regardless of
+# which menu option ran or how the script exits.
+UNIFI_TEMP_FILES=()
+cleanup_temp() {
+    local f
+    for f in "${UNIFI_TEMP_FILES[@]+"${UNIFI_TEMP_FILES[@]}"}"; do
+        rm -f "$f" 2>/dev/null || true
+    done
+}
+trap cleanup_temp EXIT
+
 # DEPENDENCIES
-for dep in curl jq mawk coreutils util-linux ncurses-bin; do
+for dep in curl jq mawk coreutils util-linux ncurses-bin grep sed; do
     if ! dpkg -s "$dep" &>/dev/null; then
         echo "ERROR: Required dependency '$dep' is not installed." >&2
         exit 1
@@ -97,7 +115,7 @@ load_uhm_env() {
         value="${value%\"}"
         value="${value#\"}"
         case "$key" in
-            BLOCKDHCP_GRACE_SECONDS|UMACAUTH_FILE|UGRACE_FILE|ACL_BLOCK_FILE|ACL_MAC_PATH|PYDHCPD_LEASES)
+            BLOCKDHCP_GRACE_SECONDS|UHM_MACAUTH|UHM_GRACE|ACL_BLOCK_FILE|ACL_MAC_PATH|PYDHCPD_LEASES)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
@@ -107,15 +125,11 @@ load_uhm_env "$_UHM_CONF"
 BLOCKDHCP_GRACE_SECONDS=${BLOCKDHCP_GRACE_SECONDS:-86400}
 [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $_UH_UINT ]] || BLOCKDHCP_GRACE_SECONDS=86400
 
-UMACAUTH_FILE="${UMACAUTH_FILE:-/etc/uhm/acl/uhm-auth.txt}"
-UGRACE_FILE="${UGRACE_FILE:-/etc/uhm/acl/uhm-grace.txt}"
+UHM_MACAUTH="${UHM_MACAUTH:-/etc/uhm/acl/uhm-auth.txt}"
+UHM_GRACE="${UHM_GRACE:-/etc/uhm/acl/uhm-grace.txt}"
 BLOCK_DHCP="${ACL_BLOCK_FILE:-/etc/acl/acl_dhcp/blockdhcp.txt}"
 ACL_MAC_DIR="${ACL_MAC_PATH:-/etc/acl/acl_mac}"
 LEASES_FILE="${PYDHCPD_LEASES:-/etc/pydhcp/pydhcpd.leases}"
-
-# Path to the full configuration file (contains UniFi credentials).
-# Only used in option 5 -- the rest of the script does not need it.
-HOTSPOT_CONF="/etc/uhm/uhm.env"
 
 # Bold only -- no color, so output stays legible on light and dark terminals
 if [ -t 1 ]; then
@@ -154,6 +168,202 @@ press_enter() {
     read -rp " Press ENTER to continue..." _
 }
 
+# --- Shared: UniFi live query (used by check_mac and option 5) ---------------
+
+# Path to the full configuration file (contains UniFi credentials). Only used
+# by the UniFi-querying paths below -- the local ACL/lease checks don't need it.
+HOTSPOT_CONF="/etc/uhm/uhm.env"
+
+# Loads the UNIFI_* variables from uhm.env, but only if the file is owned by
+# root and has no write permission for group/other (the same validation
+# uhmd.sh performs before loading its own config). Returns 1 without loading
+# anything if the validation fails, instead of continuing with potentially
+# compromised credentials.
+load_unifi_config() {
+    if [ ! -f "$HOTSPOT_CONF" ]; then
+        printf " ${BOLD}%s not found${NC}\n" "$HOTSPOT_CONF"
+        return 1
+    fi
+
+    local owner perms gdigit odigit
+    owner=$(stat -c '%U' "$HOTSPOT_CONF" 2>/dev/null)
+    perms=$(stat -c '%a' "$HOTSPOT_CONF" 2>/dev/null)
+    gdigit="${perms: -2:1}"
+    odigit="${perms: -1}"
+    if [[ "$owner" != "root" ]] || [[ "$gdigit" != "0" ]] || [[ "$odigit" != "0" ]]; then
+        printf " ${BOLD}%s has unsafe owner/permissions (owner=%s perms=%s)${NC}\n" "$HOTSPOT_CONF" "$owner" "$perms"
+        printf " ${BOLD}must be owned by root with no group/other access (600) -- not loaded${NC}\n"
+        return 1
+    fi
+
+    # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
+    # maliciously replaced config file cannot execute code -- same approach
+    # as uhmleases.sh's load_env_file().
+    local _line _key _value
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        [[ "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" =~ ^[[:space:]]*$ ]] && continue
+        _key="${_line%%=*}"
+        _value="${_line#*=}"
+        if [[ "$_value" == \"*\" && "$_value" == *\" && ${#_value} -ge 2 ]]; then
+            _value="${_value:1:$((${#_value}-2))}"
+            _value="${_value//\\\"/\"}"
+            _value="${_value//\\\$/\$}"
+            _value="${_value//\\\`/\`}"
+            _value="${_value//\\\\/\\}"
+        fi
+        case "$_key" in
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|UHM_ESSID)
+                printf -v "$_key" '%s' "$_value"
+                ;;
+            *)
+                ;;
+        esac
+    done < "$HOTSPOT_CONF"
+
+    local missing=()
+    [[ -z "${UNIFI_CONTROLLER_URL:-}" ]] && missing+=("UNIFI_CONTROLLER_URL")
+    [[ -z "${UNIFI_USERNAME:-}" ]] && missing+=("UNIFI_USERNAME")
+    [[ -z "${UNIFI_PASSWORD:-}" ]] && missing+=("UNIFI_PASSWORD")
+    [[ -z "${UNIFI_TYPE:-}" ]] && missing+=("UNIFI_TYPE")
+    [[ -z "${UNIFI_SITE:-}" ]] && missing+=("UNIFI_SITE")
+    [[ -z "${UHM_ESSID:-}" ]] && missing+=("UHM_ESSID")
+    if (( ${#missing[@]} > 0 )); then
+        printf " ${BOLD}Missing variables in %s: %s${NC}\n" "$HOTSPOT_CONF" "${missing[*]}"
+        return 1
+    fi
+    return 0
+}
+
+# Logs in against UniFi and fetches stat/sta + stat/guest ONCE per script run,
+# caching both to temp files (removed on exit by the trap below). check_mac()
+# calls this for every MAC it checks (including the loop in menu_search), so
+# caching avoids re-authenticating against the controller once per MAC.
+# _UNIFI_LOADED is set on the first attempt regardless of outcome, so a
+# failed login/query is not retried (and its warning not repeated) for every
+# subsequent MAC in the same run.
+_UNIFI_LOADED=0
+_UNIFI_FETCH_RC=1
+_UNIFI_STA_JSON=""
+_UNIFI_GUEST_JSON=""
+unifi_fetch_sta() {
+    [[ "$_UNIFI_LOADED" == "1" ]] && return "$_UNIFI_FETCH_RC"
+    _UNIFI_LOADED=1
+    _UNIFI_FETCH_RC=1
+
+    load_unifi_config || return 1
+
+    local login_url sta_url guest_url
+    if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
+        login_url="${UNIFI_CONTROLLER_URL}/api/auth/login"
+        sta_url="${UNIFI_CONTROLLER_URL}/proxy/network/api/s/${UNIFI_SITE}/stat/sta"
+        guest_url="${UNIFI_CONTROLLER_URL}/proxy/network/api/s/${UNIFI_SITE}/stat/guest"
+    else
+        login_url="${UNIFI_CONTROLLER_URL}/api/login"
+        sta_url="${UNIFI_CONTROLLER_URL}/api/s/${UNIFI_SITE}/stat/sta"
+        guest_url="${UNIFI_CONTROLLER_URL}/api/s/${UNIFI_SITE}/stat/guest"
+    fi
+
+    printf " ${BOLD}Connecting to %s...${NC}\n" "$UNIFI_CONTROLLER_URL"
+
+    local hdr token payload cookie_name
+    hdr=$(mktemp)
+    UNIFI_TEMP_FILES+=("$hdr")
+    # Pass credentials to jq via environment and the body to curl via stdin --
+    # not --arg / -d -- so the plaintext password never appears in either
+    # process's argv (readable by any local user via /proc/<pid>/cmdline).
+    payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
+        '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
+    local _tls_opts=(-k)
+    [[ -n "${UNIFI_CERT_PIN:-}" ]] && _tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
+    curl -s "${_tls_opts[@]}" --connect-timeout 10 --max-time 30 \
+        -D "$hdr" -o /dev/null \
+        -X POST "$login_url" \
+        -H "Content-Type: application/json" \
+        --data-binary @- <<< "$payload" 2>/dev/null
+    if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
+        cookie_name="TOKEN"
+        token=$(grep -iE '^set-cookie:[[:space:]]*TOKEN=' "$hdr" 2>/dev/null | sed -E 's/.*TOKEN=([^;]+).*/\1/' | tr -d '\r\n')
+    else
+        cookie_name="unifises"
+        token=$(grep -i '^set-cookie:' "$hdr" 2>/dev/null | grep -i 'unifises=' | sed -E 's/.*unifises=([^;]+).*/\1/' | tr -d '\r\n')
+    fi
+
+    if [[ -z "$token" ]]; then
+        printf " ${BOLD}Login failed -- check UNIFI_USERNAME/UNIFI_PASSWORD/UNIFI_CONTROLLER_URL in %s${NC}\n" "$HOTSPOT_CONF"
+        return 1
+    fi
+
+    _UNIFI_STA_JSON=$(mktemp)
+    _UNIFI_GUEST_JSON=$(mktemp)
+    UNIFI_TEMP_FILES+=("$_UNIFI_STA_JSON" "$_UNIFI_GUEST_JSON")
+    curl -s "${_tls_opts[@]}" --connect-timeout 10 --max-time 30 \
+        -b "${cookie_name}=${token}" "$sta_url" -o "$_UNIFI_STA_JSON" 2>/dev/null
+    curl -s "${_tls_opts[@]}" --connect-timeout 10 --max-time 30 \
+        -b "${cookie_name}=${token}" "$guest_url" -o "$_UNIFI_GUEST_JSON" 2>/dev/null
+
+    local sta_rc
+    sta_rc=$(jq -r '.meta.rc // empty' "$_UNIFI_STA_JSON" 2>/dev/null)
+    if [[ "$sta_rc" != "ok" ]]; then
+        printf " ${BOLD}UniFi stat/sta query failed${NC}\n"
+        _UNIFI_STA_JSON=""
+        _UNIFI_GUEST_JSON=""
+        return 1
+    fi
+    _UNIFI_FETCH_RC=0
+    return 0
+}
+
+# Prints the live UniFi state for one MAC: essid, authorized, is_guest (from
+# stat/sta) and voucher_code (from stat/guest, if present). This is the
+# direct source of truth for whether the AP will hold this client at the
+# captive portal -- independent of, and not always predictable from, the
+# local ACL files checked above (see the MANAGED MACS note in uhmd.sh: UniFi
+# enforces its own authorized/is_guest state per client on any WLAN
+# configured as Guest/Hotspot, regardless of DHCP/firewall bypass).
+print_unifi_status() {
+    local mac="$1"
+    printf " UniFi (stat/sta): "
+    if ! unifi_fetch_sta; then
+        printf "unavailable (see message above)\n"
+        return
+    fi
+
+    local row
+    row=$(jq -r --arg m "$mac" '
+        .data[] | select((.mac // "" | ascii_downcase) == ($m|ascii_downcase))
+        | [(.essid // "n/a"), (.authorized|tostring), (.is_guest|tostring), (.ip // "n/a"), (.hostname // "n/a")]
+        | @tsv
+    ' "$_UNIFI_STA_JSON" 2>/dev/null | head -1)
+
+    if [[ -z "$row" ]]; then
+        printf "not currently connected (no live session)\n"
+        return
+    fi
+
+    local essid authorized is_guest ip hostname
+    IFS=$'\t' read -r essid authorized is_guest ip hostname <<< "$row"
+    printf "connected\n"
+    printf "   essid=%s\n" "$essid"
+    printf "   authorized=%s\n" "$authorized"
+    printf "   is_guest=%s\n" "$is_guest"
+    printf "   ip=%s\n" "$ip"
+    printf "   hostname=%s\n" "$hostname"
+
+    if [[ -n "$_UNIFI_GUEST_JSON" ]]; then
+        local vcode
+        vcode=$(jq -r --arg m "$mac" '
+            .data[] | select((.mac // "" | ascii_downcase) == ($m|ascii_downcase)) | .voucher_code // empty
+        ' "$_UNIFI_GUEST_JSON" 2>/dev/null | head -1)
+        [[ -n "$vcode" ]] && printf "   voucher_code=%s\n" "$vcode"
+    fi
+
+    if [[ "$authorized" == "false" && "$is_guest" == "true" ]]; then
+        warn "UniFi reports this MAC unauthorized on a Guest WLAN"
+        warn "  the AP holds it at the captive portal regardless of local ACL/DHCP state"
+    fi
+}
+
 # --- Option 1: Check single MAC ----------------------------------------------
 check_mac() {
     local mac="$1"
@@ -164,10 +374,10 @@ check_mac() {
     local in_hotspot=0 in_grace=0 in_block=0 in_acl=0 in_leases=0
 
     printf " uhm-auth.txt: "
-    if found_in "$mac" "$UMACAUTH_FILE"; then in_hotspot=1; printf "$OK\n"; else printf "$NO\n"; fi
+    if found_in "$mac" "$UHM_MACAUTH"; then in_hotspot=1; printf "$OK\n"; else printf "$NO\n"; fi
 
     printf " uhm-grace.txt: "
-    if found_in "$mac" "$UGRACE_FILE"; then in_grace=1; printf "$OK\n"; else printf "$NO\n"; fi
+    if found_in "$mac" "$UHM_GRACE"; then in_grace=1; printf "$OK\n"; else printf "$NO\n"; fi
 
     printf " blockdhcp.txt: "
     if found_in "$mac" "$BLOCK_DHCP"; then in_block=1; printf "$OK\n"; else printf "$NO\n"; fi
@@ -183,10 +393,13 @@ check_mac() {
     printf " pydhcpd.leases: "
     if found_in_leases "$mac" "$LEASES_FILE"; then in_leases=1; printf "$OK\n"; else printf "$NO\n"; fi
 
+    echo ""
+    print_unifi_status "$mac"
+
     # Grace period time remaining
-    if [ $in_grace -eq 1 ] && [ -f "$UGRACE_FILE" ]; then
+    if [ $in_grace -eq 1 ] && [ -f "$UHM_GRACE" ]; then
         local line ts remaining
-        line=$(grep -iF ";${mac};" "$UGRACE_FILE" 2>/dev/null | head -1)
+        line=$(grep -iF ";${mac};" "$UHM_GRACE" 2>/dev/null | head -1)
         ts=$(echo "$line" | awk -F';' '{print $5}')
         if [[ "$ts" =~ $_UH_UINT ]]; then
             remaining=$(( (ts + BLOCKDHCP_GRACE_SECONDS) - $(date +%s) ))
@@ -245,8 +458,8 @@ menu_check_mac() {
 # --- Option 2: Grace period status -------------------------------------------
 menu_grace_period() {
     echo ""
-    if [ ! -f "$UGRACE_FILE" ]; then
-        printf " ${BOLD}File not found: %s${NC}\n" "$UGRACE_FILE"
+    if [ ! -f "$UHM_GRACE" ]; then
+        printf " ${BOLD}File not found: %s${NC}\n" "$UHM_GRACE"
         press_enter
         return
     fi
@@ -270,7 +483,7 @@ menu_grace_period() {
             expired=$((expired+1))
             printf " %-20s %-18s %-25s ${BOLD}EXPIRED${NC}\n" "$mac" "$ip" "$name"
         fi
-    done < "$UGRACE_FILE"
+    done < "$UHM_GRACE"
 
     echo ""
     printf " Total: %d | Expired: %d | Active: %d\n" "$total" "$expired" "$((total-expired))"
@@ -287,7 +500,7 @@ menu_consistency() {
     tmpfile=$(mktemp)
 
     # From semicolon-delimited files (field 2)
-    for f in "$UMACAUTH_FILE" "$UGRACE_FILE" "$BLOCK_DHCP"; do
+    for f in "$UHM_MACAUTH" "$UHM_GRACE" "$BLOCK_DHCP"; do
         [ -f "$f" ] && awk -F';' '{print tolower($2)}' "$f" >> "$tmpfile" 2>/dev/null
     done
 
@@ -311,8 +524,8 @@ menu_consistency() {
         # and the consistency warnings below.
         local w=0
         local in_hotspot=0 in_grace=0 in_block=0 in_acl=0 in_leases=0
-        found_in "$mac" "$UMACAUTH_FILE" && in_hotspot=1
-        found_in "$mac" "$UGRACE_FILE" && in_grace=1
+        found_in "$mac" "$UHM_MACAUTH" && in_hotspot=1
+        found_in "$mac" "$UHM_GRACE" && in_grace=1
         found_in "$mac" "$BLOCK_DHCP" && in_block=1
         grep -rqiE "^a;${mac};" "$ACL_MAC_DIR"/ 2>/dev/null && in_acl=1
         found_in_leases "$mac" "$LEASES_FILE" && in_leases=1
@@ -387,7 +600,7 @@ menu_search() {
     tmpfile=$(mktemp)
 
     # Search in semicolon-delimited files (all fields)
-    for f in "$UMACAUTH_FILE" "$UGRACE_FILE" "$BLOCK_DHCP"; do
+    for f in "$UHM_MACAUTH" "$UHM_GRACE" "$BLOCK_DHCP"; do
         if [ -f "$f" ]; then
             grep -iF "$query" "$f" 2>/dev/null \
                 | awk -F';' '{print tolower($2)}' >> "$tmpfile"
@@ -422,151 +635,28 @@ menu_search() {
 }
 
 # --- Option 5: unauthorized clients in UniFi ---------------------------------
-
-# Loads the UNIFI_* variables from uhm.env, but only if the file is
-# owned by root and has no write permission for group/other (the same
-# validation uhmd.sh performs before loading its own config). Returns 1
-# without loading anything if the validation fails, instead of continuing
-# with potentially compromised credentials.
-load_unifi_config() {
-    if [ ! -f "$HOTSPOT_CONF" ]; then
-        printf " ${BOLD}%s not found${NC}\n" "$HOTSPOT_CONF"
-        return 1
-    fi
-
-    local owner perms gdigit odigit
-    owner=$(stat -c '%U' "$HOTSPOT_CONF" 2>/dev/null)
-    perms=$(stat -c '%a' "$HOTSPOT_CONF" 2>/dev/null)
-    gdigit="${perms: -2:1}"
-    odigit="${perms: -1}"
-    if [[ "$owner" != "root" ]] || [[ "$gdigit" != "0" ]] || [[ "$odigit" != "0" ]]; then
-        printf " ${BOLD}%s has unsafe owner/permissions (owner=%s perms=%s)${NC}\n" "$HOTSPOT_CONF" "$owner" "$perms"
-        printf " ${BOLD}must be owned by root with no group/other access (600) -- not loaded${NC}\n"
-        return 1
-    fi
-
-    # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
-    # maliciously replaced config file cannot execute code -- same approach
-    # as uhmleases.sh's load_env_file().
-    local _line _key _value
-    while IFS= read -r _line || [[ -n "$_line" ]]; do
-        [[ "$_line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$_line" =~ ^[[:space:]]*$ ]] && continue
-        _key="${_line%%=*}"
-        _value="${_line#*=}"
-        if [[ "$_value" == \"*\" && "$_value" == *\" && ${#_value} -ge 2 ]]; then
-            _value="${_value:1:$((${#_value}-2))}"
-            _value="${_value//\\\"/\"}"
-            _value="${_value//\\\$/\$}"
-            _value="${_value//\\\`/\`}"
-            _value="${_value//\\\\/\\}"
-        fi
-        case "$_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|HOTSPOT_ESSID)
-                printf -v "$_key" '%s' "$_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$HOTSPOT_CONF"
-
-    local missing=()
-    [[ -z "${UNIFI_CONTROLLER_URL:-}" ]] && missing+=("UNIFI_CONTROLLER_URL")
-    [[ -z "${UNIFI_USERNAME:-}" ]] && missing+=("UNIFI_USERNAME")
-    [[ -z "${UNIFI_PASSWORD:-}" ]] && missing+=("UNIFI_PASSWORD")
-    [[ -z "${UNIFI_TYPE:-}" ]] && missing+=("UNIFI_TYPE")
-    [[ -z "${UNIFI_SITE:-}" ]] && missing+=("UNIFI_SITE")
-    [[ -z "${HOTSPOT_ESSID:-}" ]] && missing+=("HOTSPOT_ESSID")
-    if (( ${#missing[@]} > 0 )); then
-        printf " ${BOLD}Missing variables in %s: %s${NC}\n" "$HOTSPOT_CONF" "${missing[*]}"
-        return 1
-    fi
-    return 0
-}
-
-# Logs in against UniFi and queries stat/sta, just like unifi_login()/api_get()
-# in uhmd.sh, but self-contained (no session persisted to disk, since
-# this is a one-off query from the menu, not a daemon).
+# Reuses unifi_fetch_sta()'s cached stat/sta (see the shared section above) --
+# same login/query path as print_unifi_status(), just filtered to one ESSID
+# and one authorized/is_guest condition instead of a single MAC.
 menu_unifi_unauthorized() {
     echo ""
-    if ! load_unifi_config; then
+    if ! unifi_fetch_sta; then
         press_enter
         return
     fi
 
-    local login_url sta_url
-    if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
-        login_url="${UNIFI_CONTROLLER_URL}/api/auth/login"
-        sta_url="${UNIFI_CONTROLLER_URL}/proxy/network/api/s/${UNIFI_SITE}/stat/sta"
-    else
-        login_url="${UNIFI_CONTROLLER_URL}/api/login"
-        sta_url="${UNIFI_CONTROLLER_URL}/api/s/${UNIFI_SITE}/stat/sta"
-    fi
-
-    printf " ${BOLD}Connecting to %s...${NC}\n" "$UNIFI_CONTROLLER_URL"
-
-    local hdr token payload
-    hdr=$(mktemp)
-    # Pass credentials to jq via environment and the body to curl via stdin --
-    # not --arg / -d -- so the plaintext password never appears in either
-    # process's argv (readable by any local user via /proc/<pid>/cmdline).
-    payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
-        '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    local _tls_opts=(-k)
-    [[ -n "${UNIFI_CERT_PIN:-}" ]] && _tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
-    curl -s "${_tls_opts[@]}" --connect-timeout 10 --max-time 30 \
-        -D "$hdr" -o /dev/null \
-        -X POST "$login_url" \
-        -H "Content-Type: application/json" \
-        --data-binary @- <<< "$payload" 2>/dev/null
-    if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
-        token=$(grep -iE '^set-cookie:[[:space:]]*TOKEN=' "$hdr" 2>/dev/null | sed -E 's/.*TOKEN=([^;]+).*/\1/' | tr -d '\r\n')
-    else
-        token=$(grep -i '^set-cookie:' "$hdr" 2>/dev/null | grep -i 'unifises=' | sed -E 's/.*unifises=([^;]+).*/\1/' | tr -d '\r\n')
-    fi
-    rm -f "$hdr"
-
-    if [[ -z "$token" ]]; then
-        printf " ${BOLD}Login failed -- check UNIFI_USERNAME/UNIFI_PASSWORD/UNIFI_CONTROLLER_URL in %s${NC}\n" "$HOTSPOT_CONF"
-        press_enter
-        return
-    fi
-
-    local cookie_name
-    if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
-        cookie_name="TOKEN"
-    else
-        cookie_name="unifises"
-    fi
-
-    local sta_json sta_http_code
-    sta_json=$(mktemp)
-    sta_http_code=$(curl -s "${_tls_opts[@]}" --connect-timeout 10 --max-time 30 \
-        -b "${cookie_name}=${token}" "$sta_url" -o "$sta_json" -w "%{http_code}" 2>/dev/null)
-
-    echo ""
-    printf " ${BOLD}=== Clients on %s NOT authorized by UniFi ===${NC}\n\n" "$HOTSPOT_ESSID"
-
-    local sta_rc
-    sta_rc=$(jq -r '.meta.rc // empty' "$sta_json" 2>/dev/null)
-    if [[ "$sta_http_code" != "200" || "$sta_rc" != "ok" ]]; then
-        printf " ${BOLD}Could not query stat/sta (HTTP %s) -- unable to verify authorization${NC}\n" "${sta_http_code:-000}"
-        rm -f "$sta_json"
-        press_enter
-        return
-    fi
+    printf " ${BOLD}=== Clients on %s NOT authorized by UniFi ===${NC}\n\n" "$UHM_ESSID"
 
     local rows
-    rows=$(jq -r --arg essid "$HOTSPOT_ESSID" '
+    rows=$(jq -r --arg essid "$UHM_ESSID" '
         .data[]
         | select(.essid == $essid)
         | select(.authorized == false)
         | "\(.mac)\t\(.hostname // "no-hostname")\t\(.ip // "no-ip")\t\(.last_seen // "n/a")"
-    ' "$sta_json" 2>/dev/null)
-    rm -f "$sta_json"
+    ' "$_UNIFI_STA_JSON" 2>/dev/null)
 
     if [[ -z "$rows" ]]; then
-        printf " ${BOLD}None -- all clients on %s are authorized${NC}\n" "$HOTSPOT_ESSID"
+        printf " ${BOLD}None -- all clients on %s are authorized${NC}\n" "$UHM_ESSID"
     else
         printf " ${BOLD}%-20s %-25s %-18s %s${NC}\n" "MAC" "HOSTNAME" "IP" "LAST_SEEN"
         printf " %s\n" "$(printf -- '-%.0s' {1..80})"

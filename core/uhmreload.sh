@@ -30,7 +30,7 @@
 # TIMEOUTS (uhm.env):
 # uhmd.sh invokes this script with no time limit of its own -- it just
 # waits for uhmreload.sh to finish. Each step below is bounded individually
-# instead: ULEASES_TIMEOUT_SECONDS (default 120) and UIPTABLES_TIMEOUT_SECONDS
+# instead: UHM_LEASES_TIMEOUT_SECONDS (default 120) and UHM_IPTABLES_TIMEOUT_SECONDS
 # (default 60). A step that exceeds its limit is killed, its trace saved to
 # /var/log/<step>-failure.trace, and the reload aborts (WARNING logged).
 #
@@ -65,7 +65,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in util-linux coreutils; do
+for dep in util-linux coreutils grep systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -75,34 +75,38 @@ done
 _UH_UINT='^(0|[1-9][0-9]*)$'
 
 CONFIG_FILE="/etc/uhm/uhm.env"
-ULEASES_TIMEOUT_SECONDS=$(grep -m1 '^ULEASES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$ULEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: ULEASES_TIMEOUT_SECONDS not set in $CONFIG_FILE"
+UHM_LEASES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_LEASES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
+    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set in $CONFIG_FILE"
     log "  using default 120"
-    ULEASES_TIMEOUT_SECONDS=120
+    UHM_LEASES_TIMEOUT_SECONDS=120
 fi
-[[ "$ULEASES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || ULEASES_TIMEOUT_SECONDS=120
+if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
+    UHM_LEASES_TIMEOUT_SECONDS=120
+fi
 
-UIPTABLES_TIMEOUT_SECONDS=$(grep -m1 '^UIPTABLES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UIPTABLES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UIPTABLES_TIMEOUT_SECONDS not set"
+UHM_IPTABLES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_IPTABLES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+if [[ -z "$UHM_IPTABLES_TIMEOUT_SECONDS" ]]; then
+    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set"
     log "  using default 60"
-    UIPTABLES_TIMEOUT_SECONDS=60
+    UHM_IPTABLES_TIMEOUT_SECONDS=60
 fi
-[[ "$UIPTABLES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || UIPTABLES_TIMEOUT_SECONDS=60
+if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
+    UHM_IPTABLES_TIMEOUT_SECONDS=60
+fi
 
-ULEASES_SCRIPT=$(grep -m1 '^ULEASES_SCRIPT=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$ULEASES_SCRIPT" ]]; then
-    log "WARNING: ULEASES_SCRIPT not set in $CONFIG_FILE"
+UHM_LEASES=$(grep -m1 '^UHM_LEASES=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+if [[ -z "$UHM_LEASES" ]]; then
+    log "WARNING: UHM_LEASES not set in $CONFIG_FILE"
     log "  using default /etc/uhm/core/uhmleases.sh"
-    ULEASES_SCRIPT="/etc/uhm/core/uhmleases.sh"
+    UHM_LEASES="/etc/uhm/core/uhmleases.sh"
 fi
 
-UIPTABLES_SCRIPT=$(grep -m1 '^UIPTABLES_SCRIPT=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UIPTABLES_SCRIPT" ]]; then
-    log "WARNING: UIPTABLES_SCRIPT not set in $CONFIG_FILE"
+UHM_IPTABLES=$(grep -m1 '^UHM_IPTABLES=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+if [[ -z "$UHM_IPTABLES" ]]; then
+    log "WARNING: UHM_IPTABLES not set in $CONFIG_FILE"
     log "  using default /etc/uhm/tools/uhmiptables.sh"
-    UIPTABLES_SCRIPT="/etc/uhm/tools/uhmiptables.sh"
+    UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
 fi
 
 # UHM_RELOAD_ACTIVE: not set here. The daemon exports it before calling
@@ -158,7 +162,7 @@ run_step() {
     rm -f "$trace_file" 2>/dev/null || true
 }
 
-run_step "$ULEASES_SCRIPT" "uhmleases.sh" "$ULEASES_TIMEOUT_SECONDS"
+run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS"
 
 # uhmiptables.sh ships as a stub that always exits 1 until the admin replaces
 # it with real firewall rules (see README) -- that is the normal state right
@@ -168,14 +172,14 @@ run_step "$ULEASES_SCRIPT" "uhmleases.sh" "$ULEASES_TIMEOUT_SECONDS"
 # than aborting -- uhmleases.sh is the core ACL/lease reconciliation and its
 # absence must stop the reload chain; uhmiptables.sh only enforces at the
 # firewall level, and ACL classification keeps working correctly without it.
-if [[ ! -x "$UIPTABLES_SCRIPT" ]]; then
+if [[ ! -x "$UHM_IPTABLES" ]]; then
     log "WARNING: uhmiptables.sh not found or not executable"
-    log "  path: $UIPTABLES_SCRIPT -- skipping"
-elif grep -qF "UHM_STUB_MARKER" "$UIPTABLES_SCRIPT" 2>/dev/null; then
+    log "  path: $UHM_IPTABLES -- skipping"
+elif grep -qF "UHM_STUB_MARKER" "$UHM_IPTABLES" 2>/dev/null; then
     log "INFO: uhmiptables.sh not configured yet"
     log "  skipping firewall reload (see README)"
 else
-    run_step "$UIPTABLES_SCRIPT" "uhmiptables.sh" "$UIPTABLES_TIMEOUT_SECONDS"
+    run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS"
 fi
 
 # End

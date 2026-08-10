@@ -93,9 +93,10 @@
 # WPAD/PAC OPTION (option 252)
 # If you need WPAD/PAC for proxy auto-configuration:
 # 1. Install and configure Apache2
-# 2. Create virtual host on port 18100
+# 2. Create virtual host on the WPAD_PORT of /etc/uhm/uhm.env (default 18100)
 # 3. Create wpad.pac file in Apache document root
 # 4. Set WPAD_ENABLED=true in /etc/uhm/uhm.env
+# The lines are only written if http://SERVER_IP:WPAD_PORT/wpad.pac answers 200
 #
 # NOTE on logging:
 # - Writes to /var/log/uhm.log (shared with uhmreload.sh). Rotation
@@ -187,6 +188,13 @@ if [[ -z "${UHM_RELOAD_ACTIVE:-}" ]]; then
     fi
 fi
 
+# Set by is_pydhcp() if pydhcpd fails to start (even after the backup-config
+# restore attempt) -- checked at the very end of the script so this script's
+# own exit code reflects the real outcome instead of always returning 0.
+# Without this, uhmreload.sh/uhmd.sh treat a completed-but-DHCP-down reload
+# as a success and never alert.
+PYDHCPD_START_FAILED=0
+
 TEMP_FILES_TO_CLEAN=()
 cleanup_temp() {
     local f
@@ -218,12 +226,12 @@ load_env_file() {
         fi
         case "$key" in
             SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|HOTSPOT_PATH|\
-            ACL_MAC_PROXY|ACL_MAC_UNLIMITED|UMACAUTH_FILE|ACL_BLOCK_FILE|\
-            UGRACE_FILE|BLOCKDHCP_GRACE_SECONDS|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|PING_CHECK_ENABLED|\
-            PING_TIMEOUT_SECONDS|LOCAL_USER|HOTSPOT_IP_RANGE|HOTSPOT_RANGE_START|HOTSPOT_RANGE_END|PYDHCPD_LEASES|\
-            UQUEUE_FILE|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
+            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
+            ACL_MAC_PROXY|ACL_MAC_UNLIMITED|UHM_MACAUTH|ACL_BLOCK_FILE|\
+            UHM_GRACE|BLOCKDHCP_GRACE_SECONDS|\
+            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
+            PING_TIMEOUT_SECONDS|LOCAL_USER|UHM_INI_RANGE|UHM_END_RANGE|PYDHCPD_LEASES|\
+            UHM_QUEUE|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
                 printf -v "$key" '%s' "$value"
                 ;;
             *)
@@ -253,7 +261,7 @@ fi
 log "Using local user: $local_user"
 
 # DEPENDENCIES
-for dep in python3 mawk coreutils util-linux; do
+for dep in python3 mawk coreutils util-linux curl grep sed systemd libc-bin; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: missing package '$dep'"
         log "  install it with: sudo apt install $dep"
@@ -270,13 +278,25 @@ _UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 _UH_UINT='^(0|[1-9][0-9]*)$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
+# IPv4 <-> integer. Every octet is forced base 10 (10#) so a value like 010
+# is never read as octal. Ranges are compared as integers, so nothing below
+# assumes a particular netmask or a three-octet prefix.
+_ip_to_int() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    echo $(( (10#$a << 24) + (10#$b << 16) + (10#$c << 8) + 10#$d ))
+}
+
 # Defaults for variables that may not exist in older uhm.env installations.
 # These match the values documented in README.md's Config Reference table.
-HOTSPOT_IP_RANGE="${HOTSPOT_IP_RANGE:-$(echo "$SERVER_IP" | cut -d'.' -f1-3)}"
-HOTSPOT_RANGE_START="${HOTSPOT_RANGE_START:-160}"
-[[ "$HOTSPOT_RANGE_START" =~ $_UH_OCT ]] || { log "WARNING: HOTSPOT_RANGE_START invalid ($HOTSPOT_RANGE_START) -- using default 160"; HOTSPOT_RANGE_START=160; }
-HOTSPOT_RANGE_END="${HOTSPOT_RANGE_END:-199}"
-[[ "$HOTSPOT_RANGE_END" =~ $_UH_OCT ]] || { log "WARNING: HOTSPOT_RANGE_END invalid ($HOTSPOT_RANGE_END) -- using default 199"; HOTSPOT_RANGE_END=199; }
+for _r_var in UHM_INI_RANGE UHM_END_RANGE; do
+    if [ -z "${!_r_var:-}" ]; then
+        log "ERROR: $_r_var not set in $ENV_FILE"
+        log "  re-run uhmsetup.sh or restore $ENV_FILE from backup"
+        exit 1
+    fi
+done
+unset _r_var
 SERV_MASK="${SERV_MASK:-255.255.255.0}"
 SERV_DNS="${SERV_DNS:-8.8.8.8,1.1.1.1}"
 SERV_SUBNET="${SERV_SUBNET:-192.168.0.0}"
@@ -302,22 +322,28 @@ if ! [[ "$SERV_DNS" =~ $_UH_DNS ]]; then
     log "  got: '$SERV_DNS'"
     exit 1
 fi
-if ! [[ "${HOTSPOT_IP_RANGE}.0" =~ $_UH_IPV4 ]]; then
-    log "ERROR: HOTSPOT_IP_RANGE invalid IPv4 prefix in $ENV_FILE"
-    log "  got: '$HOTSPOT_IP_RANGE'"
+for _r_var in UHM_INI_RANGE UHM_END_RANGE; do
+    if ! [[ "${!_r_var}" =~ $_UH_IPV4 ]]; then
+        log "ERROR: $_r_var is not a valid IPv4 address in $ENV_FILE"
+        log "  got: '${!_r_var}'"
+        exit 1
+    fi
+done
+unset _r_var
+if (( $(_ip_to_int "$UHM_INI_RANGE") > $(_ip_to_int "$UHM_END_RANGE") )); then
+    log "ERROR: UHM_INI_RANGE ($UHM_INI_RANGE) is above"
+    log "  UHM_END_RANGE ($UHM_END_RANGE) in $ENV_FILE"
     exit 1
 fi
 
 # Guard: none of the three IP ranges/points this script writes into
 # pydhcpd.conf may overlap one another -- SERVER_IP, the block-pool range
 # (SERV_INI_RANGE_BLOCK-SERV_END_RANGE_BLOCK) and the hotspot voucher range
-# (HOTSPOT_IP_RANGE.HOTSPOT_RANGE_START-HOTSPOT_RANGE_END). pydhcpd.py only
+# (UHM_INI_RANGE-UHM_END_RANGE). pydhcpd.py only
 # rejects the block-pool/SERVER_IP overlap, and only after this script has
 # already stopped the daemon and rewritten pydhcpd.conf. Catching every
 # combination here, before any destructive action, avoids leaving the daemon
 # down over a config mistake that could have been caught up front.
-HOTSPOT_START_IP="${HOTSPOT_IP_RANGE}.${HOTSPOT_RANGE_START}"
-HOTSPOT_END_IP="${HOTSPOT_IP_RANGE}.${HOTSPOT_RANGE_END}"
 _range_conflict=$(python3 -c "
 import ipaddress, sys
 server = ipaddress.IPv4Address(sys.argv[1])
@@ -331,46 +357,87 @@ elif hot_s <= server <= hot_e:
     print('SERVER_IP overlaps the hotspot range')
 elif pool_s <= hot_e and hot_s <= pool_e:
     print('the block-pool range overlaps the hotspot range')
-" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$HOTSPOT_START_IP" "$HOTSPOT_END_IP" 2>/dev/null)
+" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$UHM_INI_RANGE" "$UHM_END_RANGE" 2>/dev/null)
 if [[ -n "$_range_conflict" ]]; then
     log "ERROR: $_range_conflict in $ENV_FILE -- refusing to proceed"
     log "  (SERVER_IP=$SERVER_IP, block-pool=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK)"
-    log "  (hotspot=$HOTSPOT_START_IP-$HOTSPOT_END_IP)"
+    log "  (hotspot=$UHM_INI_RANGE-$UHM_END_RANGE)"
     exit 1
 fi
 unset _range_conflict
 
+# Every fallback below is composed from the directory above it, so each base
+# path is named once instead of being repeated in full per file.
 ACL_PATH="${ACL_PATH:-/etc/acl}"
-ACL_MAC_PATH="${ACL_MAC_PATH:-/etc/acl/acl_mac}"
-ACL_DHCP_PATH="${ACL_DHCP_PATH:-/etc/acl/acl_dhcp}"
-HOTSPOT_PATH="${HOTSPOT_PATH:-/etc/uhm}"
-ACL_MAC_PROXY="${ACL_MAC_PROXY:-/etc/acl/acl_mac/mac-proxy.txt}"
-ACL_MAC_UNLIMITED="${ACL_MAC_UNLIMITED:-/etc/acl/acl_mac/mac-unlimited.txt}"
-UMACAUTH_FILE="${UMACAUTH_FILE:-/etc/uhm/acl/uhm-auth.txt}"
-ACL_BLOCK_FILE="${ACL_BLOCK_FILE:-/etc/acl/acl_dhcp/blockdhcp.txt}"
+ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/acl_mac}"
+ACL_DHCP_PATH="${ACL_DHCP_PATH:-$ACL_PATH/acl_dhcp}"
+UHM_PATH="${UHM_PATH:-/etc/uhm}"
+ACL_MAC_PROXY="${ACL_MAC_PROXY:-$ACL_MAC_PATH/mac-proxy.txt}"
+ACL_MAC_UNLIMITED="${ACL_MAC_UNLIMITED:-$ACL_MAC_PATH/mac-unlimited.txt}"
+UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
+ACL_BLOCK_FILE="${ACL_BLOCK_FILE:-$ACL_DHCP_PATH/blockdhcp.txt}"
 PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/pydhcpd.leases}"
-UGRACE_FILE="${UGRACE_FILE:-/etc/uhm/acl/uhm-grace.txt}"
+DHCPDv4_CONF="${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
 BLOCKDHCP_GRACE_SECONDS="${BLOCKDHCP_GRACE_SECONDS:-86400}"
-[[ "$BLOCKDHCP_GRACE_SECONDS" =~ $_UH_UINT ]] || { log "WARNING: BLOCKDHCP_GRACE_SECONDS invalid ($BLOCKDHCP_GRACE_SECONDS) -- using default 86400"; BLOCKDHCP_GRACE_SECONDS=86400; }
+if ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
+    log "WARNING: BLOCKDHCP_GRACE_SECONDS invalid"
+    log "  ($BLOCKDHCP_GRACE_SECONDS) -- using default 86400"
+    BLOCKDHCP_GRACE_SECONDS=86400
+fi
 CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
+if ! [[ "$CLEANUP_INTERVAL" =~ $_UH_UINT ]] || (( CLEANUP_INTERVAL == 0 )); then
+    log "WARNING: CLEANUP_INTERVAL invalid"
+    log "  ($CLEANUP_INTERVAL) -- using default 60"
+    CLEANUP_INTERVAL=60
+fi
 AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
+if ! [[ "$AUTHORIZED_LEASE_TIME" =~ $_UH_UINT ]] || (( AUTHORIZED_LEASE_TIME == 0 )); then
+    log "WARNING: AUTHORIZED_LEASE_TIME invalid"
+    log "  ($AUTHORIZED_LEASE_TIME) -- using default 2592000"
+    AUTHORIZED_LEASE_TIME=2592000
+fi
 QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
+if ! [[ "$QUARANTINE_DURATION" =~ $_UH_UINT ]] || (( QUARANTINE_DURATION == 0 )); then
+    log "WARNING: QUARANTINE_DURATION invalid"
+    log "  ($QUARANTINE_DURATION) -- using default 60"
+    QUARANTINE_DURATION=60
+fi
 WPAD_ENABLED="${WPAD_ENABLED:-false}"
+WPAD_PORT="${WPAD_PORT:-18100}"
+[[ "$WPAD_PORT" =~ $_UH_UINT ]] && (( WPAD_PORT >= 1 && WPAD_PORT <= 65535 )) || { log "WARNING: WPAD_PORT invalid ($WPAD_PORT) -- using default 18100"; WPAD_PORT=18100; }
 PING_CHECK_ENABLED="${PING_CHECK_ENABLED:-true}"
 PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
-UQUEUE_FILE="${UQUEUE_FILE:-/etc/uhm/acl/uhm-queue.txt}"
+if ! [[ "$PING_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( PING_TIMEOUT_SECONDS == 0 )); then
+    log "WARNING: PING_TIMEOUT_SECONDS invalid"
+    log "  ($PING_TIMEOUT_SECONDS) -- using default 1"
+    PING_TIMEOUT_SECONDS=1
+fi
+UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
 
+wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
+wpad_ready=0
 if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
+        wpad_ready=1
+    else
+        log "WARNING: WPAD_ENABLED=true but $wpad_url is not being served"
+        log "WARNING: WPAD not activated -- set"
+        log "  WPAD_ENABLED=false in $ENV_FILE or see README"
+    fi
+fi
+
+if (( wpad_ready )); then
     wpad_header="option wpad code 252 = text;"
-    wpad_subnet="option wpad \"http://$SERVER_IP:18100/wpad.pac\";"
+    wpad_subnet="option wpad \"$wpad_url\";"
 else
     wpad_header="#option wpad code 252 = text;"
-    wpad_subnet="#option wpad \"http://$SERVER_IP:18100/wpad.pac\";"
+    wpad_subnet="#option wpad \"$wpad_url\";"
 fi
 
 if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
     ping_check_line="ping-check true;"
-    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
+    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS};"
 else
     ping_check_line="ping-check false;"
     ping_timeout_line=""
@@ -414,12 +481,12 @@ verify_dhcp_files() {
 }
 
 verify_dhcp_config() {
-    if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}" ]; then
-        log "ERROR: ${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf} does not exist"
+    if [ ! -f "$DHCPDv4_CONF" ]; then
+        log "ERROR: $DHCPDv4_CONF does not exist"
         exit 1
     fi
-    chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
-    chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+    chmod 640 "$DHCPDv4_CONF"
+    chown root:"${DAEMON_GROUP:-pydhcpd}" "$DHCPDv4_CONF"
 }
 
 verify_directories() {
@@ -429,12 +496,12 @@ verify_directories() {
             exit 1
         fi
     done
-    if [ ! -d "$HOTSPOT_PATH" ]; then
-        log "ERROR: Directory $HOTSPOT_PATH does not exist"
+    if [ ! -d "$UHM_PATH" ]; then
+        log "ERROR: Directory $UHM_PATH does not exist"
         exit 1
     fi
     local acl_hotspot_dir
-    acl_hotspot_dir="$(dirname "$UMACAUTH_FILE")"
+    acl_hotspot_dir="$(dirname "$UHM_MACAUTH")"
     if [ ! -d "$acl_hotspot_dir" ]; then
         log "ERROR: Directory $acl_hotspot_dir does not exist"
         exit 1
@@ -454,7 +521,7 @@ ensure_acl_lists() {
 
 initialize_empty_files() {
     ensure_acl_lists "$ACL_BLOCK_FILE" "$ACL_MAC_PROXY" "$ACL_MAC_UNLIMITED" \
-        "$UMACAUTH_FILE" "$UGRACE_FILE" "$UQUEUE_FILE"
+        "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
 }
 
 # Normalizes every ACL list file before any parsing happens, then enforces
@@ -480,7 +547,7 @@ initialize_empty_files() {
 # uhm-auth.txt / uhm-grace.txt: 5 fields, epoch is the expiry/first-seen timestamp.
 # lease removal queue: one bare MAC per line, no delimiters.
 _normalize_acl_file() {
-    local f="$1" pattern="${2:-}" n=0 line _nf_ip
+    local f="$1" pattern="${2:-}" validate_ip="${3:-1}" n=0 line _nf_ip
 
     [ -f "$f" ] || return 0
 
@@ -499,10 +566,12 @@ _normalize_acl_file() {
                 log "ERROR: malformed line $n in $(basename "$f"): $line"
                 exit 1
             fi
-            _nf_ip="$(printf '%s' "$line" | cut -d';' -f3)"
-            if [[ -n "$_nf_ip" ]] && ! [[ "$_nf_ip" =~ $_UH_IPV4 ]]; then
-                log "ERROR: invalid IP on line $n in $(basename "$f"): $_nf_ip"
-                exit 1
+            if [[ "$validate_ip" == "1" ]]; then
+                _nf_ip="$(printf '%s' "$line" | cut -d';' -f3)"
+                if [[ -n "$_nf_ip" ]] && ! [[ "$_nf_ip" =~ $_UH_IPV4 ]]; then
+                    log "ERROR: invalid IP on line $n in $(basename "$f"): $_nf_ip"
+                    exit 1
+                fi
             fi
         done < "$f"
     fi
@@ -511,7 +580,8 @@ _normalize_acl_file() {
     # command substitution strips a trailing \n from its output, so
     # a non-empty result here means the last byte was NOT a newline.
     if [ -s "$f" ] && [ -n "$(tail -c1 "$f" 2>/dev/null)" ]; then
-        log "normalize_acl_lists: adding missing trailing newline to $(basename "$f")"
+        log "normalize_acl_lists: adding trailing newline"
+        log "  to $(basename "$f")"
         printf '\n' >> "$f"
     fi
 }
@@ -537,9 +607,9 @@ normalize_acl_lists() {
     done
     _normalize_acl_file "$ACL_BLOCK_FILE" "$strict_no_epoch_pattern"
 
-    _normalize_acl_file "$UMACAUTH_FILE" "$commentable_epoch_pattern"
-    _normalize_acl_file "$UGRACE_FILE" "$strict_epoch_pattern"
-    [ -f "$UQUEUE_FILE" ] && _normalize_acl_file "$UQUEUE_FILE" "$bare_mac_pattern"
+    _normalize_acl_file "$UHM_MACAUTH" "$commentable_epoch_pattern"
+    _normalize_acl_file "$UHM_GRACE" "$strict_epoch_pattern"
+    [ -f "$UHM_QUEUE" ] && _normalize_acl_file "$UHM_QUEUE" "$bare_mac_pattern" 0
 }
 
 dedup_acl_mac_lines() {
@@ -560,7 +630,8 @@ dedup_acl_mac_lines() {
     if (( after < before )); then
         mv "$tmp" "$f"
         chmod 600 "$f"
-        log "dedup_acl_mac_lines: removed $(( before - after )) duplicate MAC line(s) from $(basename "$f")"
+        log "dedup_acl_mac_lines: removed $(( before - after )) dup line(s)"
+        log "  from $(basename "$f")"
     fi
 }
 
@@ -571,7 +642,7 @@ verify_dhcp_config
 verify_directories
 initialize_empty_files
 normalize_acl_lists
-dedup_acl_mac_lines "$UGRACE_FILE"
+dedup_acl_mac_lines "$UHM_GRACE"
 dedup_acl_mac_lines "$ACL_BLOCK_FILE"
 
 function clean_hotspot_list() {
@@ -590,7 +661,7 @@ function clean_hotspot_list() {
 
     while IFS= read -r pat; do
         local mac_actual="${pat//;/}"
-        if grep -qiF "$pat" "$UMACAUTH_FILE" 2>/dev/null; then
+        if grep -qiF "$pat" "$UHM_MACAUTH" 2>/dev/null; then
             log "clean_hotspot_list: removing $mac_actual from uhm-auth"
             log "  (found in mac-*.txt)"
             (( removed++ )) || true
@@ -599,15 +670,15 @@ function clean_hotspot_list() {
 
     if (( removed > 0 )); then
         local _grep_rc=0
-        grep -viFf "$patterns" "$UMACAUTH_FILE" > "$UMACAUTH_FILE".tmp || _grep_rc=$?
+        grep -viFf "$patterns" "$UHM_MACAUTH" > "$UHM_MACAUTH".tmp || _grep_rc=$?
         if (( _grep_rc > 1 )); then
             log "ERROR: clean_hotspot_list: grep failed (rc=$_grep_rc)"
             log "  skipping update of uhm-auth"
-            rm -f "$UMACAUTH_FILE".tmp
+            rm -f "$UHM_MACAUTH".tmp
         else
-            chmod 600 "$UMACAUTH_FILE".tmp
-            TEMP_FILES_TO_CLEAN+=("${UMACAUTH_FILE}.tmp")
-            mv "$UMACAUTH_FILE".tmp "$UMACAUTH_FILE"
+            chmod 600 "$UHM_MACAUTH".tmp
+            TEMP_FILES_TO_CLEAN+=("${UHM_MACAUTH}.tmp")
+            mv "$UHM_MACAUTH".tmp "$UHM_MACAUTH"
         fi
     fi
     rm -f "$patterns"
@@ -617,7 +688,7 @@ function clean_hotspot_list() {
 }
 
 function clean_grace_list() {
-    [ ! -f "$UGRACE_FILE" ] && return
+    [ ! -f "$UHM_GRACE" ] && return
     local file_temp patterns
     file_temp=$(mktemp)
     TEMP_FILES_TO_CLEAN+=("${file_temp}")
@@ -628,7 +699,7 @@ function clean_grace_list() {
     # (mac-* or uhm-auth).
     {
         grep -h '^a;' "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null || true
-        grep -h '^a;' "$UMACAUTH_FILE" 2>/dev/null || true
+        grep -h '^a;' "$UHM_MACAUTH" 2>/dev/null || true
     } | awk -F';' '{print tolower($2)}' | sort -u > "$file_temp"
 
     local removed=0
@@ -639,10 +710,10 @@ function clean_grace_list() {
             log "  ($mac_actual)"
             continue
         fi
-        if grep -qi "^a;${mac_actual};" "$UGRACE_FILE" 2>/dev/null; then
+        if grep -qi "^a;${mac_actual};" "$UHM_GRACE" 2>/dev/null; then
             local found_in=""
             grep -qhi "^a;${mac_actual};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null && found_in="acl_mac" || true
-            grep -qi "^a;${mac_actual};" "$UMACAUTH_FILE" 2>/dev/null && found_in="${found_in:+$found_in/}hotspot" || true
+            grep -qi "^a;${mac_actual};" "$UHM_MACAUTH" 2>/dev/null && found_in="${found_in:+$found_in/}hotspot" || true
             log "clean_grace_list: removing $mac_actual from uhm-grace"
             log "  (found in ${found_in:-unknown}, date=$(date))"
             printf '^a;%s;\n' "$mac_actual" >> "$patterns"
@@ -650,24 +721,24 @@ function clean_grace_list() {
         fi
     done < "$file_temp"
 
-    TEMP_FILES_TO_CLEAN+=("${UGRACE_FILE}.tmp")
+    TEMP_FILES_TO_CLEAN+=("${UHM_GRACE}.tmp")
     if (( removed > 0 )); then
         local _grep_rc=0
-        grep -vif "$patterns" "$UGRACE_FILE" > "$UGRACE_FILE.tmp" || _grep_rc=$?
+        grep -vif "$patterns" "$UHM_GRACE" > "$UHM_GRACE.tmp" || _grep_rc=$?
         if (( _grep_rc > 1 )); then
             log "ERROR: clean_grace_list: grep failed (rc=$_grep_rc)"
             log "  skipping update of uhm-grace"
-            rm -f "$UGRACE_FILE.tmp"
+            rm -f "$UHM_GRACE.tmp"
         else
-            chmod 600 "$UGRACE_FILE.tmp"
-            mv "$UGRACE_FILE.tmp" "$UGRACE_FILE"
+            chmod 600 "$UHM_GRACE.tmp"
+            mv "$UHM_GRACE.tmp" "$UHM_GRACE"
         fi
     fi
     rm -f "$file_temp" "$patterns"
 }
 
 function expire_grace_entries() {
-    [ ! -f "$UGRACE_FILE" ] && return
+    [ ! -f "$UHM_GRACE" ] && return
     local file_temp now_epoch age status mac ip hostname epoch
     file_temp=$(mktemp)
     TEMP_FILES_TO_CLEAN+=("${file_temp}")
@@ -696,23 +767,23 @@ function expire_grace_entries() {
             log "  (age=${age}s) -> blockdhcp"
             echo "a;${mac};${ip};${hostname};" >> "$ACL_BLOCK_FILE"
             # Queue lease removal so pydhcpd stops serving this MAC from the pool.
-            if ! grep -qxF "$mac" "$UQUEUE_FILE" 2>/dev/null; then
-                echo "$mac" >> "$UQUEUE_FILE"
+            if ! grep -qxF "$mac" "$UHM_QUEUE" 2>/dev/null; then
+                echo "$mac" >> "$UHM_QUEUE"
                 log "expire_grace_entries: queued removal for $mac"
             fi
         else
             echo "a;${mac};${ip};${hostname};${epoch};" >> "$file_temp"
         fi
-    done < "$UGRACE_FILE"
+    done < "$UHM_GRACE"
 
-    mv "$file_temp" "$UGRACE_FILE"
-    chmod 600 "$UGRACE_FILE"
-    chown root:root "$UGRACE_FILE"
+    mv "$file_temp" "$UHM_GRACE"
+    chmod 600 "$UHM_GRACE"
+    chown root:root "$UHM_GRACE"
 }
 
 function is_pydhcp() {
     dhcpd="$PYDHCPD_LEASES"
-    dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+    dhcp_conf="$DHCPDv4_CONF"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX")
     TEMP_FILES_TO_CLEAN+=("$dhcp_conf_temp")
 
@@ -766,7 +837,7 @@ function is_pydhcp() {
                         grep -qi "^a;${mac_address};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null \
                             && mac_authoritative="yes" || true
                         if [[ -z "$mac_authoritative" ]]; then
-                            grep -qi "^a;${mac_address};" "$UMACAUTH_FILE" 2>/dev/null \
+                            grep -qi "^a;${mac_address};" "$UHM_MACAUTH" 2>/dev/null \
                                 && mac_authoritative="yes" || true
                         fi
 
@@ -774,12 +845,12 @@ function is_pydhcp() {
                             echo "$lease_content" >> "$temp_leases"
                         elif grep -qi "^a;${mac_address};" "$ACL_BLOCK_FILE" 2>/dev/null; then
                             (( dropped_blocked++ )) || true
-                        elif grep -qi "^a;${mac_address};" "$UGRACE_FILE" 2>/dev/null; then
+                        elif grep -qi "^a;${mac_address};" "$UHM_GRACE" 2>/dev/null; then
                             echo "$lease_content" >> "$temp_leases"
                         else
                             log "read_leases: $mac_address -> new -> uhm-grace"
                             log "  (ip=$ip_address host=$host epoch=$(date +%s))"
-                            echo "a;${mac_address};${ip_address};${host};$(date +%s);" >> "$UGRACE_FILE"
+                            echo "a;${mac_address};${ip_address};${host};$(date +%s);" >> "$UHM_GRACE"
                             echo "$lease_content" >> "$temp_leases"
                         fi
                     fi
@@ -849,7 +920,7 @@ $ping_timeout_line
         fi
 
         hotspot_normalized=$(awk -F';' 'NF>=5 && $2!="" && $3!=""{print $1";"$2";"$3";"$4";"}' \
-            "$UMACAUTH_FILE" 2>/dev/null || true)
+            "$UHM_MACAUTH" 2>/dev/null || true)
         all_sources=$(printf '%s\n' "$acl_sources" "$hotspot_normalized" | sort -u)
 
         while IFS= read -r line; do
@@ -894,7 +965,7 @@ class "blockdhcp" {
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
             grep -h '^#a;' "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
-            grep -h '^#a;' "$UMACAUTH_FILE" 2>/dev/null | cut -d ';' -f 2 || true
+            grep -h '^#a;' "$UHM_MACAUTH" 2>/dev/null | cut -d ';' -f 2 || true
         } | grep -iE '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$' | tr '[:upper:]' '[:lower:]' | sort -u \
           | while IFS= read -r macs; do
                 printf ' subclass "blockdhcp" 1:%s;\n' "$macs" >>"$dhcp_conf_temp"
@@ -1007,14 +1078,26 @@ class "blockdhcp" {
         sed '/^$/d' -i "$ACL_BLOCK_FILE"
         sed '/^$/d' -i "$ACL_MAC_PROXY"
         sed '/^$/d' -i "$ACL_MAC_UNLIMITED"
-        sed '/^$/d' -i "$UMACAUTH_FILE"
-        sed '/^$/d' -i "$UGRACE_FILE"
+        sed '/^$/d' -i "$UHM_MACAUTH"
+        sed '/^$/d' -i "$UHM_GRACE"
     }
 
     function order_files_acl {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
-        sort -t';' -k3,3V "$UMACAUTH_FILE" -o "$UMACAUTH_FILE"
-        sort -V "$UGRACE_FILE" -o "$UGRACE_FILE"
+        sort -t';' -k3,3V "$UHM_MACAUTH" -o "$UHM_MACAUTH"
+        sort -V "$UHM_GRACE" -o "$UHM_GRACE"
+        # mac-*.txt: sorted by IP (field 3), same key as UHM_MACAUTH above --
+        # lost in the rewrite from the original isc-dhcp-server-era leases.sh,
+        # which sorted these too. Purely cosmetic (update_dhcp_conf() and
+        # pydhcpd.py's host{} parsing are both order-independent), restored
+        # for admin readability when editing these files by hand.
+        shopt -s nullglob
+        local _order_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+        shopt -u nullglob
+        local _omf
+        for _omf in "${_order_mac_files[@]}"; do
+            sort -t';' -k3,3V "$_omf" -o "$_omf"
+        done
     }
 
     clean_grace_list
@@ -1049,26 +1132,28 @@ class "blockdhcp" {
             sleep 1
             if ! systemctl is-active --quiet pydhcpd; then
                 log "ERROR: pydhcpd failed to start even with backup config"
+                PYDHCPD_START_FAILED=1
             else
                 log "pydhcpd recovered with backup config"
             fi
         else
             log "ERROR: No backup config found"
+            PYDHCPD_START_FAILED=1
         fi
     fi
     trap cleanup_temp EXIT
 }
 
 drain_lease_queue() {
-    [[ ! -s "$UQUEUE_FILE" ]] && return
+    [[ ! -s "$UHM_QUEUE" ]] && return
     local dhcpd_leases="$PYDHCPD_LEASES"
-    [[ ! -f "$dhcpd_leases" ]] && { : > "$UQUEUE_FILE"; return; }
+    [[ ! -f "$dhcpd_leases" ]] && { : > "$UHM_QUEUE"; return; }
 
     local tmp removed=0
     tmp=$(mktemp)
     TEMP_FILES_TO_CLEAN+=("${tmp}")
     local queue_macs
-    queue_macs=$(tr '[:upper:]' '[:lower:]' < "$UQUEUE_FILE" | sort -u)
+    queue_macs=$(tr '[:upper:]' '[:lower:]' < "$UHM_QUEUE" | sort -u)
 
     local in_block=0 block=""
     while IFS= read -r line; do
@@ -1108,8 +1193,8 @@ drain_lease_queue() {
     mv "$tmp" "$dhcpd_leases"
     chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd_leases"
     chmod 640 "$dhcpd_leases"
-    if ! : > "$UQUEUE_FILE" 2>/dev/null; then
-        log "WARNING: drain_lease_queue: cannot truncate $UQUEUE_FILE"
+    if ! : > "$UHM_QUEUE" 2>/dev/null; then
+        log "WARNING: drain_lease_queue: cannot truncate $UHM_QUEUE"
         log "  (permissions?) -- queue will be reprocessed next run"
     fi
 
@@ -1123,7 +1208,7 @@ function check_acl_conflicts() {
     shopt -s nullglob
     sources=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
-    sources+=("$UMACAUTH_FILE")
+    sources+=("$UHM_MACAUTH")
 
     local field field_name dups dup locations
     local -a _locations
@@ -1152,15 +1237,15 @@ function check_acl_conflicts() {
                     # -- that is a genuine misconfiguration, not this case.
                     local mac_txt_hits=0 hotspot_hit=0 _loc
                     for _loc in "${_locations[@]}"; do
-                        if [[ "$_loc" == "$UMACAUTH_FILE" ]]; then
+                        if [[ "$_loc" == "$UHM_MACAUTH" ]]; then
                             hotspot_hit=1
                         else
                             (( mac_txt_hits++ )) || true
                         fi
                     done
                     if (( mac_txt_hits == 1 && hotspot_hit == 1 )); then
-                        if sed -i "/^a;${dup};/Id" "$UMACAUTH_FILE"; then
-                            log "INFO: duplicate MAC '$dup' -- removed from $(basename "$UMACAUTH_FILE") (present in mac-*.txt)"
+                        if sed -i "/^a;${dup};/Id" "$UHM_MACAUTH"; then
+                            log "INFO: duplicate MAC '$dup' -- removed from $(basename "$UHM_MACAUTH") (present in mac-*.txt)"
                             continue
                         else
                             log "ERROR: failed to auto-resolve duplicate MAC '$dup'"
@@ -1176,28 +1261,29 @@ function check_acl_conflicts() {
     done
 
     # mac-*.txt IPs are administrator-assigned, with no dedicated range in
-    # uhm.env (see README) -- only HOTSPOT_RANGE_START/END (uhm-auth.txt)
-    # and SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK (blockdhcp/uhm-grace pool) are
-    # defined there. A mac-*.txt IP landing inside either range is always a
+    # uhm.env (see README) -- only UHM_INI_RANGE/UHM_END_RANGE
+    # (uhm-auth.txt) and SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK
+    # (blockdhcp/uhm-grace pool) are defined there. A mac-*.txt IP landing inside either range is always a
     # misconfiguration, regardless of whether a client currently holds it.
     shopt -s nullglob
     local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
     if [[ ${#mac_files[@]} -gt 0 ]]; then
-        local block_prefix="${SERV_INI_RANGE_BLOCK%.*}" block_start="${SERV_INI_RANGE_BLOCK##*.}" block_end="${SERV_END_RANGE_BLOCK##*.}"
-        local mac ip prefix octet status
+        local _hot_i _hot_e _pool_i _pool_e _ip_n
+        _hot_i=$(_ip_to_int "$UHM_INI_RANGE"); _hot_e=$(_ip_to_int "$UHM_END_RANGE")
+        _pool_i=$(_ip_to_int "$SERV_INI_RANGE_BLOCK"); _pool_e=$(_ip_to_int "$SERV_END_RANGE_BLOCK")
+        local mac ip status
         while IFS=';' read -r status mac ip _; do
             [[ "$status" != "a" || -z "$ip" ]] && continue
-            prefix="${ip%.*}"
-            octet="${ip##*.}"
-            [[ "$octet" =~ $_UH_OCT ]] || continue
-            if [[ "$prefix" == "$HOTSPOT_IP_RANGE" ]] && (( octet >= HOTSPOT_RANGE_START && octet <= HOTSPOT_RANGE_END )); then
+            [[ "$ip" =~ $_UH_IPV4 ]] || continue
+            _ip_n=$(_ip_to_int "$ip")
+            if (( _ip_n >= _hot_i && _ip_n <= _hot_e )); then
                 log "ERROR: mac-*.txt IP conflict: $mac"
-                log "  inside hotspot range ${HOTSPOT_IP_RANGE}.${HOTSPOT_RANGE_START}-${HOTSPOT_RANGE_END}"
+                log "  inside hotspot range ${UHM_INI_RANGE}-${UHM_END_RANGE}"
                 log "ERROR: mac-*.txt IP conflict: reserved for uhm-auth.txt"
                 log "  move $mac outside it"
                 has_error=1
-            elif [[ "$prefix" == "$block_prefix" ]] && (( octet >= block_start && octet <= block_end )); then
+            elif (( _ip_n >= _pool_i && _ip_n <= _pool_e )); then
                 log "ERROR: mac-*.txt IP conflict: $mac"
                 log "  inside the blockdhcp pool range ${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}"
                 log "ERROR: mac-*.txt IP conflict: reserved for"
@@ -1218,7 +1304,12 @@ check_acl_conflicts
 
 # Final summary
 _count() { local c=0; c=$(grep -c '^a;' "$1" 2>/dev/null) || c=0; echo "$c"; }
-log "ACL: blockdhcp=$(_count "$ACL_BLOCK_FILE") | proxy=$(_count "$ACL_MAC_PROXY") | unlimited=$(_count "$ACL_MAC_UNLIMITED") | hotspot=$(_count "$UMACAUTH_FILE") | grace=$(_count "$UGRACE_FILE")"
+log "blockdhcp=$(_count "$ACL_BLOCK_FILE")|proxy=$(_count "$ACL_MAC_PROXY")|unlimited=$(_count "$ACL_MAC_UNLIMITED")|hotspot=$(_count "$UHM_MACAUTH")|grace=$(_count "$UHM_GRACE")"
 
 # End
 log "uhmleases done at: $(date)"
+
+if (( PYDHCPD_START_FAILED )); then
+    log "ERROR: pydhcpd is down -- reporting failure to caller"
+    exit 1
+fi

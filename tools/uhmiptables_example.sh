@@ -62,7 +62,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in iptables ipset arptables ebtables kmod procps util-linux ulogd2; do
+for dep in iptables ipset arptables ebtables kmod procps util-linux ulogd2 mawk coreutils; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -79,7 +79,7 @@ _UH_UINT='^(0|[1-9][0-9]*)$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # Start
-log "uiptables start..."
+log "uhmiptables start..."
 
 # VARIABLES ##
 
@@ -109,8 +109,8 @@ _load_conf() {
         case "$key" in
             WAN_IF|INTERFACESv4|\
             SERVER_IP|SERV_SUBNET|SERV_MASK|SERV_DNS|\
-            ACL_MAC_PATH|ACL_DHCP_PATH|HOTSPOT_PATH|\
-            ACL_MAC_PROXY|ACL_MAC_UNLIMITED|UGRACE_FILE)
+            ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
+            ACL_MAC_PROXY|ACL_MAC_UNLIMITED|UHM_GRACE)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
@@ -139,8 +139,8 @@ fi
 acl_mac_path="${ACL_MAC_PATH:-/etc/acl/acl_mac}"
 acl_path="${acl_mac_path%/acl_mac}"
 acl_ipt_path="${acl_path}/acl_ipt"
-hotspot_path="${HOTSPOT_PATH:-/etc/uhm}"
-UGRACE_FILE="${UGRACE_FILE:-${hotspot_path}/acl/uhm-grace.txt}"
+hotspot_path="${UHM_PATH:-/etc/uhm}"
+UHM_GRACE="${UHM_GRACE:-${hotspot_path}/acl/uhm-grace.txt}"
 
 # ACL/config files used by this script (existence verified below)
 mac_proxy_file="${ACL_MAC_PROXY:-$acl_mac_path/mac-proxy.txt}"
@@ -377,8 +377,8 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 # 44321 TCP - PCP pmcd (Performance Co-Pilot daemon)
 # 44322 TCP - PCP pmproxy
 # 44323 TCP - PCP pmproxy HTTPS
-iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 25,80,$squid_port,$squid_intercept_port,4330,5005,5636,5671,6789,8443,8444,9543,10000,11084,11443,18100 -j DROP
-iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 18080,18081,18082,44321,44322,44323 -j DROP
+iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 25,80,$squid_port,$squid_intercept_port,4330,5005,5636,5671,6789,8443,8444,9543,10000,11084,11443 -j DROP
+iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 18100,18080,18081,18082,44321,44322,44323 -j DROP
 iptables -A INPUT -i "$wan" -p udp --dport 5353 -j DROP
 # DHCP
 iptables -t mangle -A PREROUTING -i "$lan" -p udp --dport 67 -j ACCEPT
@@ -481,12 +481,12 @@ else
 fi
 
 # Populate ipsets
-if [ -f "$UGRACE_FILE" ]; then
-    for mac in $(awk -F";" 'NF>=2 && $1 == "a" && $2 != "" {print $2}' "$UGRACE_FILE"); do
+if [ -f "$UHM_GRACE" ]; then
+    for mac in $(awk -F";" 'NF>=2 && $1 == "a" && $2 != "" {print $2}' "$UHM_GRACE"); do
         is_valid_mac "$mac" && ipset add macgrace "$mac" -exist
     done
 else
-    log "WARNING: $UGRACE_FILE not found -- skipping macgrace"
+    log "WARNING: $UHM_GRACE not found -- skipping macgrace"
 fi
 # HTTP
 iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set macgrace src -p tcp --dport 80 -j ACCEPT
@@ -713,4 +713,4 @@ iptables -A FORWARD -m hashlimit --hashlimit-name forward-drop --hashlimit-above
 iptables -A FORWARD -j DROP
 
 # End
-log "uiptables done at: $(date)"
+log "uhmiptables done at: $(date)"

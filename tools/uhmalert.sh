@@ -19,11 +19,11 @@
 # succeeded silently in between, and the streak resets. The 3*API_MAX_TIME
 # term covers the worst case of a failed cycle still making up to three
 # 30s-capped API calls (vouchers, guest, sta) before it ends. Alerts once
-# API_FAIL_THRESHOLD consecutive cycles fail, and again once recovered
+# UHM_API_FAIL_THRESHOLD consecutive cycles fail, and again once recovered
 # (same GAP_LIMIT is the read timeout used to detect recovery -- see
 # watch loop below).
 # Suppressed while uhmd.service has been active for less than
-# UALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi OS can
+# UHM_ALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi OS can
 # take a while to come back up after a reboot, and uhmalert itself
 # starts at boot too, so the very first cycles would otherwise alert
 # on a known, expected startup window. A real outage later still
@@ -54,8 +54,8 @@
 # publish to it. https://ntfy.sh
 #
 # CONFIGURATION:
-# `install` appends NTFY_TOPIC (auto-generated, unpredictable),
-# API_FAIL_THRESHOLD=3 and UALERT_QUIET_PERIOD_SECONDS=120 to
+# `install` appends UHM_NTFY_TOPIC (auto-generated, unpredictable),
+# UHM_API_FAIL_THRESHOLD=3 and UHM_ALERT_QUIET_PERIOD_SECONDS=120 to
 # /etc/uhm/uhm.env on first run, and prints the generated
 # topic name so you can subscribe the ntfy app to it. Never overwrites
 # any of them if already present (safe to re-run/upgrade).
@@ -73,7 +73,8 @@
 # uhmalert.service's ExecStart invokes)
 # uhmalert.sh -h, --help Show this help
 #
-# CONFIG: /etc/uhm/uhm.env (reads NTFY_TOPIC, API_FAIL_THRESHOLD, UALERT_QUIET_PERIOD_SECONDS, POLL_INTERVAL)
+# CONFIG: /etc/uhm/uhm.env. reads:
+# UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD, UHM_ALERT_QUIET_PERIOD_SECONDS, POLL_INTERVAL
 # LOG: /var/log/uhm.log (reads only -- shared with uhmd.sh)
 # SERVICE: systemctl status uhmalert
 #
@@ -106,7 +107,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # DEPENDENCIES
-for dep in curl mawk coreutils util-linux; do
+for dep in curl mawk coreutils util-linux systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -119,21 +120,23 @@ TARGET="/etc/uhm/tools/uhmalert.sh"
 UNIT_PATH="/etc/systemd/system/uhmalert.service"
 CONFIG_FILE="/etc/uhm/uhm.env"
 
-# Inserts $2 (one or more lines) right before the file's last closing
-# "# ====...====" delimiter, instead of a plain >> append -- keeps the block
-# inside the UHM frame instead of scattering variables past it. Falls
-# back to a plain append if no delimiter line is found (older file).
-insert_before_closing_delimiter() {
+# Appends $2 (one or more lines) right after the file's LAST
+# "# ====...====" line, instead of a plain >> append -- so the new block
+# always lands right after whatever content (from any project sharing this
+# file: pydhcp, uhm, gateproxy, ...) is already there, never inside
+# whichever one of them happens to be last. Falls back to a plain append if
+# the file has no delimiter line at all (empty/malformed file).
+insert_after_last_delimiter() {
     local file="$1" content="$2" last_line tmp
     last_line=$(grep -n '^# =\{5,\}$' "$file" | tail -1 | cut -d: -f1)
     if [[ -z "$last_line" ]]; then
-        printf '%s\n' "$content" >> "$file"
+        printf '\n%s\n' "$content" >> "$file"
         return
     fi
     tmp=$(mktemp)
-    head -n "$((last_line - 1))" "$file" > "$tmp"
-    printf '%s\n' "$content" >> "$tmp"
-    tail -n "+${last_line}" "$file" >> "$tmp"
+    head -n "$last_line" "$file" > "$tmp"
+    printf '\n%s\n' "$content" >> "$tmp"
+    tail -n "+$((last_line + 1))" "$file" >> "$tmp"
     mv "$tmp" "$file"
 }
 
@@ -151,26 +154,29 @@ install_module() {
 
     # Only append if not already configured -- never overwrite an existing
     # topic (e.g. on a re-install) or a threshold the user already tuned.
-    if grep -q '^NTFY_TOPIC=' "$CONFIG_FILE"; then
-        gen_topic=$(grep '^NTFY_TOPIC=' "$CONFIG_FILE" | tail -1 | cut -d'=' -f2- | tr -d '"')
-        echo "NTFY_TOPIC already set in $CONFIG_FILE -- leaving it untouched."
+    if grep -q '^UHM_NTFY_TOPIC=' "$CONFIG_FILE"; then
+        gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$CONFIG_FILE" | tail -1 | cut -d'=' -f2- | tr -d '"')
+        echo "UHM_NTFY_TOPIC already set in $CONFIG_FILE -- leaving it untouched."
     else
         gen_topic="uhm-alert-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)"
-        insert_before_closing_delimiter "$CONFIG_FILE" "# -- Alert --------------------------------------------------------------------
-NTFY_TOPIC=\"$gen_topic\"
-API_FAIL_THRESHOLD=3
-UALERT_QUIET_PERIOD_SECONDS=120"
-        echo "Added NTFY_TOPIC, API_FAIL_THRESHOLD and"
-        echo "UALERT_QUIET_PERIOD_SECONDS to $CONFIG_FILE"
+        insert_after_last_delimiter "$CONFIG_FILE" "# =============================================================================
+# UHM ALERT
+# =============================================================================
+UHM_NTFY_TOPIC=\"$gen_topic\"
+UHM_API_FAIL_THRESHOLD=3
+UHM_ALERT_QUIET_PERIOD_SECONDS=120
+# ============================================================================="
+        echo "Added UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD and"
+        echo "UHM_ALERT_QUIET_PERIOD_SECONDS to $CONFIG_FILE"
     fi
     # Insert right after their neighbor in the Alert block (not a plain
     # >> append) so upgrading an older install doesn't scatter these
     # variables to the end of the file, past unrelated later sections.
-    if ! grep -q '^API_FAIL_THRESHOLD=' "$CONFIG_FILE"; then
-        sed -i '/^NTFY_TOPIC=/a API_FAIL_THRESHOLD=3' "$CONFIG_FILE"
+    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$CONFIG_FILE"; then
+        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$CONFIG_FILE"
     fi
-    if ! grep -q '^UALERT_QUIET_PERIOD_SECONDS=' "$CONFIG_FILE"; then
-        sed -i '/^API_FAIL_THRESHOLD=/a UALERT_QUIET_PERIOD_SECONDS=120' "$CONFIG_FILE"
+    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$CONFIG_FILE"; then
+        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$CONFIG_FILE"
     fi
 
     SELF="$(readlink -f "$0")"
@@ -286,7 +292,7 @@ load_env_file() {
             value="${value:1:$((${#value}-2))}"
         fi
         case "$key" in
-            NTFY_TOPIC|API_FAIL_THRESHOLD|UALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
+            UHM_NTFY_TOPIC|UHM_API_FAIL_THRESHOLD|UHM_ALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
                 printf -v "$key" '%s' "$value"
                 ;;
             *)
@@ -296,17 +302,23 @@ load_env_file() {
 }
 load_env_file "$CONFIG_FILE"
 
-if [[ -z "${NTFY_TOPIC:-}" ]]; then
-    log "ERROR: NTFY_TOPIC not set in $CONFIG_FILE -- aborting"
+if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
+    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE -- aborting"
     exit 1
 fi
 
-FAIL_THRESHOLD="${API_FAIL_THRESHOLD:-3}"
-[[ "$FAIL_THRESHOLD" =~ $_UH_UINT ]] || { log "WARNING: API_FAIL_THRESHOLD invalid ($FAIL_THRESHOLD) -- using default 3"; FAIL_THRESHOLD=3; }
+FAIL_THRESHOLD="${UHM_API_FAIL_THRESHOLD:-3}"
+if ! [[ "$FAIL_THRESHOLD" =~ $_UH_UINT ]] || (( FAIL_THRESHOLD == 0 )); then
+    log "WARNING: UHM_API_FAIL_THRESHOLD invalid ($FAIL_THRESHOLD) -- using default 3"
+    FAIL_THRESHOLD=3
+fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
-[[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || { log "WARNING: POLL_INTERVAL invalid ($POLL_INTERVAL) -- using default 20"; POLL_INTERVAL=20; }
-UALERT_QUIET_PERIOD="${UALERT_QUIET_PERIOD_SECONDS:-120}"
-[[ "$UALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UALERT_QUIET_PERIOD_SECONDS invalid ($UALERT_QUIET_PERIOD) -- using default 120"; UALERT_QUIET_PERIOD=120; }
+if ! [[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
+    log "WARNING: POLL_INTERVAL invalid ($POLL_INTERVAL) -- using default 20"
+    POLL_INTERVAL=20
+fi
+UHM_ALERT_QUIET_PERIOD="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
+[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid ($UHM_ALERT_QUIET_PERIOD) -- using default 120"; UHM_ALERT_QUIET_PERIOD=120; }
 MARGIN=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
             # falsely look like a gap with a silent recovery in between
 API_MAX_TIME=30 # matches curl --max-time in uhmd.sh's api_get calls
@@ -334,7 +346,7 @@ uhmd_started_at() {
 
 notify() {
     local msg="$1"
-    curl -s -d "$msg" "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null 2>&1 &
+    curl -s -d "$msg" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
 }
 
 trap 'log "uhmalert done at: $(date)"; exit 0' TERM INT
@@ -385,7 +397,7 @@ while true; do
 
         # Connectivity-loss lines are ERROR/WARNING too, but they are
         # handled by the streak counter below (waits for
-        # API_FAIL_THRESHOLD consecutive cycles) rather than firing on the
+        # UHM_API_FAIL_THRESHOLD consecutive cycles) rather than firing on the
         # first occurrence like the generic catch-all does.
         is_connectivity=0
         [[ "$msg" == *"Could not load vouchers"* ]] && is_connectivity=1
@@ -428,9 +440,9 @@ while true; do
 
         if (( streak == FAIL_THRESHOLD )) && (( alerted == 0 )); then
             uhmd_start=$(uhmd_started_at)
-            if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UALERT_QUIET_PERIOD )); then
+            if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UHM_ALERT_QUIET_PERIOD )); then
                 log "INFO: $streak consecutive failures within uhmd startup grace"
-            log "  window (${UALERT_QUIET_PERIOD}s)"
+            log "  window (${UHM_ALERT_QUIET_PERIOD}s)"
                 log "INFO: suppressing alert"
                 streak=0
             else

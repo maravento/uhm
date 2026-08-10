@@ -48,8 +48,9 @@
 # DEPENDENCIES:
 # Hard dependencies (checked before anything else; aborts if any is missing --
 # none of these are auto-installed):
-# curl, jq, ipset, python3, openssl, bsdextrautils (column),
-# mawk (awk), coreutils, util-linux (flock), iproute2 (ip)
+# curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
+# mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
+# grep, sed, systemd, ncurses-bin
 #
 # Hard dependency NOT an apt package (aborts if missing):
 # pydhcpd must be installed and running, with /etc/pydhcp/pydhcp.env
@@ -57,6 +58,15 @@
 # uhmsetup.sh reads them from there instead of asking again).
 # pydhcp is not an apt package; install it from
 # https://github.com/maravento/pydhcp before running this script.
+#
+# CONFIG FILE (uhm.env):
+# Written as pydhcp.env copied verbatim, followed by uhm's own block. A key
+# already present in pydhcp.env -- pydhcp's own, or one added there by
+# another project -- is skipped instead of written a second time, and the
+# skip is reported on screen: these files are parsed key=value, so a
+# duplicated key would leave each reader holding whichever copy it saw last.
+# uhm therefore never redefines a value that already belongs to pydhcp; it
+# only adds its own (UniFi credentials, hotspot range, timers, paths).
 #
 ################################################################################
 
@@ -112,7 +122,7 @@ CONFIG_FILE="${HOTSPOT_DIR}/uhm.env"
 PYDHCP_ENV="/etc/pydhcp/pydhcp.env"
 LOG_FILE="/var/log/uhm.log"
 LOGROTATE_FILE="/etc/logrotate.d/uhm"
-UIPTABLES_STUB="${TOOLS_DIR}/uhmiptables.sh"
+UHM_IPTABLES_STUB="${TOOLS_DIR}/uhmiptables.sh"
 SERVICE_DEST="/etc/systemd/system/uhmd.service"
 
 # --- Repo file expectations (relative to this script) ------------------------
@@ -124,7 +134,7 @@ REPO_UHMD="${REPO_CORE}/uhmd.sh"
 REPO_SERVICE="${REPO_CORE}/uhmd.service"
 
 # --- Required apt packages ----------------------------------------------------
-APT_DEPS=(curl jq ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron)
+APT_DEPS=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin)
 
 # --- Discovered runtime values (filled during install) -----------------------
 DHCP_BACKEND="" # "pydhcpd"
@@ -154,6 +164,26 @@ _UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|24
 _UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 _UH_UINT='^(0|[1-9][0-9]*)$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
+
+# Appends $2 (one or more lines) right after the file's LAST
+# "# ====...====" line, instead of a plain >> append -- so a new block
+# always lands right after whatever content (from any project sharing this
+# file) is already there, never after a stray trailing line some other
+# script might append later. Falls back to a plain append if the file has
+# no delimiter line at all (empty/malformed file).
+insert_after_last_delimiter() {
+    local file="$1" content="$2" last_line tmp
+    last_line=$(grep -n '^# =\{5,\}$' "$file" | tail -1 | cut -d: -f1)
+    if [[ -z "$last_line" ]]; then
+        printf '\n%s\n' "$content" >> "$file"
+        return
+    fi
+    tmp=$(mktemp)
+    head -n "$last_line" "$file" > "$tmp"
+    printf '\n%s\n' "$content" >> "$tmp"
+    tail -n "+$((last_line + 1))" "$file" >> "$tmp"
+    mv "$tmp" "$file"
+}
 
 dq_escape() {
     # dq_escape STRING -- escape \ " $ ` for safe reuse inside double quotes
@@ -274,7 +304,7 @@ load_pydhcp_env() {
         || abort "$PYDHCP_ENV not found. Install/update pydhcp first (https://github.com/maravento/pydhcp)."
 
     local missing=() key
-    for key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
+    for key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK INTERFACESv4 \
                SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS \
                ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_PROXY \
                ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES \
@@ -303,6 +333,10 @@ load_pydhcp_env() {
             SERV_DNS)             CFG_SERV_DNS="$value" ;;
             SERV_INI_RANGE_BLOCK) CFG_SERV_INI_RANGE_BLOCK="$value" ;;
             SERV_END_RANGE_BLOCK) CFG_SERV_END_RANGE_BLOCK="$value" ;;
+            # Not pydhcp's own -- may have been added by another project
+            # (e.g. gateproxy) that also writes to this file. Captured here
+            # only so run_setup_wizard can skip re-asking for it below.
+            WAN_IF)               CFG_EXISTING_WAN_IF="$value" ;;
         esac
     done < "$PYDHCP_ENV"
 
@@ -351,21 +385,34 @@ ask_number() {
     done
 }
 
-ask_octet() {
-    local prompt="$1" default="$2" var="$3" ref_start="${4:-0}" answer
+# ip_le A B -- returns 0 if address A is lower than or equal to address B
+ip_le() {
+    python3 -c "
+import ipaddress, sys
+sys.exit(0 if ipaddress.IPv4Address(sys.argv[1]) <= ipaddress.IPv4Address(sys.argv[2]) else 1)
+" "$1" "$2"
+}
+
+ask_ip() {
+    local prompt="$1" default="$2" var="$3" answer
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ $_UH_OCT ]] && (( answer >= 1 && answer <= 254 )); then
-            if [[ -n "$ref_start" ]] && (( answer <= ref_start )); then
-                err "End octet must be greater than start octet (${ref_start})."
-                continue
-            fi
+        if [[ "$answer" =~ $_UH_IPV4 ]]; then
             printf -v "$var" '%s' "$answer"
             break
         fi
-        err "'$answer' is not valid. Enter a number between 1 and 254."
+        err "'$answer' is not a valid IPv4 address."
     done
+}
+
+# ip_in_network IP NETWORK NETMASK -- returns 0 if IP belongs to the network
+ip_in_network() {
+    python3 -c "
+import ipaddress, sys
+net = ipaddress.IPv4Network(sys.argv[2] + '/' + sys.argv[3], strict=False)
+sys.exit(0 if ipaddress.IPv4Address(sys.argv[1]) in net else 1)
+" "$1" "$2" "$3"
 }
 
 # Returns 0 (true) if dotted-quad IP ranges [s1,e1] and [s2,e2] intersect.
@@ -463,8 +510,8 @@ fetch_unifi_ssids() {
 
 # --- Setup wizard ------------------------------------------------------------
 run_setup_wizard() {
-    local CFG_WAN_IF CFG_IP_RANGE
-    local CFG_RANGE_START CFG_RANGE_END CFG_ESSID
+    local CFG_WAN_IF
+    local CFG_INI_RANGE CFG_END_RANGE CFG_ESSID
     local CFG_UNIFI_USER CFG_UNIFI_PASS CFG_RELOAD_SCRIPT
     local found_url found_type
 
@@ -474,33 +521,53 @@ run_setup_wizard() {
     echo "------------------------------------------------------"
 
     step "Network"
-    local ifaces
-    ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
-    echo "Available interfaces: $ifaces"
-    ask_interface "WAN interface" "eth0" CFG_WAN_IF
+    if [[ -n "${CFG_EXISTING_WAN_IF:-}" ]]; then
+        # Already defined in pydhcp.env -- by pydhcp itself or by another
+        # project sharing that file (e.g. gateproxy). Independent projects
+        # never re-ask for a value another one already recorded.
+        CFG_WAN_IF="$CFG_EXISTING_WAN_IF"
+        info "WAN_IF already set in $PYDHCP_ENV -- using '$CFG_WAN_IF'"
+    else
+        local ifaces
+        ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
+        echo "Available interfaces: $ifaces"
+        ask_interface "WAN interface" "eth0" CFG_WAN_IF
+    fi
 
     step "pydhcp network configuration"
     info "Loaded from $PYDHCP_ENV"
     info "  Server IP: $CFG_SERVER_IP  Mask: $CFG_SERV_MASK  DNS: $CFG_SERV_DNS"
 
     step "Hotspot IP range"
-    CFG_IP_RANGE=$(echo "$CFG_SERVER_IP" | cut -d'.' -f1-3)
-    echo "Hotspot IP range base (auto-detected): $CFG_IP_RANGE"
-    local server_octet="${CFG_SERVER_IP##*.}"
-    local pydhcp_pool_start_oct="${CFG_SERV_INI_RANGE_BLOCK##*.}"
-    local pydhcp_pool_end_oct="${CFG_SERV_END_RANGE_BLOCK##*.}"
+    # Two full addresses, the same shape pydhcp already uses for its own pool
+    # (SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK) -- no netmask is assumed.
+    echo "Range of fixed addresses handed to voucher-authorized guests."
+    echo "Network: ${CFG_SERV_SUBNET}/${CFG_SERV_MASK}"
+    echo "pydhcp block pool: ${CFG_SERV_INI_RANGE_BLOCK}-${CFG_SERV_END_RANGE_BLOCK}"
+    local _net_base
+    _net_base=$(echo "$CFG_SERV_SUBNET" | cut -d'.' -f1-3)
     while true; do
-        ask_octet "Range start (last octet)" "160" CFG_RANGE_START
-        ask_octet "Range end (last octet)" "199" CFG_RANGE_END "$CFG_RANGE_START"
-        if (( server_octet >= CFG_RANGE_START && server_octet <= CFG_RANGE_END )); then
-            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} includes the server's own IP"
-            err "  (.${server_octet}). Choose a different range."
+        ask_ip "Hotspot range start" "${_net_base}.160" CFG_INI_RANGE
+        ask_ip "Hotspot range end" "${_net_base}.199" CFG_END_RANGE
+        if ! ip_le "$CFG_INI_RANGE" "$CFG_END_RANGE"; then
+            err "Range start (${CFG_INI_RANGE}) must not be above range end (${CFG_END_RANGE})."
             continue
         fi
-        if ranges_overlap "${CFG_IP_RANGE}.${CFG_RANGE_START}" "${CFG_IP_RANGE}.${CFG_RANGE_END}" \
+        if ! ip_in_network "$CFG_INI_RANGE" "$CFG_SERV_SUBNET" "$CFG_SERV_MASK" \
+           || ! ip_in_network "$CFG_END_RANGE" "$CFG_SERV_SUBNET" "$CFG_SERV_MASK"; then
+            err "Range ${CFG_INI_RANGE}-${CFG_END_RANGE} falls outside"
+            err "  ${CFG_SERV_SUBNET}/${CFG_SERV_MASK}. Choose addresses inside the network."
+            continue
+        fi
+        if ranges_overlap "$CFG_INI_RANGE" "$CFG_END_RANGE" "$CFG_SERVER_IP" "$CFG_SERVER_IP"; then
+            err "Range ${CFG_INI_RANGE}-${CFG_END_RANGE} includes the server's own IP"
+            err "  (${CFG_SERVER_IP}). Choose a different range."
+            continue
+        fi
+        if ranges_overlap "$CFG_INI_RANGE" "$CFG_END_RANGE" \
                            "$CFG_SERV_INI_RANGE_BLOCK" "$CFG_SERV_END_RANGE_BLOCK"; then
-            err "Range ${CFG_RANGE_START}-${CFG_RANGE_END} overlaps pydhcp's own pool"
-            err "  (${pydhcp_pool_start_oct}-${pydhcp_pool_end_oct}). Choose a different range."
+            err "Range ${CFG_INI_RANGE}-${CFG_END_RANGE} overlaps pydhcp's own pool"
+            err "  (${CFG_SERV_INI_RANGE_BLOCK}-${CFG_SERV_END_RANGE_BLOCK}). Choose a different range."
             continue
         fi
         break
@@ -625,9 +692,16 @@ run_setup_wizard() {
         URL_Q=$(dq_escape "$found_url")
 
         cat "$PYDHCP_ENV" > "$CONFIG_FILE"
-        printf '\n' >> "$CONFIG_FILE"
 
-        cat >> "$CONFIG_FILE" <<EOF
+        # uhm.env is pydhcp.env verbatim plus the block below. Any key that
+        # file already defines -- pydhcp's own, or one added there by another
+        # project (gateproxy, for instance) -- is skipped instead of written
+        # a second time: these files are parsed key=value, so a duplicated key
+        # leaves each reader holding whichever copy it saw last.
+        local _uhm_block
+        _uhm_block=$(mktemp)
+
+        cat > "$_uhm_block" <<EOF
 # =============================================================================
 # UHM
 # /etc/uhm/uhm.env
@@ -635,44 +709,66 @@ run_setup_wizard() {
 # -- Network (uhm's own) -------------------------------------------------
 WAN_IF="${CFG_WAN_IF}"
 LOCAL_USER="${LOCAL_USER}"
-# -- Hotspot IP range ---------------------------------------------------------
-HOTSPOT_IP_RANGE="${CFG_IP_RANGE}"
-HOTSPOT_RANGE_START=${CFG_RANGE_START}
-HOTSPOT_RANGE_END=${CFG_RANGE_END}
-# -- Guest SSID ---------------------------------------------------------------
-HOTSPOT_ESSID="${ESSID_Q}"
-# -- UniFi Controller ---------------------------------------------------------
+# -- UniFi keys ---------------------------------------------------------------
+# Guest SSID
+UHM_ESSID="${ESSID_Q}"
+# Unifi Access
 UNIFI_CONTROLLER_URL="${URL_Q}"
 UNIFI_USERNAME="${USER_Q}"
 UNIFI_PASSWORD="${PASS_Q}"
 # UniFi always creates a site named "default". If the administrator renamed it,
 # edit this value to match the exact site name shown in the UniFi controller.
 UNIFI_SITE="default"
+# Unifi type (classic or unifi-os)
 UNIFI_TYPE="${found_type}"
-# -- Cert ---------------------------------------------------------------------
+# Cert
 UNIFI_CERT_PIN="${CFG_CERT_PIN}"
-# -- Scripts ------------------------------------------------------------------
-SERVER_RELOAD_SCRIPT="${RELOAD_SCRIPT_Q}"
-ULEASES_SCRIPT="${CORE_DIR}/uhmleases.sh"
-# By sysadmin
-UIPTABLES_SCRIPT="${UIPTABLES_STUB}"
-# -- Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh) ---------------
-ULEASES_TIMEOUT_SECONDS=120
-UIPTABLES_TIMEOUT_SECONDS=60
-# -- Paths (uhm's own; read by uhmd.sh / uhmleases.sh) ----------------
-HOTSPOT_PATH=/etc/uhm
-UGRACE_FILE=/etc/uhm/acl/uhm-grace.txt
-UMACAUTH_FILE=/etc/uhm/acl/uhm-auth.txt
-UQUEUE_FILE=/etc/uhm/acl/uhm-queue.txt
-# -- Daemon timers (uhm's own) -------------------------------------------
+# -- Hotspot keys ---------------------------------------------------------------
+# Hotspot Range
+UHM_INI_RANGE=${CFG_INI_RANGE}
+UHM_END_RANGE=${CFG_END_RANGE}
+# Daemon timers (uhm's own)
 POLL_INTERVAL=${CFG_POLL_INTERVAL}
 STARTUP_GRACE_SECONDS=120
 RELOAD_SAFETY_INTERVAL_SECONDS=3600
 BLOCKDHCP_GRACE_SECONDS=${CFG_GRACE_SECONDS}
-# -- uhmwatch ------------------------------------------------------------
 RECOVERY_COOLDOWN_SECONDS=600
+# -- Scripts ------------------------------------------------------------------
+UHM_RELOAD="${RELOAD_SCRIPT_Q}"
+UHM_LEASES="${CORE_DIR}/uhmleases.sh"
+# By sysadmin
+UHM_IPTABLES="${UHM_IPTABLES_STUB}"
+# Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
+UHM_LEASES_TIMEOUT_SECONDS=120
+UHM_IPTABLES_TIMEOUT_SECONDS=60
+# -- ACLs (uhm's own; read by uhmd.sh / uhmleases.sh) -------------------------
+UHM_PATH=${HOTSPOT_DIR}
+UHM_GRACE=${ACL_DIR}/uhm-grace.txt
+UHM_MACAUTH=${ACL_DIR}/uhm-auth.txt
+UHM_QUEUE=${ACL_DIR}/uhm-queue.txt
 # =============================================================================
 EOF
+
+        # Filter out any key the file already defines, then insert what's
+        # left right after the last existing "# ====...====" line -- never a
+        # blind append, so the UHM block always lands immediately after
+        # whatever content (pydhcp's own, or another project's) is already
+        # there, regardless of which project wrote it or in what order.
+        local _line _key _filtered
+        _filtered=""
+        while IFS= read -r _line || [[ -n "$_line" ]]; do
+            if [[ "$_line" == *=* && "$_line" != \#* ]]; then
+                _key="${_line%%=*}"
+                if grep -q "^${_key}=" "$PYDHCP_ENV"; then
+                    warn "$_key already set in $(basename "$PYDHCP_ENV") -- not written again"
+                    continue
+                fi
+            fi
+            _filtered+="${_line}"$'\n'
+        done < "$_uhm_block"
+        rm -f "$_uhm_block"
+
+        insert_after_last_delimiter "$CONFIG_FILE" "$_filtered"
     )
     chown root:root "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
@@ -732,16 +828,16 @@ deploy_scripts() {
     # $HOTSPOT_DIR / $TOOLS_DIR instead of core/), so at most one copy of
     # each script exists on disk. uhmwatch.sh's own pre-restructure location
     # is tools/ (where it lived before becoming mandatory), not $HOTSPOT_DIR.
-    rm -f "${HOTSPOT_DIR}/uhmd.sh" "${TOOLS_DIR}/uhmreload.sh" "${TOOLS_DIR}/uhmleases.sh" "${CORE_DIR}/uhmwatch.sh"
+    rm -f "${HOTSPOT_DIR}/uhmd.sh" "${TOOLS_DIR}/uhmreload.sh" "${TOOLS_DIR}/uhmleases.sh" "${TOOLS_DIR}/uhmwatch.sh"
     info "Scripts deployed to ${HOTSPOT_DIR}"
 }
 
 deploy_uhmiptables_stub() {
-    if [[ -f "$UIPTABLES_STUB" ]]; then
+    if [[ -f "$UHM_IPTABLES_STUB" ]]; then
         info "uhmiptables.sh already exists -- leaving untouched"
         return 0
     fi
-    cat > "$UIPTABLES_STUB" <<'STUB'
+    cat > "$UHM_IPTABLES_STUB" <<'STUB'
 #!/bin/bash
 # /etc/uhm/tools/uhmiptables.sh
 # UHM_STUB_MARKER -- do not remove this line while the script is
@@ -751,8 +847,8 @@ deploy_uhmiptables_stub() {
 #
 # Firewall rules for uhm. Invoked by uhmreload.sh after every ACL change.
 #
-# This file is a STUB. Copy the reference rules from the uhm README into
-# this file and adapt the variables (wan, lan, wan_ip) to your network.
+# This file is a STUB. Copy the reference rules from tools/uhmiptables_example.sh
+# into this file and adapt the variables (wan, lan, wan_ip) to your network.
 #
 # The script must do two things:
 # 1. Flush and repopulate the ipsets `macgrace` and `machotspot` from the
@@ -765,9 +861,9 @@ deploy_uhmiptables_stub() {
 echo "uhmiptables.sh: not configured. Edit /etc/uhm/tools/uhmiptables.sh." >&2
 exit 1
 STUB
-    chown root:root "$UIPTABLES_STUB"
-    chmod 750 "$UIPTABLES_STUB"
-    warn "Stub created at $UIPTABLES_STUB -- YOU MUST EDIT IT (see README)"
+    chown root:root "$UHM_IPTABLES_STUB"
+    chmod 750 "$UHM_IPTABLES_STUB"
+    warn "Stub created at $UHM_IPTABLES_STUB -- YOU MUST EDIT IT (see README)"
 }
 
 install_logrotate() {
@@ -782,9 +878,9 @@ install_logrotate() {
     # logrotate's first cycle (create 640 root adm only applies on rotation).
     if [[ ! -f "$LOG_FILE" ]]; then
         touch "$LOG_FILE"
-        chmod 640 "$LOG_FILE"
-        chown root:adm "$LOG_FILE" 2>/dev/null || chown root:root "$LOG_FILE"
     fi
+    chmod 640 "$LOG_FILE"
+    chown root:adm "$LOG_FILE" 2>/dev/null || chown root:root "$LOG_FILE"
 
     if [[ -f "$LOGROTATE_FILE" ]]; then
         info "logrotate config already present at $LOGROTATE_FILE"
@@ -825,7 +921,7 @@ final_sanity_check() {
     step "Sanity check"
     local issues=0
 
-    if [[ ! -x "$UIPTABLES_STUB" ]] || grep -qF "UHM_STUB_MARKER" "$UIPTABLES_STUB" 2>/dev/null; then
+    if [[ ! -x "$UHM_IPTABLES_STUB" ]] || grep -qF "UHM_STUB_MARKER" "$UHM_IPTABLES_STUB" 2>/dev/null; then
         warn "uhmiptables.sh is not configured"
         warn "  ACL changes will not reach the firewall"
         (( issues++ )) || true
@@ -911,7 +1007,7 @@ do_install() {
     echo "uhm installed."
     echo ""
     echo "Next steps:"
-    echo "1. Edit ${UIPTABLES_STUB} with the firewall rules from the README."
+    echo "1. Edit ${UHM_IPTABLES_STUB} with the firewall rules from tools/uhmiptables_example.sh."
     echo "2. Check service: systemctl status uhmd"
     echo "3. Check logs: tail -f ${LOG_FILE}"
     echo "------------------------------------------------------"
@@ -1000,7 +1096,7 @@ do_update() {
 
     step "ACL data files"
     # ACL_DIR (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), CONFIG_FILE
-    # and UIPTABLES_STUB are the administrator's own live/customized data.
+    # and UHM_IPTABLES_STUB are the administrator's own live/customized data.
     # --update never renames, moves or overwrites anything already present --
     # deploy_acl_files()/deploy_uhmiptables_stub() below only create what's
     # missing (e.g. a partial/broken install, warning about it since that
@@ -1052,7 +1148,7 @@ do_update() {
     echo ""
     echo "Preserved (never renamed/moved/overwritten if already present):"
     echo "- ${CONFIG_FILE}"
-    echo "- ${UIPTABLES_STUB}"
+    echo "- ${UHM_IPTABLES_STUB}"
     echo "- ACL data files (*.txt)"
     echo "- Logrotate config"
     echo ""
@@ -1086,7 +1182,7 @@ do_remove() {
     warn "  - ${LOGROTATE_FILE}"
     warn "  - ${HOTSPOT_DIR} entirely: $CONFIG_FILE"
     warn "  (credentials), ${ACL_DIR}/"
-    warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UIPTABLES_STUB"
+    warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UHM_IPTABLES_STUB"
     warn "    (YOUR firewall script"
     warn "  back it up first if needed), ${HOTSPOT_DIR}/bak/"
     warn "    (script backups from --update runs)"

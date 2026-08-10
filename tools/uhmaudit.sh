@@ -17,7 +17,9 @@
 # INTERACTIVE ACTIONS (after report)
 # [1] Delete unused vouchers - delete vouchers never activated (used=0)
 # [2] Forget clients no voucher - forget guests who connected to the portal
-# but never submitted a voucher code
+# but never submitted a voucher code. Excludes clients currently
+# connected to the hotspot ESSID (stat/sta), even if they never
+# used a voucher -- only disconnected/stale ones are listed
 # [3] Delete expired vouchers - delete vouchers past their end_time and
 # forget all associated client history
 # [4] Revoke by voucher code - surgical invalidation of a single voucher:
@@ -33,7 +35,7 @@
 # AUTH
 # Authenticates against UniFi OS (/api/auth/login) by default, or classic
 # controllers (/api/login) when UNIFI_TYPE=classic is set in uhm.env.
-# Requires HOTSPOT_ESSID, UNIFI_CONTROLLER_URL, UNIFI_USERNAME,
+# Requires UHM_ESSID, UNIFI_CONTROLLER_URL, UNIFI_USERNAME,
 # UNIFI_PASSWORD in uhm.env
 #
 # DEPENDENCIES : curl, jq, bsdextrautils, mawk, coreutils, util-linux
@@ -73,7 +75,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in curl jq bsdextrautils mawk coreutils util-linux; do
+for dep in curl jq bsdextrautils mawk coreutils util-linux grep sed; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -114,7 +116,7 @@ load_config() {
         value="${value//\\\`/\`}"
         value="${value//\\\\/\\}"
         case "$key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|HOTSPOT_ESSID|UMACAUTH_FILE)
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|UHM_ESSID|UHM_MACAUTH)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
@@ -122,16 +124,16 @@ load_config() {
 }
 load_config "$CONFIG"
 
-if [ -z "${UNIFI_CONTROLLER_URL:-}" ] || [ -z "${UNIFI_USERNAME:-}" ] || [ -z "${UNIFI_PASSWORD:-}" ] || [ -z "${HOTSPOT_ESSID:-}" ]; then
+if [ -z "${UNIFI_CONTROLLER_URL:-}" ] || [ -z "${UNIFI_USERNAME:-}" ] || [ -z "${UNIFI_PASSWORD:-}" ] || [ -z "${UHM_ESSID:-}" ]; then
     log "ERROR: Missing required variables in $CONFIG"
         log "  (UNIFI_CONTROLLER_URL, UNIFI_USERNAME,"
-        log "  UNIFI_PASSWORD, HOTSPOT_ESSID)"
+        log "  UNIFI_PASSWORD, UHM_ESSID)"
     exit 1
 fi
 
 SITE="${UNIFI_SITE:-default}"
 TYPE="${UNIFI_TYPE:-unifi-os}"
-UMACAUTH_FILE="${UMACAUTH_FILE:-/etc/uhm/acl/uhm-auth.txt}"
+UHM_MACAUTH="${UHM_MACAUTH:-/etc/uhm/acl/uhm-auth.txt}"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # -- Authentication ------------------------------------------------------------
@@ -293,7 +295,7 @@ log "stat/voucher -> $VCH_RC ($(echo "$VOUCHER" | jq '.data|length' 2>/dev/null)
 # This covers clients still connected whose session is in stat/guest.
 # 4. If neither source yields a code: show N/A.
 print_authorized() {
-    [ ! -f "$UMACAUTH_FILE" ] && return
+    [ ! -f "$UHM_MACAUTH" ] && return
 
     echo ""
     echo "============================================================================"
@@ -301,7 +303,7 @@ print_authorized() {
     echo "============================================================================"
 
     local sta_map
-    sta_map=$(echo "$STA" | jq -r --arg essid "$HOTSPOT_ESSID" '
+    sta_map=$(echo "$STA" | jq -r --arg essid "$UHM_ESSID" '
         .data[]
         | select(.essid == $essid)
         | [(.mac | ascii_downcase), (if .authorized == true then "YES" else "NO" end)]
@@ -353,7 +355,7 @@ print_authorized() {
             [ -z "$connected" ] && connected="NO"
 
             echo "$mac|$ip|$vcode|$vstatus|$expires|$connected"
-        done < "$UMACAUTH_FILE"
+        done < "$UHM_MACAUTH"
     } | column -t -s '|'
     echo ""
 }
@@ -462,7 +464,7 @@ interactive_forget_no_voucher() {
     ' 2>/dev/null | sort -u)
 
     local sta_macs
-    sta_macs=$(echo "$STA" | jq -r --arg essid "$HOTSPOT_ESSID" '
+    sta_macs=$(echo "$STA" | jq -r --arg essid "$UHM_ESSID" '
         .data[]
         | select(.essid == $essid)
         | (.mac | ascii_downcase)
@@ -892,13 +894,14 @@ echo "==========================================================================
 echo "AVAILABLE ACTIONS"
 echo "============================================================================"
 echo "[1] Delete unused vouchers - never activated"
-echo "[2] Forget clients no voucher - never used a voucher"
+echo "[2] Forget clients no voucher - never used a voucher, not connected now"
 echo "[3] Delete expired vouchers - remove + forget their clients"
 echo "[4] Revoke by voucher code - surgical invalidation by code"
 echo "[5] Purge everything - DELETE all vouchers and history"
 echo "[q] Quit"
 echo ""
-read -rp " Your choice: " ACTION
+read -rp " Your choice [q]: " ACTION
+ACTION="${ACTION:-q}"
 
 case "$ACTION" in
     1) interactive_delete_unused ;;

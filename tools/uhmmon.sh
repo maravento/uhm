@@ -48,7 +48,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in coreutils ncurses-bin; do
+for dep in coreutils ncurses-bin grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         echo "ERROR: Required dependency '$dep' is not installed." >&2
         exit 1
