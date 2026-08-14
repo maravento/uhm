@@ -1,9 +1,8 @@
-# [uhm](https://github.com/maravento) — UniFi Hotspot Manager
+# [UHM](https://github.com/maravento) — UniFi Hotspot Manager
 
 [![status-maintained](https://img.shields.io/badge/status-maintained-purple.svg)](https://github.com/maravento/uhm)
 [![last commit](https://img.shields.io/github/last-commit/maravento/uhm)](https://github.com/maravento/uhm)
 [![Stargazers](https://img.shields.io/github/stars/maravento/uhm?label=Stargazers)](https://github.com/maravento/uhm/stargazers)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/maravento/uhm)
 [![Twitter Follow](https://img.shields.io/twitter/follow/maraventostudio.svg)](https://twitter.com/maraventostudio)
 
 <!-- markdownlint-disable MD033 -->
@@ -12,16 +11,16 @@
   <tr>
     <td style="width: 50%; vertical-align: top;">
       <p>Many small and medium businesses, cybercafés, and other environments decide to deploy a captive portal and choose Ubiquiti UniFi technology (APs, switches, etc.). However, these setups need DHCP functions, traffic control, access policies, and filtering, among others, which normally require dedicated management hardware from the brand, but but the high cost of this hardware can make it unaffordable. So, they opt to use the <strong>UniFi Network self-hosted</strong> software on a PC, but they still need third-party hardware or software to provide these functions. </p>
-      <p><strong>uhm</strong> fills this gap, extending the capabilities of <strong>UniFi Network self-hosted</strong> under Linux. It provides the DHCP service required for the <strong>Third-Party Gateway</strong> scenario, respects UniFi's captive portal and vouchers, and adds an additional layer of access policies via ACLs and filtering via <code>ipset</code>/<code>iptables</code>, without depending on dedicated UniFi management hardware. </p>
+      <p><strong>UHM</strong> fills this gap, extending the capabilities of <strong>UniFi Network self-hosted</strong> under Linux. It provides the DHCP service required for the <strong>Third-Party Gateway</strong> scenario, respects UniFi's captive portal and vouchers, and adds an additional layer of access policies via ACLs and filtering via <code>ipset</code>/<code>iptables</code>, without depending on dedicated UniFi management hardware. </p>
     </td>
     <td style="width: 50%; vertical-align: top;">
       <p>Muchas pequeñas y medianas empresas, cibercafés y otros entornos, deciden implementar un portal cautivo y eligen tecnología Ubiquiti UniFi (APs, switches, etc.). Sin embargo, estas instalaciones necesitan funciones de DHCP, control de tráfico, políticas de acceso y filtrado, entre otras, que normalmente requieren hardware dedicado de administración de la marca, pero que, por su alto costo, no siempre pueden adquirir. Entonces, optan por utilizar el software <strong>UniFi Network self-hosted</strong> en un PC, pero igualmente siguen necesitando hardware o software de terceros que proporcione estas funciones. </p>
-      <p><strong>uhm</strong> llena este vacío, ampliando las capacidades de <strong>UniFi Network self-hosted</strong> bajo Linux. Proporciona el servicio DHCP necesario para el escenario <strong>Third-Party Gateway</strong>, respeta el portal cautivo y los vouchers de UniFi, y añade una capa adicional de políticas de acceso mediante ACLs y filtrado mediante <code>ipset</code>/<code>iptables</code>, sin depender de hardware dedicado de administración UniFi. </p>
+      <p><strong>UHM</strong> llena este vacío, ampliando las capacidades de <strong>UniFi Network self-hosted</strong> bajo Linux. Proporciona el servicio DHCP necesario para el escenario <strong>Third-Party Gateway</strong>, respeta el portal cautivo y los vouchers de UniFi, y añade una capa adicional de políticas de acceso mediante ACLs y filtrado mediante <code>ipset</code>/<code>iptables</code>, sin depender de hardware dedicado de administración UniFi. </p>
     </td>
   </tr>
 </table>
 
-## UniFi hardware vs uhm
+## UniFi hardware vs UHM
 
 **UniFi gateway alone:**
 
@@ -38,7 +37,7 @@
 | **Durable record of voucher activity** | `stat/voucher` drops a voucher once it expires or its quota runs out | `stat/voucher` descarta un voucher cuando expira o se agota su cuota |
 | **Hardware required** | UDM, UDM-Pro, Cloud Key or equivalent gateway | UDM, UDM-Pro, Cloud Key o gateway equivalente |
 
-**Unifi Hotspot Manager - uhm:**
+**Unifi Hotspot Manager - UHM:**
 
 | Stage | Description | Descripción |
 |---|---|---|
@@ -68,9 +67,9 @@
 | RAM | 4 GB |
 | Disk | 8 GB |
 
-> Approximate values, dominated by UniFi Network self-hosted -- can vary depending on version, number of managed devices, and environment. `uhm` itself (`uhmd.sh`/`uhmleases.sh`/`pydhcpd.py`) adds negligible overhead.
+> Approximate values, dominated by UniFi Network self-hosted -- can vary depending on version, number of managed devices, and environment. `UHM` itself (`uhmd.sh`/`uhmleases.sh`/`pydhcpd.py`) adds negligible overhead.
 >
-> Valores aproximados, dominados por UniFi Network self-hosted -- pueden variar según la versión, la cantidad de dispositivos gestionados y el entorno. `uhm` en sí (`uhmd.sh`/`uhmleases.sh`/`pydhcpd.py`) agrega una sobrecarga mínima.
+> Valores aproximados, dominados por UniFi Network self-hosted -- pueden variar según la versión, la cantidad de dispositivos gestionados y el entorno. `UHM` en sí (`uhmd.sh`/`uhmleases.sh`/`pydhcpd.py`) agrega una sobrecarga mínima.
 
 ### Software
 
@@ -82,35 +81,39 @@
 | `ipset` | 7.19 |
 | `pydhcpd` | latest |
 
+> `UHM` only verifies UniFi Network self-hosted / UniFi OS Server — it does not install either. If neither is installed yet, use [`unifisetup.sh`](https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh) to install it first, then run `uhmsetup.sh`.
+>
+> `UHM` sólo verifica UniFi Network self-hosted / UniFi OS Server — no instala ninguno de los dos. Si aún no está instalado, use [`unifisetup.sh`](https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh) para instalarlo primero, y luego ejecute `uhmsetup.sh`.
+
 ### Instance
 
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhm</code> is designed around a single guest network. Each <code>uhm</code> installation supports exactly:
+      <code>UHM</code> is designed around a single guest network. Each <code>UHM</code> installation supports exactly:
       <ul>
         <li><b>1 Network</b> — for example, <code>Default</code></li>
         <li><b>1 ESSID</b> — associated with that Network, with <b>Hotspot mandatory</b></li>
-        <li><b>1 private IPv4 range</b> — used by <code>uhm</code>'s DHCP and firewall components</li>
+        <li><b>1 private IPv4 range</b> — used by <code>UHM</code>'s DHCP and firewall components</li>
       </ul>
-      This is a fundamental architectural limitation, not a configuration choice: <code>pydhcp</code> (the DHCP backend) and <code>uhm</code>'s own network management are both designed to operate on exactly one Network and one IPv4 subnet.
+      This is a fundamental architectural limitation, not a configuration choice: <code>pydhcp</code> (the DHCP backend) and <code>UHM</code>'s own network management are both designed to operate on exactly one Network and one IPv4 subnet.
       <br><br>
-      Additional Networks, VLANs, or ESSIDs can exist on the same UniFi Controller, but they are <b>outside the scope of that <code>uhm</code> installation</b> — they must be provided and managed by separate third-party infrastructure (DHCP, routing, firewall, etc), not by <code>pydhcp</code>/<code>uhm</code>.
+      Additional Networks, VLANs, or ESSIDs can exist on the same UniFi Controller, but they are <b>outside the scope of that <code>UHM</code> installation</b> — they must be provided and managed by separate third-party infrastructure (DHCP, routing, firewall, etc), not by <code>pydhcp</code>/<code>UHM</code>.
       <br><br>
-      In other words, <b><code>uhm</code> does not provide multi-network management</b>. A single UniFi Controller can contain both the one Network managed by <code>uhm</code> and other Networks managed independently — the important distinction is that <b>only one Network belongs to the <code>uhm</code> deployment</b>.
+      In other words, <b><code>UHM</code> does not provide multi-network management</b>. A single UniFi Controller can contain both the one Network managed by <code>UHM</code> and other Networks managed independently — the important distinction is that <b>only one Network belongs to the <code>UHM</code> deployment</b>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhm</code> está diseñado alrededor de una sola red de invitados. Cada instalación de <code>uhm</code> soporta exactamente:
+      <code>UHM</code> está diseñado alrededor de una sola red de invitados. Cada instalación de <code>UHM</code> soporta exactamente:
       <ul>
         <li><b>1 Network</b> — por ejemplo, <code>Default</code></li>
         <li><b>1 ESSID</b> — asociado a esa Network, con <b>Hotspot obligatorio</b></li>
-        <li><b>1 rango IPv4 privado</b> — usado por los componentes de DHCP y firewall de <code>uhm</code></li>
+        <li><b>1 rango IPv4 privado</b> — usado por los componentes de DHCP y firewall de <code>UHM</code></li>
       </ul>
-      Esta es una limitación arquitectónica fundamental, no una elección de configuración: <code>pydhcp</code> (el backend DHCP) y la gestión de red propia de <code>uhm</code> están diseñados para operar sobre exactamente una Network y una subred IPv4.
+      Esta es una limitación arquitectónica fundamental, no una elección de configuración: <code>pydhcp</code> (el backend DHCP) y la gestión de red propia de <code>UHM</code> están diseñados para operar sobre exactamente una Network y una subred IPv4.
       <br><br>
-      Pueden existir otras Networks, VLANs o ESSIDs en el mismo controlador UniFi, pero quedan <b>fuera del alcance de esa instalación de <code>uhm</code></b> — deben ser provistas y gestionadas por infraestructura de terceros independiente (DHCP, routing, firewall, etc), no por <code>pydhcp</code>/<code>uhm</code>.
+      Pueden existir otras Networks, VLANs o ESSIDs en el mismo controlador UniFi, pero quedan <b>fuera del alcance de esa instalación de <code>UHM</code></b> — deben ser provistas y gestionadas por infraestructura de terceros independiente (DHCP, routing, firewall, etc), no por <code>pydhcp</code>/<code>UHM</code>.
       <br><br>
-      En otras palabras, <b><code>uhm</code> no provee gestión multi-red</b>. Un mismo controlador UniFi puede contener tanto la única Network gestionada por <code>uhm</code> como otras Networks gestionadas de forma independiente — la distinción importante es que <b>solo una Network pertenece al despliegue de <code>uhm</code></b>.
+      En otras palabras, <b><code>UHM</code> no provee gestión multi-red</b>. Un mismo controlador UniFi puede contener tanto la única Network gestionada por <code>UHM</code> como otras Networks gestionadas de forma independiente — la distinción importante es que <b>solo una Network pertenece al despliegue de <code>UHM</code></b>.
     </td>
   </tr>
 </table>
@@ -129,7 +132,7 @@
                |                            |
                v                            v
      +-------------------+        +-------------------+
-     |        uhm        |        |    Third-party    |
+     |        UHM        |        |    Third-party    |
      |                   |        |  infrastructure   |
      |     1 Network     |        |                   |
      |      1 ESSID      |        |  DHCP / Routing   |
@@ -175,7 +178,7 @@
 ```bash
 # Required packages
 sudo apt update
-sudo apt install -y bash curl jq iptables ipset cron python3 openssl bsdextrautils mawk coreutils util-linux iproute2 grep systemd ncurses-bin
+sudo apt install -y bash curl jq iptables ipset cron python3 openssl bsdextrautils mawk coreutils util-linux iproute2 grep sed systemd ncurses-bin
 
 # DHCP backend — install pydhcp:
 #   • pydhcp — https://github.com/maravento/pydhcp
@@ -184,9 +187,9 @@ sudo apt install -y bash curl jq iptables ipset cron python3 openssl bsdextrauti
 sudo apt install -y squid apache2
 ```
 
-> Without UniFi reachable or without `pydhcpd` running (beyond their respective startup grace windows), `uhm` refuses to start. Without a working `uhmiptables.sh`, the daemon still starts and keeps classifying clients (grace/authorized/blocked) normally, but firewall enforcement is skipped with a log warning until it's configured. These are hard dependencies for full functionality.
+> Without UniFi reachable or without `pydhcpd` running (beyond their respective startup grace windows), `UHM` refuses to start. Without a working `uhmiptables.sh`, the daemon still starts and keeps classifying clients (grace/authorized/blocked) normally, but firewall enforcement is skipped with a log warning until it's configured. These are hard dependencies for full functionality.
 >
-> Sin UniFi alcanzable o sin `pydhcpd` corriendo (más allá de sus respectivas ventanas de gracia de arranque), `uhm` se niega a arrancar. Sin un `uhmiptables.sh` funcional, el daemon igual arranca y sigue clasificando clientes (gracia/autorizado/bloqueado) normalmente, pero se salta la aplicación del firewall con una advertencia en el log hasta que se configure. Son dependencias duras para la funcionalidad completa.
+> Sin UniFi alcanzable o sin `pydhcpd` corriendo (más allá de sus respectivas ventanas de gracia de arranque), `UHM` se niega a arrancar. Sin un `uhmiptables.sh` funcional, el daemon igual arranca y sigue clasificando clientes (gracia/autorizado/bloqueado) normalmente, pero se salta la aplicación del firewall con una advertencia en el log hasta que se configure. Son dependencias duras para la funcionalidad completa.
 
 ## SCOPE
 
@@ -195,10 +198,10 @@ sudo apt install -y squid apache2
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>What uhm does:</b>
+      <b>What UHM does:</b>
       <ul>
         <li>Polls the UniFi Controller API (local account)</li>
-        <li>Reads <code>UNIFI_TYPE</code> from <code>uhm.env</code>. <code>uhmsetup.sh</code> auto-detects <code>unifi-os</code> or <code>classic</code> on ports 8443/11443 at install time; if neither responds, the installer aborts (uhm supports a single controller, so there is no manual URL entry). <code>uhmd.sh</code> supports both: <code>unifi-os</code> (UDM/UDM-Pro/UDR/Cloud Key Gen2+, <code>/api/auth/login</code>, <code>TOKEN</code> cookie, CSRF from the JWT payload) and <code>classic</code> (self-hosted UniFi Network Application, <code>/api/login</code>, <code>unifises</code> cookie, CSRF from the response header)</li>
+        <li>Reads <code>UNIFI_TYPE</code> from <code>uhm.env</code>. <code>uhmsetup.sh</code> auto-detects <code>unifi-os</code> or <code>classic</code> on ports 8443/11443 of this same host at install time; if neither responds, the installer aborts (UHM requires the controller on this host and supports a single controller, so there is no manual URL entry). <code>uhmd.sh</code> supports both: <code>unifi-os</code> (UDM/UDM-Pro/UDR/Cloud Key Gen2+, <code>/api/auth/login</code>, <code>TOKEN</code> cookie, CSRF from the JWT payload) and <code>classic</code> (self-hosted UniFi Network Application, <code>/api/login</code>, <code>unifises</code> cookie, CSRF from the response header)</li>
         <li>Classifies guest-SSID clients into three states: <i>grace</i> (timer running, no voucher yet), <i>authorized</i> (active voucher), and <i>blocked</i> (grace expired without a voucher)</li>
         <li>Checks that <code>pydhcpd</code> is active on startup, retrying quietly for up to <code>STARTUP_GRACE_SECONDS</code> (same grace window as the UniFi login below) before aborting</li>
         <li>Queues <code>pydhcpd.leases</code> removals for MACs it manages (consumed by <code>uhmleases.sh</code> during its safe DHCP stop→modify→start cycle)</li>
@@ -212,13 +215,14 @@ sudo apt install -y squid apache2
         <li>Detects new clients by scanning <code>pydhcpd.leases</code> directly every cycle (not <code>stat/sta</code>) — a new client is typically picked up within one <code>POLL_INTERVAL</code> cycle</li>
         <li>Requires <code>uhmreload.sh</code> and <code>uhmleases.sh</code> (both in <code>core/</code>) to reconcile ACLs on every change — cannot function without them</li>
         <li>IPv4 only</li>
+        <li>The UniFi controller runs on this same host — <code>discover_unifi_controller()</code> probes <code>https://CFG_SERVER_IP:8443</code> and <code>:11443</code> on this host's own LAN IP</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>Lo que uhm hace:</b>
+      <b>Lo que UHM hace:</b>
       <ul>
         <li>Consulta la API del controlador UniFi (cuenta local)</li>
-        <li>Lee <code>UNIFI_TYPE</code> de <code>uhm.env</code>. <code>uhmsetup.sh</code> autodetecta <code>unifi-os</code> o <code>classic</code> en los puertos 8443/11443 durante la instalación; si ninguno responde, el instalador aborta (uhm soporta un solo controlador, así que no hay entrada manual de URL). <code>uhmd.sh</code> soporta ambos: <code>unifi-os</code> (UDM/UDM-Pro/UDR/Cloud Key Gen2+, <code>/api/auth/login</code>, cookie <code>TOKEN</code>, CSRF desde el payload del JWT) y <code>classic</code> (UniFi Network Application autohospedado, <code>/api/login</code>, cookie <code>unifises</code>, CSRF desde el header de respuesta)</li>
+        <li>Lee <code>UNIFI_TYPE</code> de <code>uhm.env</code>. <code>uhmsetup.sh</code> autodetecta <code>unifi-os</code> o <code>classic</code> en los puertos 8443/11443 de este mismo host durante la instalación; si ninguno responde, el instalador aborta (UHM requiere el controlador en este host y soporta un solo controlador, así que no hay entrada manual de URL). <code>uhmd.sh</code> soporta ambos: <code>unifi-os</code> (UDM/UDM-Pro/UDR/Cloud Key Gen2+, <code>/api/auth/login</code>, cookie <code>TOKEN</code>, CSRF desde el payload del JWT) y <code>classic</code> (UniFi Network Application autohospedado, <code>/api/login</code>, cookie <code>unifises</code>, CSRF desde el header de respuesta)</li>
         <li>Clasifica los clientes del SSID de invitados en tres estados: <i>gracia</i> (contador activo, sin voucher), <i>autorizados</i> (con voucher activo) y <i>bloqueados</i> (gracia expirada sin voucher)</li>
         <li>Verifica que <code>pydhcpd</code> esté activo en el arranque, reintentando en silencio hasta <code>STARTUP_GRACE_SECONDS</code> (misma ventana de gracia que el login de UniFi abajo) antes de abortar</li>
         <li>Encola remociones de <code>pydhcpd.leases</code> para los MACs que gestiona (consumidas por <code>uhmleases.sh</code> durante su ciclo seguro de detener→modificar→arrancar DHCP)</li>
@@ -232,6 +236,7 @@ sudo apt install -y squid apache2
         <li>Detecta clientes nuevos escaneando <code>pydhcpd.leases</code> directamente en cada ciclo (no <code>stat/sta</code>) — un cliente nuevo típicamente se detecta dentro de un ciclo de <code>POLL_INTERVAL</code></li>
         <li>Requiere <code>uhmreload.sh</code> y <code>uhmleases.sh</code> (ambos en <code>core/</code>) para reconciliar ACLs en cada cambio — no puede funcionar sin ellos</li>
         <li>Solo IPv4</li>
+        <li>El controlador UniFi corre en este mismo host — <code>discover_unifi_controller()</code> sondea <code>https://CFG_SERVER_IP:8443</code> y <code>:11443</code> sobre la propia IP LAN de este host</li>
       </ul>
     </td>
   </tr>
@@ -243,7 +248,8 @@ sudo apt install -y squid apache2
         <li>Does NOT touch <code>iptables</code> or <code>ipset</code> directly — that is delegated to <code>UHM_RELOAD</code></li>
         <li>Does NOT support IPv6</li>
         <li>Supports exactly one guest SSID tied to the captive portal. Does NOT support several guest SSIDs tied to the Hotspot simultaneously — <code>uhmsetup.sh</code> lists the SSIDs found on the controller and, if more than one, requires picking exactly one</li>
-        <li>Does NOT support more than one self-hosted UniFi installation on the same host — exactly one <code>UNIFI_CONTROLLER_URL</code>/<code>UNIFI_TYPE</code> pair in <code>uhm.env</code>; <code>uhmsetup.sh</code> aborts if it cannot detect a controller, there is no manual URL entry</li>
+        <li>Does NOT support a remote controller host — <code>discover_unifi_controller()</code> never probes a remote host. Does NOT support more than one self-hosted UniFi installation on the same host either — exactly one <code>UNIFI_CONTROLLER_URL</code>/<code>UNIFI_TYPE</code> pair in <code>uhm.env</code>; <code>uhmsetup.sh</code> aborts if it cannot detect a controller, there is no manual URL entry</li>
+        <li>Does NOT integrate with UniFi Teleport — a gateway-console (UDM) feature, unrelated to the self-hosted UniFi Network Application <code>uhm</code> runs against</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -253,7 +259,8 @@ sudo apt install -y squid apache2
         <li>NO toca <code>iptables</code> ni <code>ipset</code> directamente — eso lo delega al <code>UHM_RELOAD</code></li>
         <li>NO soporta IPv6</li>
         <li>Soporta exactamente un ESSID de invitados vinculado al portal cautivo. NO soporta varios ESSID de invitados vinculados al Hotspot simultáneamente — <code>uhmsetup.sh</code> lista los SSID encontrados en el controlador y, si hay más de uno, exige elegir exactamente uno</li>
-        <li>NO soporta más de una instalación UniFi self-hosted en el mismo host — exactamente un par <code>UNIFI_CONTROLLER_URL</code>/<code>UNIFI_TYPE</code> en <code>uhm.env</code>; <code>uhmsetup.sh</code> aborta si no logra detectar un controlador, no hay entrada manual de URL</li>
+        <li>NO soporta un controlador en host remoto — <code>discover_unifi_controller()</code> nunca sondea un host remoto. Tampoco soporta más de una instalación UniFi self-hosted en el mismo host — exactamente un par <code>UNIFI_CONTROLLER_URL</code>/<code>UNIFI_TYPE</code> en <code>uhm.env</code>; <code>uhmsetup.sh</code> aborta si no logra detectar un controlador, no hay entrada manual de URL</li>
+        <li>NO se integra con UniFi Teleport — es una función de la consola gateway (UDM), ajena al UniFi Network Application self-hosted contra el que corre <code>uhm</code></li>
       </ul>
     </td>
   </tr>
@@ -269,7 +276,7 @@ This is the layout of the cloned repository (`git clone ... && cd uhm`), not the
 uhm/                      # as cloned -- see note above
 ├── uhmsetup.sh              # installer / updater / uninstaller (interactive);
 │                            # run from here, never deployed to /etc/uhm/
-├── core/                    # the reload mechanism, plus uhmwatch -- uhm cannot
+├── core/                    # the reload mechanism, plus uhmwatch -- UHM cannot
 │                            # function correctly without any of these five
 │   ├── uhmd.sh                   # main daemon -- UniFi API poller + ACL manager (systemd)
 │   ├── uhmd.service              # systemd service unit
@@ -281,7 +288,7 @@ uhm/                      # as cloned -- see note above
 │                                 # pydhcpd, UniFi backend) -- installed automatically
 │                                 # by uhmsetup.sh, installs its own cron entry; lives
 │                                 # here (not tools/) precisely because it's mandatory
-├── tools/                   # independent, optional utilities -- uhm runs
+├── tools/                   # independent, optional utilities -- UHM runs
 │                            # fine without any of these
 │   ├── uhmcheck.sh               # interactive MAC diagnostic / consistency checker (menu-driven)
 │   ├── uhmaudit.sh               # UniFi clients/vouchers audit tool
@@ -292,7 +299,7 @@ uhm/                      # as cloned -- see note above
 │   └── uhmiptables_example.sh    # reference firewall ruleset -- ipsets/iptables/redirects
 │                                 # (NOT deployed by uhmsetup.sh; the administrator copies it
 │                                 # manually to tools/uhmiptables.sh and adapts it)
-└── acl/                     # uhm's OWN data files -- empty templates in the repo,
+└── acl/                     # UHM's OWN data files -- empty templates in the repo,
                              # deployed once by uhmsetup.sh and never overwritten again
     ├── uhm-auth.txt              # authenticated clients with vouchers (fixed hotspot IP)
     ├── uhm-queue.txt             # internal working file (uhmd.sh / uhmleases.sh only)
@@ -301,30 +308,30 @@ uhm/                      # as cloned -- see note above
 
 ### ACL / data files — path ownership
 
-`uhm` integrates three independent projects (UniFi, `pydhcp`, and the administrator's own `iptables`/`ipset` setup), each with its own ACL path. `uhm` reads/writes each one at its own location and never relocates files it does not own.
+`UHM` integrates three independent projects (UniFi, `pydhcp`, and the administrator's own `iptables`/`ipset` setup), each with its own ACL path. `UHM` reads/writes each one at its own location and never relocates files it does not own.
 
 ```
-/etc/uhm/acl/                # uhm's OWN data files (generated by this project;
+/etc/uhm/acl/                # UHM's OWN data files (generated by this project;
                              # shipped as empty templates in the repo's acl/ folder,
                              # deployed once by uhmsetup.sh, never overwritten again)
 ├── uhm-auth.txt                  # voucher-authorized clients (fixed hotspot IP)
 ├── uhm-queue.txt                 # internal working file (uhmd.sh / uhmleases.sh only)
 └── uhm-grace.txt                 # grace-period clients (no voucher yet)
 
-/etc/acl/acl_mac/            # pydhcp's namespace -- NOT generated by uhm
-├── mac-proxy.txt                 # user-maintained; uhm only reads it
-└── mac-unlimited.txt             # user-maintained; uhm only reads it
+/etc/acl/acl_mac/            # pydhcp's namespace -- NOT generated by UHM
+├── mac-proxy.txt                 # user-maintained; UHM only reads it
+└── mac-unlimited.txt             # user-maintained; UHM only reads it
 
-/etc/acl/acl_dhcp/           # pydhcp/iptables namespace -- NOT generated by uhm
+/etc/acl/acl_dhcp/           # pydhcp/iptables namespace -- NOT generated by UHM
 └── blockdhcp.txt                 # permanently blocked MACs; pydhcp/pyleases.sh concept,
                                   # reused (not owned) by uhmleases.sh
 ```
 
-`ACL_MAC_PATH` (`/etc/acl/acl_mac`), `ACL_DHCP_PATH` (`/etc/acl/acl_dhcp`) and their file variables are configurable in `uhm.env` precisely because those directories belong to other projects — `uhm` must respect whatever path the administrator already has configured for `pydhcp`/`iptables`, not impose its own. `uhm.env` itself lives at `/etc/uhm/` (not inside `acl/`, since it is configuration, not a data list). Only `/etc/uhm/acl/` is this project's own and moves together with it (see [Remove](#remove) / [Update](#update)).
+`ACL_MAC_PATH` (`/etc/acl/acl_mac`), `ACL_DHCP_PATH` (`/etc/acl/acl_dhcp`) and their file variables are configurable in `uhm.env` precisely because those directories belong to other projects — `UHM` must respect whatever path the administrator already has configured for `pydhcp`/`iptables`, not impose its own. `uhm.env` itself lives at `/etc/uhm/` (not inside `acl/`, since it is configuration, not a data list). Only `/etc/uhm/acl/` is this project's own and moves together with it (see [Remove](#remove) / [Update](#update)).
 
-**Naming convention:** the config variables for this project's own three lists are named after the file each one points at and all start with `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Variables for files owned by other projects keep the `ACL_` prefix (`ACL_MAC_PROXY`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). The prefix alone tells you who owns the file, which is what decides whether `uhm` may create it: `uhmd.sh` and `uhmleases.sh` each create their own three lists empty if missing, but never create `blockdhcp.txt` or any `mac-*.txt` — a missing `blockdhcp.txt` aborts the daemon with a pointer to `pydhcp`'s own `pysetup.sh`.
+**Naming convention:** the config variables for this project's own three lists are named after the file each one points at and all start with `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Variables for files owned by other projects keep the `ACL_` prefix (`ACL_MAC_PROXY`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). The prefix alone tells you who owns the file, which is what decides whether `UHM` may create it: `uhmd.sh` and `uhmleases.sh` each create their own three lists empty if missing, but never create `blockdhcp.txt` or any `mac-*.txt` — a missing `blockdhcp.txt` aborts the daemon with a pointer to `pydhcp`'s own `pysetup.sh`.
 
-**Convención de nombres:** las variables de configuración de las tres listas propias de este proyecto se nombran según el archivo al que apuntan y todas empiezan por `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Las variables de archivos que pertenecen a otros proyectos conservan el prefijo `ACL_` (`ACL_MAC_PROXY`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). El prefijo por sí solo indica de quién es el archivo, que es lo que decide si `uhm` puede crearlo: `uhmd.sh` y `uhmleases.sh` crean vacías sus tres listas propias si faltan, pero nunca crean `blockdhcp.txt` ni ningún `mac-*.txt` — un `blockdhcp.txt` ausente aborta el daemon indicando el `pysetup.sh` de `pydhcp`.
+**Convención de nombres:** las variables de configuración de las tres listas propias de este proyecto se nombran según el archivo al que apuntan y todas empiezan por `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Las variables de archivos que pertenecen a otros proyectos conservan el prefijo `ACL_` (`ACL_MAC_PROXY`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). El prefijo por sí solo indica de quién es el archivo, que es lo que decide si `UHM` puede crearlo: `uhmd.sh` y `uhmleases.sh` crean vacías sus tres listas propias si faltan, pero nunca crean `blockdhcp.txt` ni ningún `mac-*.txt` — un `blockdhcp.txt` ausente aborta el daemon indicando el `pysetup.sh` de `pydhcp`.
 
 ### ACL priority order
 
@@ -344,10 +351,10 @@ lower-priority list is removed in favor of the higher-priority one:
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm</b> is glue between UniFi (state of truth), the DHCP backend (lease assignment), and the firewall (enforcement). It only writes ACL files; everything else is invoked through <code>UHM_RELOAD</code>.
+      <b>UHM</b> is glue between UniFi (state of truth), the DHCP backend (lease assignment), and the firewall (enforcement). It only writes ACL files; everything else is invoked through <code>UHM_RELOAD</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm</b> es código pegamento entre UniFi (estado verdadero), el backend DHCP (asignación de leases) y el firewall (aplicación). Solo escribe archivos ACL; todo lo demás se invoca a través del <code>UHM_RELOAD</code>.
+      <b>UHM</b> es código pegamento entre UniFi (estado verdadero), el backend DHCP (asignación de leases) y el firewall (aplicación). Solo escribe archivos ACL; todo lo demás se invoca a través del <code>UHM_RELOAD</code>.
     </td>
   </tr>
 </table>
@@ -378,12 +385,12 @@ UHM_RELOAD
         <li><b>Landing Page</b>: select <i>Success Message</i> instead of a custom redirect URL — this is what allows iptables to capture the client's authentication chain. Do <b>not</b> enable <i>HTTPS Redirection Support</i>, <i>Encrypted URL</i>, <i>Secure Portal</i>, or <i>Domain</i> — the portal must be served over plain HTTP (e.g. <code>http://&lt;controller-ip&gt;:8880/guest/s/default/</code>).</li>
         <li>Do <b>not</b> use <i>Pre-Authorization Allowances</i> or <i>Post-Authorization Restrictions</i> — they interfere with iptables' redirect of the client's authentication flow.</li>
         <li><b>Optional</b>: uncheck <i>Client Device Isolation</i> if you intend to share Samba folders (devices will then be able to see each other).</li>
-        <li><b>Optional, best practice</b>: enable <i>UAPSD</i> — improves battery life and latency for Wi-Fi clients (WMM power-save). Does not affect <code>uhm</code>'s MAC-based tracking.</li>
-        <li><b>Optional, best practice</b>: enable <i>Proxy ARP</i> — improves wireless efficiency (the AP answers ARP/NDP requests on behalf of known clients instead of broadcasting them over the air). Does not affect <code>uhm</code>'s MAC-based tracking.</li>
+        <li><b>Optional, best practice</b>: enable <i>UAPSD</i> — improves battery life and latency for Wi-Fi clients (WMM power-save). Does not affect <code>UHM</code>'s MAC-based tracking.</li>
+        <li><b>Optional, best practice</b>: enable <i>Proxy ARP</i> — improves wireless efficiency (the AP answers ARP/NDP requests on behalf of known clients instead of broadcasting them over the air). Does not affect <code>UHM</code>'s MAC-based tracking.</li>
         <li>Do <b>not</b> enable 2FA on the account — otherwise <code>uhmd</code> cannot authenticate against the UniFi API.</li>
         <li><b>Site name</b>: if your admin renamed the UniFi site from <code>default</code>, you must update <code>UNIFI_SITE</code> in <code>/etc/uhm/uhm.env</code> accordingly.</li>
         <li><b>If the controller host has two NICs</b> (WAN + LAN), set <code>system_ip</code> in <code>/var/lib/unifi/system.properties</code> to the LAN IP and restart UniFi.</li>
-        <li><b>Wi-Fi 7 APs</b>: disable <i>MLO (Multi-Link Operation)</i> on the guest SSID. IEEE 802.11be defines a Multi-Link Device (MLD) address separate from each physical link's own MAC address — since <code>uhm</code> tracks and authorizes clients strictly by MAC (DHCP static reservations, UniFi API, iptables/ipset), an MLO client could be seen inconsistently across those layers. This is a Wi-Fi 7 standard characteristic, not a UniFi-specific bug.</li>
+        <li><b>Wi-Fi 7 APs</b>: disable <i>MLO (Multi-Link Operation)</i> on the guest SSID. IEEE 802.11be defines a Multi-Link Device (MLD) address separate from each physical link's own MAC address — since <code>UHM</code> tracks and authorizes clients strictly by MAC (DHCP static reservations, UniFi API, iptables/ipset), an MLO client could be seen inconsistently across those layers. This is a Wi-Fi 7 standard characteristic, not a UniFi-specific bug.</li>
       </ol>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -393,16 +400,41 @@ UHM_RELOAD
         <li><b>Landing Page</b>: seleccionar <i>Success Message</i> en lugar de una URL de redirección personalizada — esto es lo que le permite a iptables capturar la cadena de autenticación del cliente. <b>No</b> habilitar <i>HTTPS Redirection Support</i>, <i>Encrypted URL</i>, <i>Secure Portal</i> ni <i>Domain</i> — el portal debe servirse por HTTP plano (ej. <code>http://&lt;ip-controlador&gt;:8880/guest/s/default/</code>).</li>
         <li><b>No</b> usar <i>Pre-Authorization Allowances</i> ni <i>Post-Authorization Restrictions</i> — interfieren con la redirección de iptables del flujo de autenticación del cliente.</li>
         <li><b>Opcional</b>: desmarcar <i>Client Device Isolation</i> si va a compartir carpetas Samba (los equipos podrán verse entre sí).</li>
-        <li><b>Opcional, buena práctica</b>: activar <i>UAPSD</i> — mejora la duración de batería y la latencia de los clientes Wi-Fi (ahorro de energía WMM). No afecta el rastreo por MAC de <code>uhm</code>.</li>
-        <li><b>Opcional, buena práctica</b>: activar <i>Proxy ARP</i> — mejora la eficiencia inalámbrica (el AP responde solicitudes ARP/NDP en nombre de clientes conocidos en vez de difundirlas por el aire). No afecta el rastreo por MAC de <code>uhm</code>.</li>
+        <li><b>Opcional, buena práctica</b>: activar <i>UAPSD</i> — mejora la duración de batería y la latencia de los clientes Wi-Fi (ahorro de energía WMM). No afecta el rastreo por MAC de <code>UHM</code>.</li>
+        <li><b>Opcional, buena práctica</b>: activar <i>Proxy ARP</i> — mejora la eficiencia inalámbrica (el AP responde solicitudes ARP/NDP en nombre de clientes conocidos en vez de difundirlas por el aire). No afecta el rastreo por MAC de <code>UHM</code>.</li>
         <li><b>No</b> activar 2FA en la cuenta — de lo contrario <code>uhmd</code> no podrá autenticarse contra la API de UniFi.</li>
         <li><b>Nombre del sitio</b>: si el admin renombró el sitio UniFi desde <code>default</code>, debe actualizar <code>UNIFI_SITE</code> en <code>/etc/uhm/uhm.env</code>.</li>
         <li><b>Si el host del controlador tiene dos NICs</b> (WAN + LAN), defina <code>system_ip</code> en <code>/var/lib/unifi/system.properties</code> con la IP LAN y reinicie UniFi.</li>
-        <li><b>APs Wi-Fi 7</b>: desactivar <i>MLO (Multi-Link Operation)</i> en el SSID de invitados. El estándar IEEE 802.11be define una dirección Multi-Link Device (MLD) distinta de la MAC propia de cada enlace físico — como <code>uhm</code> rastrea y autoriza clientes estrictamente por MAC (reservas DHCP estáticas, API de UniFi, iptables/ipset), un cliente MLO podría verse de forma inconsistente entre esas capas. Es una característica del estándar Wi-Fi 7, no un bug específico de UniFi.</li>
+        <li><b>APs Wi-Fi 7</b>: desactivar <i>MLO (Multi-Link Operation)</i> en el SSID de invitados. El estándar IEEE 802.11be define una dirección Multi-Link Device (MLD) distinta de la MAC propia de cada enlace físico — como <code>UHM</code> rastrea y autoriza clientes estrictamente por MAC (reservas DHCP estáticas, API de UniFi, iptables/ipset), un cliente MLO podría verse de forma inconsistente entre esas capas. Es una característica del estándar Wi-Fi 7, no un bug específico de UniFi.</li>
       </ol>
     </td>
   </tr>
 </table>
+
+### 2FA and Remote Access
+
+---
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmremote.png" width="50%"></a>
+</p>
+<p align="center"><i>Remote Access via unifi.ui.com</i></p>
+<p align="center"><i>Acceso remoto vía unifi.ui.com</i></p>
+
+<table>
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      UHM can coexist with UniFi Remote Access. This can be enabled on a locally-administered self-hosted UniFi Network Server (default: Admin + password) that is managed by UHM. This way, the UniFi console will be available both locally and from https://unifi.ui.com (default: email + password + MFA Login Authentication), with no conflict for UHM. However, enabling 2FA OTP (generated by an authenticator app) will break UHM's authentication against the UniFi API.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      UHM puede coexistir con UniFi Remote Access. Este puede habilitarse en un UniFi Network self-hosted con administración local (default: Admin + password) y gestionado por UHM. De esta manera, la consola UniFi estará disponible tanto localmente como desde https://unifi.ui.com (default: email + password + MFA Login Authentication), sin conflicto con UHM. Sin embargo, si se activa 2FA OTP (generado por una aplicación autenticadora), romperá la autenticación de UHM contra la API de UniFi.
+    </td>
+  </tr>
+</table>
+
+> UHM also coexists without conflict with Multi-Site Management enabled on the same console.
+>
+> UHM también coexiste sin conflicto con Multi-Site Management activado en la misma consola.
 
 ## SETUP
 
@@ -413,10 +445,10 @@ UHM_RELOAD
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (WAN interface, hotspot IP range as two full addresses, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from `pydhcp.env`, not asked; uhm supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and unconditional installation of <code>uhmwatch</code> (mandatory -- see <a href="#uhmwatch">uhmwatch</a> below for why), plus two yes/no prompts (default no) for the truly optional components: <code>uhmalert</code> right there instead of as a separate manual step afterward, and the Webmin log viewer module — only asked if Webmin is actually detected on the system, skipped with a message otherwise. Make sure every item in <a href="#requirements">Requirements</a> (particularly the <a href="#mandatory">Mandatory</a> dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
+      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (WAN interface, hotspot IP range as two full addresses, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from `pydhcp.env`, not asked; UHM supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and unconditional installation of <code>uhmwatch</code> (mandatory -- see <a href="#uhmwatch">uhmwatch</a> below for why), plus two yes/no prompts (default no) for the truly optional components: <code>uhmalert</code> right there instead of as a separate manual step afterward, and the Webmin log viewer module — only asked if Webmin is actually detected on the system, skipped with a message otherwise. Make sure every item in <a href="#requirements">Requirements</a> (particularly the <a href="#mandatory">Mandatory</a> dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaz WAN, rango IP del hotspot como dos direcciones completas, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de `pydhcp.env`, no se preguntan; uhm soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, e instalación incondicional de <code>uhmwatch</code> (obligatorio -- ver <a href="#uhmwatch">uhmwatch</a> más abajo para el porqué), más dos preguntas sí/no (default no) para los componentes realmente opcionales: <code>uhmalert</code> ahí mismo en vez de como paso manual separado después, y el módulo visor de log de Webmin — solo se pregunta si Webmin está realmente detectado en el sistema, si no se salta con un mensaje. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de <a href="#requirements">Requirements</a> (en particular las dependencias de <a href="#mandatory">Mandatory</a>) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
+      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaz WAN, rango IP del hotspot como dos direcciones completas, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de `pydhcp.env`, no se preguntan; UHM soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, e instalación incondicional de <code>uhmwatch</code> (obligatorio -- ver <a href="#uhmwatch">uhmwatch</a> más abajo para el porqué), más dos preguntas sí/no (default no) para los componentes realmente opcionales: <code>uhmalert</code> ahí mismo en vez de como paso manual separado después, y el módulo visor de log de Webmin — solo se pregunta si Webmin está realmente detectado en el sistema, si no se salta con un mensaje. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de <a href="#requirements">Requirements</a> (en particular las dependencias de <a href="#mandatory">Mandatory</a>) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
     </td>
   </tr>
 </table>
@@ -430,10 +462,10 @@ sudo bash uhmsetup.sh
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The installer checks for required apt dependencies (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>) and aborts if any is missing — none of them are installed automatically. It also aborts if <code>pydhcp</code> is not active. <code>uhm.env</code> is written as <code>pydhcp.env</code> copied verbatim followed by uhm's own block, and any key already present in <code>pydhcp.env</code> — pydhcp's own, or one added there by another project — is skipped instead of written twice, since these files are parsed key=value and a duplicated key would leave each reader holding whichever copy it saw last. It deploys <code>uhmd.sh</code>, <code>uhmreload.sh</code> and <code>uhmleases.sh</code> to <code>/etc/uhm/core/</code>, the mandatory <code>uhmwatch.sh</code> to <code>/etc/uhm/core/</code> as well, and the optional tools to <code>/etc/uhm/tools/</code>, installs <code>uhmd.service</code> to <code>/etc/systemd/system/</code>, and enables and starts the daemon via <code>systemctl enable</code> + <code>restart uhmd</code>. No files are copied to <code>/etc/pydhcp</code>.
+      The installer checks for required apt dependencies (<code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>ncurses-bin</code>) and aborts if any is missing — none of them are installed automatically. It also aborts if <code>pydhcp</code> is not active. <code>uhm.env</code> is written as <code>pydhcp.env</code> copied verbatim followed by UHM's own block, and any key already present in <code>pydhcp.env</code> — pydhcp's own, or one added there by another project — is skipped instead of written twice, since these files are parsed key=value and a duplicated key would leave each reader holding whichever copy it saw last. It deploys <code>uhmd.sh</code>, <code>uhmreload.sh</code> and <code>uhmleases.sh</code> to <code>/etc/uhm/core/</code>, the mandatory <code>uhmwatch.sh</code> to <code>/etc/uhm/core/</code> as well, and the optional tools to <code>/etc/uhm/tools/</code>, installs <code>uhmd.service</code> to <code>/etc/systemd/system/</code>, and enables and starts the daemon via <code>systemctl enable</code> + <code>restart uhmd</code>. No files are copied to <code>/etc/pydhcp</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El instalador verifica las dependencias apt requeridas (<code>curl</code>, <code>jq</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>) y aborta si falta alguna — ninguna se instala automáticamente. También aborta si <code>pydhcp</code> no está activo. <code>uhm.env</code> se escribe como <code>pydhcp.env</code> copiado tal cual seguido del bloque propio de uhm, y cualquier clave ya presente en <code>pydhcp.env</code> — propia de pydhcp, o agregada ahí por otro proyecto — se omite en vez de escribirse dos veces, ya que estos archivos se parsean clave=valor y una clave duplicada dejaría a cada lector con la copia que haya visto último. Despliega <code>uhmd.sh</code>, <code>uhmreload.sh</code> y <code>uhmleases.sh</code> en <code>/etc/uhm/core/</code>, el obligatorio <code>uhmwatch.sh</code> también en <code>/etc/uhm/core/</code>, y las herramientas opcionales en <code>/etc/uhm/tools/</code>, instala <code>uhmd.service</code> en <code>/etc/systemd/system/</code> y habilita e inicia el daemon con <code>systemctl enable</code> + <code>restart uhmd</code>. No se copian archivos a <code>/etc/pydhcp</code>.
+      El instalador verifica las dependencias apt requeridas (<code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>bsdextrautils</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>ncurses-bin</code>) y aborta si falta alguna — ninguna se instala automáticamente. También aborta si <code>pydhcp</code> no está activo. <code>uhm.env</code> se escribe como <code>pydhcp.env</code> copiado tal cual seguido del bloque propio de UHM, y cualquier clave ya presente en <code>pydhcp.env</code> — propia de pydhcp, o agregada ahí por otro proyecto — se omite en vez de escribirse dos veces, ya que estos archivos se parsean clave=valor y una clave duplicada dejaría a cada lector con la copia que haya visto último. Despliega <code>uhmd.sh</code>, <code>uhmreload.sh</code> y <code>uhmleases.sh</code> en <code>/etc/uhm/core/</code>, el obligatorio <code>uhmwatch.sh</code> también en <code>/etc/uhm/core/</code>, y las herramientas opcionales en <code>/etc/uhm/tools/</code>, instala <code>uhmd.service</code> en <code>/etc/systemd/system/</code> y habilita e inicia el daemon con <code>systemctl enable</code> + <code>restart uhmd</code>. No se copian archivos a <code>/etc/pydhcp</code>.
     </td>
   </tr>
   <tr>
@@ -446,10 +478,10 @@ sudo bash uhmsetup.sh
   </tr>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>Controller and SSID resolution:</b> uhm supports exactly one UniFi controller and one guest SSID, so neither is ever asked as blind free text. <b>Controller:</b> tried against <code>SERVER_IP</code> (from <code>pydhcp.env</code>) on ports 8443/11443 with the UniFi credentials just entered; found → used directly, not found → the installer aborts (check credentials/that the controller is reachable and restart the installation). <b>Guest SSID:</b> once logged in, the installer lists the controller's configured SSIDs (<code>rest/wlanconf</code>); exactly one → used directly, several → pick from a numbered menu (the administrator must know which one is the captive portal SSID), none → aborts the same way as a missing controller. Neither prompt accepts manual free-text entry — this avoids a typo in a value that must match UniFi exactly.
+      <b>Controller and SSID resolution:</b> UHM supports exactly one UniFi controller and one guest SSID, so neither is ever asked as blind free text. <b>Controller:</b> tried against <code>SERVER_IP</code> (from <code>pydhcp.env</code>, this host's own LAN IP) on ports 8443/11443 with the UniFi credentials just entered; found → used directly, not found → the installer aborts (check credentials, and that the controller runs on this same host, then restart the installation). <b>Guest SSID:</b> once logged in, the installer lists the controller's configured SSIDs (<code>rest/wlanconf</code>); exactly one → used directly, several → pick from a numbered menu (the administrator must know which one is the captive portal SSID), none → aborts the same way as a missing controller. Neither prompt accepts manual free-text entry — this avoids a typo in a value that must match UniFi exactly.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>Resolución de controlador y SSID:</b> uhm soporta exactamente un controlador UniFi y un SSID de invitados, así que ninguno de los dos se pregunta jamás como texto libre a ciegas. <b>Controlador:</b> se prueba contra <code>SERVER_IP</code> (de <code>pydhcp.env</code>) en los puertos 8443/11443 con las credenciales UniFi recién ingresadas; si se encuentra, se usa directamente; si no, el instalador aborta (revise credenciales/que el controlador sea alcanzable y reinicie la instalación). <b>SSID de invitados:</b> una vez logueado, el instalador lista los SSID configurados en el controlador (<code>rest/wlanconf</code>); si hay exactamente uno, se usa directamente; si hay varios, se elige de un menú numerado (el administrador debe saber cuál es el SSID del portal cautivo); si no hay ninguno, aborta igual que un controlador no encontrado. Ninguna de las dos preguntas acepta entrada de texto libre manual — esto evita un error de tipeo en un valor que debe coincidir exactamente con UniFi.
+      <b>Resolución de controlador y SSID:</b> UHM soporta exactamente un controlador UniFi y un SSID de invitados, así que ninguno de los dos se pregunta jamás como texto libre a ciegas. <b>Controlador:</b> se prueba contra <code>SERVER_IP</code> (de <code>pydhcp.env</code>, la propia IP LAN de este host) en los puertos 8443/11443 con las credenciales UniFi recién ingresadas; si se encuentra, se usa directamente; si no, el instalador aborta (revise credenciales y que el controlador corra en este mismo host, luego reinicie la instalación). <b>SSID de invitados:</b> una vez logueado, el instalador lista los SSID configurados en el controlador (<code>rest/wlanconf</code>); si hay exactamente uno, se usa directamente; si hay varios, se elige de un menú numerado (el administrador debe saber cuál es el SSID del portal cautivo); si no hay ninguno, aborta igual que un controlador no encontrado. Ninguna de las dos preguntas acepta entrada de texto libre manual — esto evita un error de tipeo en un valor que debe coincidir exactamente con UniFi.
     </td>
   </tr>
   <tr>
@@ -538,7 +570,7 @@ sudo bash uhmsetup.sh --remove
 | 4 | Uninstall the Webmin module (`uhmmon.sh uninstall`, if installed) | Desinstala el módulo de Webmin (`uhmmon.sh uninstall`, si está instalado) |
 | 5 | Remove `/etc/logrotate.d/uhm` | Elimina `/etc/logrotate.d/uhm` |
 | 6 | Remove `/etc/uhm/` and **all its contents** including `uhm.env`, ACL files, your `uhmiptables.sh`, and `bak/` (script backups accumulated by `--update` runs) | Elimina `/etc/uhm/` y **todo su contenido**, incluyendo `uhm.env`, archivos ACL, su `uhmiptables.sh`, y `bak/` (backups de scripts acumulados por corridas de `--update`) |
-| 7 | Remove `/var/log/uhm.log`, rotated archives, `/var/log/uhmaudit.log`, and any `/var/log/u{leases,iptables}-failure.trace` | Elimina `/var/log/uhm.log`, los archivos rotados, `/var/log/uhmaudit.log`, y cualquier `/var/log/u{leases,iptables}-failure.trace` |
+| 7 | Remove `/var/log/uhm.log`, rotated archives, `/var/log/uhmaudit.log`, `/var/log/uhmleases-failure.trace` and `/var/log/uhmiptables-failure.trace` | Elimina `/var/log/uhm.log`, los archivos rotados, `/var/log/uhmaudit.log`, `/var/log/uhmleases-failure.trace` y `/var/log/uhmiptables-failure.trace` |
 
 ### Files
 
@@ -575,6 +607,8 @@ sudo bash uhmsetup.sh --remove
 | `UNIFI_TYPE` | Either `unifi-os` or `classic` — sets the API path, login endpoint, session cookie name, and CSRF extraction method used by `uhmd.sh` | `unifi-os` o `classic` — define la ruta de la API, el endpoint de login, el nombre de la cookie de sesión y el método de extracción de CSRF que usa `uhmd.sh` |
 | `UNIFI_CERT_PIN` | SHA-256 pin of the controller's TLS public key (format `sha256//<base64>`), computed by `uhmsetup.sh` at install time. Used by `uhmd.sh` with `curl --pinnedpubkey` to detect a swapped certificate; empty if `openssl` failed during setup, in which case the connection falls back to unpinned `-k` | Pin SHA-256 de la clave pública TLS del controlador (formato `sha256//<base64>`), calculado por `uhmsetup.sh` durante la instalación. Usado por `uhmd.sh` con `curl --pinnedpubkey` para detectar un certificado reemplazado; vacío si `openssl` falló durante la instalación, en cuyo caso la conexión cae a `-k` sin pin |
 | `UHM_RELOAD` | Path to `uhmreload.sh` | Ruta a `uhmreload.sh` |
+| `UHM_LEASES` | Path to `uhmleases.sh`, invoked by `uhmreload.sh` as its first step (default `/etc/uhm/core/uhmleases.sh`) | Ruta a `uhmleases.sh`, invocado por `uhmreload.sh` como su primer paso (default `/etc/uhm/core/uhmleases.sh`) |
+| `UHM_IPTABLES` | Path to the administrator's firewall script, invoked by `uhmreload.sh` as its second step (default `/etc/uhm/tools/uhmiptables.sh`) | Ruta al script de firewall del administrador, invocado por `uhmreload.sh` como su segundo paso (default `/etc/uhm/tools/uhmiptables.sh`) |
 | `UHM_LEASES_TIMEOUT_SECONDS` | Max seconds `uhmreload.sh` waits for `uhmleases.sh` before killing it (default `120`) | Segundos máximos que `uhmreload.sh` espera a `uhmleases.sh` antes de matarlo (default `120`) |
 | `UHM_IPTABLES_TIMEOUT_SECONDS` | Max seconds `uhmreload.sh` waits for `uhmiptables.sh` before killing it (default `60`) | Segundos máximos que `uhmreload.sh` espera a `uhmiptables.sh` antes de matarlo (default `60`) |
 | `SERV_MASK` | Network mask, copied from `pydhcp.env` at install time | Máscara de red, copiada desde `pydhcp.env` durante la instalación |
@@ -585,14 +619,14 @@ sudo bash uhmsetup.sh --remove
 | `ACL_PATH` | Base ACL directory, copied from `pydhcp.env` at install time | Directorio base de ACL, copiado desde `pydhcp.env` durante la instalación |
 | `ACL_MAC_PATH` | Managed MAC lists directory, copied from `pydhcp.env` at install time | Directorio de listas de MAC gestionadas, copiado desde `pydhcp.env` durante la instalación |
 | `ACL_DHCP_PATH` | DHCP-related ACL files directory, copied from `pydhcp.env` at install time | Directorio de archivos ACL relacionados con DHCP, copiado desde `pydhcp.env` durante la instalación |
-| `UHM_PATH` | uhm installation/data directory (default `/etc/uhm`) | Directorio de instalación/datos de uhm (default `/etc/uhm`) |
+| `UHM_PATH` | UHM installation/data directory (default `/etc/uhm`) | Directorio de instalación/datos de UHM (default `/etc/uhm`) |
 | `ACL_MAC_PROXY` | Managed proxy MAC list, copied from `pydhcp.env` at install time | Lista de MAC gestionadas forzadas por proxy, copiada desde `pydhcp.env` durante la instalación |
 | `ACL_MAC_UNLIMITED` | Managed unrestricted MAC list, copied from `pydhcp.env` at install time | Lista de MAC gestionadas sin restricciones, copiada desde `pydhcp.env` durante la instalación |
-| `UHM_MACAUTH` | Active hotspot-authorized MAC list -- uhm's own (default `/etc/uhm/acl/uhm-auth.txt`) | Lista de MAC autorizadas activas del hotspot -- propia de uhm (default `/etc/uhm/acl/uhm-auth.txt`) |
+| `UHM_MACAUTH` | Active hotspot-authorized MAC list -- UHM's own (default `/etc/uhm/acl/uhm-auth.txt`) | Lista de MAC autorizadas activas del hotspot -- propia de UHM (default `/etc/uhm/acl/uhm-auth.txt`) |
 | `ACL_BLOCK_FILE` | Permanently blocked MAC list, copied from `pydhcp.env` at install time | Lista de MAC bloqueadas permanentemente, copiada desde `pydhcp.env` durante la instalación |
 | `PYDHCPD_LEASES` | pydhcpd's own leases file path, copied from `pydhcp.env` at install time; read by `uhmd.sh` and `uhmleases.sh` (default `/etc/pydhcp/pydhcpd.leases`) | Ruta del archivo de leases de pydhcpd, copiada desde `pydhcp.env` durante la instalación; usada por `uhmd.sh` y `uhmleases.sh` (default `/etc/pydhcp/pydhcpd.leases`) |
-| `UHM_GRACE` | Grace-period MAC list -- uhm's own (default `/etc/uhm/acl/uhm-grace.txt`) | Lista de MAC en período de gracia -- propia de uhm (default `/etc/uhm/acl/uhm-grace.txt`) |
-| `UHM_QUEUE` | Path to the internal lease-removal queue file, an uhm working file (not an ACL) consumed by `uhmd.sh` and `uhmleases.sh` (default `/etc/uhm/acl/uhm-queue.txt`) | Ruta del archivo interno de cola de remoción de leases, un archivo de trabajo de uhm (no una ACL) consumido por `uhmd.sh` y `uhmleases.sh` (default `/etc/uhm/acl/uhm-queue.txt`) |
+| `UHM_GRACE` | Grace-period MAC list -- UHM's own (default `/etc/uhm/acl/uhm-grace.txt`) | Lista de MAC en período de gracia -- propia de UHM (default `/etc/uhm/acl/uhm-grace.txt`) |
+| `UHM_QUEUE` | Path to the internal lease-removal queue file, an UHM working file (not an ACL) consumed by `uhmd.sh` and `uhmleases.sh` (default `/etc/uhm/acl/uhm-queue.txt`) | Ruta del archivo interno de cola de remoción de leases, un archivo de trabajo de UHM (no una ACL) consumido por `uhmd.sh` y `uhmleases.sh` (default `/etc/uhm/acl/uhm-queue.txt`) |
 | `POLL_INTERVAL` | Daemon cycle interval in seconds (default `20`) | Intervalo del ciclo del daemon en segundos (default `20`) |
 | `RELOAD_SAFETY_INTERVAL_SECONDS` | Force a reload even without an ACL change after this many seconds (default `3600` = 1h, minimum 3x `UHM_LEASES_TIMEOUT_SECONDS` + `UHM_IPTABLES_TIMEOUT_SECONDS` and never below `600`; `uhmd` aborts below that) | Fuerza un reload aunque no haya cambio de ACL tras esta cantidad de segundos (default `3600` = 1h, mínimo 3x `UHM_LEASES_TIMEOUT_SECONDS` + `UHM_IPTABLES_TIMEOUT_SECONDS` y nunca menos de `600`; `uhmd` aborta por debajo) |
 | `STARTUP_GRACE_SECONDS` | Grace window (seconds) for `uhmd.sh`'s initial UniFi login retry and its wait for `pydhcpd` to come up (default `120`) — exclusive to `uhmd.sh`; `uhmalert.sh` has its own separate key, `UHM_ALERT_QUIET_PERIOD_SECONDS` | Ventana de gracia (segundos) para el reintento inicial de login a UniFi de `uhmd.sh` y su espera a que `pydhcpd` arranque (default `120`) — exclusiva de `uhmd.sh`; `uhmalert.sh` tiene su propia clave separada, `UHM_ALERT_QUIET_PERIOD_SECONDS` |
@@ -606,6 +640,8 @@ sudo bash uhmsetup.sh --remove
 | `WPAD_PORT` | pydhcp's own value -- TCP port of the Apache VirtualHost serving `wpad.pac`, copied from `pydhcp.env` at install time (default `18100`). If you change it, update the matching port in `uhmiptables.sh` too -- that script hardcodes it in the rules that allow/deny PAC access per ACL group | Valor propio de pydhcp -- puerto TCP del VirtualHost de Apache que sirve `wpad.pac`, copiado desde `pydhcp.env` durante la instalación (default `18100`). Si lo cambia, actualice también el puerto en `uhmiptables.sh` -- ese script lo lleva fijo en las reglas que permiten o niegan el acceso al PAC por grupo ACL |
 | `PING_CHECK_ENABLED` | pydhcp's own value -- `false` to disable pydhcpd ping-check before OFFER, set if ICMP is blocked, copied from `pydhcp.env` at install time (default `true`) | Valor propio de pydhcp -- `false` para deshabilitar el ping-check de pydhcpd antes del OFFER, usar si ICMP está bloqueado, copiado desde `pydhcp.env` durante la instalación (default `true`) |
 | `PING_TIMEOUT_SECONDS` | pydhcp's own value -- seconds to wait for the ICMP reply before giving up and sending the OFFER, copied from `pydhcp.env` at install time; written into `pydhcpd.conf` as `ping-timeout` (default `1`) | Valor propio de pydhcp -- segundos a esperar la respuesta ICMP antes de desistir y enviar el OFFER, copiado desde `pydhcp.env` durante la instalación; escrito en `pydhcpd.conf` como `ping-timeout` (default `1`) |
+| `UHM_NTFY_TOPIC` | ntfy.sh topic used by `uhmalert.sh` (optional component). Auto-generated by `uhmalert.sh install`; absent if uhmalert is not installed | Topic de ntfy.sh que usa `uhmalert.sh` (componente opcional). Lo autogenera `uhmalert.sh install`; ausente si uhmalert no está instalado |
+| `UHM_API_FAIL_THRESHOLD` | Consecutive failing cycles `uhmalert.sh` requires before alerting (default `3`). Written by `uhmalert.sh install` | Ciclos fallidos consecutivos que `uhmalert.sh` exige antes de alertar (default `3`). Lo escribe `uhmalert.sh install` |
 
 > Every variable above that isn't strictly required (network/UniFi credentials) falls back to the default shown if missing from `uhm.env` — scripts never fail silently or use an undocumented value.
 >
@@ -672,7 +708,7 @@ RESERVATION_TTL_SECONDS=30
 # UHM
 # /etc/uhm/uhm.env
 # =============================================================================
-# -- Network (uhm's own) ------------------------------------------------------
+# -- Network (UHM's own) ------------------------------------------------------
 WAN_IF="eno1"
 LOCAL_USER="myuser"
 # -- UniFi keys ---------------------------------------------------------------
@@ -691,7 +727,7 @@ UNIFI_CERT_PIN="sha256//AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDE="
 # Hotspot Range
 UHM_INI_RANGE=192.168.0.180
 UHM_END_RANGE=192.168.0.220
-# Daemon timers (uhm's own)
+# Daemon timers (UHM's own)
 POLL_INTERVAL=20
 STARTUP_GRACE_SECONDS=120
 RELOAD_SAFETY_INTERVAL_SECONDS=3600
@@ -704,7 +740,7 @@ UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
 # Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
 UHM_LEASES_TIMEOUT_SECONDS=120
 UHM_IPTABLES_TIMEOUT_SECONDS=60
-# -- ACLs (uhm's own; read by uhmd.sh / uhmleases.sh) -------------------------
+# -- ACLs (UHM's own; read by uhmd.sh / uhmleases.sh) -------------------------
 UHM_PATH=/etc/uhm
 UHM_GRACE=/etc/uhm/acl/uhm-grace.txt
 UHM_MACAUTH=/etc/uhm/acl/uhm-auth.txt
@@ -727,10 +763,10 @@ New keys added later (e.g. by `uhmalert.sh install`, or a backfill from `pylease
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmmon.sh</code> installs a native Webmin module (<b>Networking → UniFi Hotspot Log Viewer</b>) that replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation. The module is written as a self-contained bash installer following the same pattern as <code>servicemon.sh</code> and <code>squidmon.sh</code>.
+      <code>uhmmon.sh</code> installs a native Webmin module (<b>Networking → UHM Log Viewer</b>) that replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation. The module is written as a self-contained bash installer following the same pattern as <code>servicemon.sh</code> and <code>squidmon.sh</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmmon.sh</code> instala un módulo nativo de Webmin (<b>Networking → UniFi Hotspot Log Viewer</b>) que reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs. El módulo está escrito como un instalador bash autocontenido siguiendo el mismo patrón que <code>servicemon.sh</code> y <code>squidmon.sh</code>.
+      <code>uhmmon.sh</code> instala un módulo nativo de Webmin (<b>Networking → UHM Log Viewer</b>) que reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs. El módulo está escrito como un instalador bash autocontenido siguiendo el mismo patrón que <code>servicemon.sh</code> y <code>squidmon.sh</code>.
     </td>
   </tr>
 </table>
@@ -846,7 +882,7 @@ sudo bash uhmsetup.sh
         <li><b>dedup</b> — chequeo de consistencia solo entre <code>uhm-auth.txt</code> y <code>blockdhcp.txt</code>: elimina de <code>blockdhcp.txt</code> cualquier MAC que también aparezca en <code>uhm-auth.txt</code>, y sanea líneas malformadas de <code>blockdhcp.txt</code> cuando el MAC/IP/hostname todavía se puede recuperar (ej. un <code>;</code> final faltante). Una línea que no se puede recuperar (un campo obligatorio vacío tras el parseo) se descarta en su lugar, con un WARNING en el log, en vez de reescribirse aún malformada — ni <code>blockdhcp.txt</code> ni <code>uhm-grace.txt</code> autorizan nada, así que perder una entrada rota solo significa que esa MAC vuelve a tratarse como nueva en su próximo lease, no es un hueco de seguridad. Nunca lee el contenido de <code>mac-*.txt</code> (ver Listas de MACs gestionadas más abajo).</li>
         <li><b>sort</b> — ordena y deduplica <code>uhm-auth.txt</code> por IP.</li>
         <li><b>expire</b> — para cada entrada en <code>uhm-auth.txt</code> cuyo <code>END_TIME_EPOCH</code> ya pasó, la libera: encola una remoción de lease para <code>uhmleases.sh</code> y la elimina del archivo. Aplica sin importar si está activa (<code>a;</code>) o desactivada (<code>#a;</code>) — a diferencia de <code>mac-*.txt</code>, una entrada de <code>uhm-auth.txt</code> está atada al ciclo de vida de un voucher y siempre tiene un vencimiento; comentarla no pausa ese reloj. Nada preserva la MAC en otro lado — al reconectarse se trata como cliente completamente nuevo y vuelve a entrar en <code>uhm-grace.txt</code> con un temporizador de gracia nuevo.</li>
-        <li><b>clientes nuevos</b> — escanea <code>pydhcpd.leases</code> directamente. Cualquier MAC que aún no esté en <code>uhm-auth.txt</code>, <code>blockdhcp.txt</code> ni <code>uhm-grace.txt</code> se escribe directo en <code>uhm-grace.txt</code> con un timestamp de primer contacto. No se asigna IP fija del rango hotspot ni se encola remoción de lease — el cliente conserva el lease de pool que ya tenía. Este es el paso que hace visibles a los clientes nuevos; escribir <code>uhm-grace.txt</code> es lo que dispara el paso de reload más abajo. El lease de un dispositivo gestionado puede caer aquí transitoriamente también (este paso tampoco revisa <code>mac-*.txt</code>) — <code>clean_grace_list</code> de <code>uhmleases.sh</code> lo reconcilia en el siguiente reload.</li>
+        <li><b>clientes nuevos</b> — escanea <code>pydhcpd.leases</code> directamente. Cualquier MAC que aún no esté en <code>uhm-auth.txt</code>, <code>blockdhcp.txt</code>, <code>uhm-grace.txt</code> ni en un <code>mac-*.txt</code> (verificado en vivo contra el disco vía <code>is_managed_mac</code>) se escribe directo en <code>uhm-grace.txt</code> con un timestamp de primer contacto. No se asigna IP fija del rango hotspot ni se encola remoción de lease — el cliente conserva el lease de pool que ya tenía. Este es el paso que hace visibles a los clientes nuevos; escribir <code>uhm-grace.txt</code> es lo que dispara el paso de reload más abajo.</li>
         <li><b>sessions</b> — consulta <code>stat/guest</code>, filtra por <code>end &gt; now</code> (el flag <code>expired==false</code> no es confiable en UniFi). Para cada cliente autenticado que aún no esté en <code>uhm-auth.txt</code>, asigna la siguiente IP libre del rango hotspot con hostname <code>guest{N}-{codigo_voucher}</code>. Salta cualquier MAC listada en <code>mac-*.txt</code> (activa o comentada, comprobado en vivo contra el disco) — una barrera contra una autorización de invitado en UniFi residual o concedida fuera del daemon para un dispositivo gestionado. También salta una MAC revocada en un ciclo anterior mientras su sesión de <code>stat/guest</code> siga siendo la misma que tenía al ser revocada — canjear un voucher es la única entrada a <code>uhm-auth.txt</code>, y una sesión que UniFi ya invalidó no debe reabrir esa puerta por su cuenta.</li>
         <li><b>revoke</b> — consulta <code>stat/sta</code>; para cada MAC en <code>uhm-auth.txt</code> que UniFi reporta con <code>authorized=false</code>, la elimina de <code>uhm-auth.txt</code>, encola una remoción de lease y registra el <code>end_time</code> de la sesión para que el paso sessions de arriba no la reautorice desde esa misma sesión. El registro se descarta apenas <code>stat/sta</code> deja de reportar esa MAC como <code>authorized=false</code>, así que reautorizar al cliente desde la UI de UniFi surte efecto en el ciclo siguiente; un voucher realmente nuevo trae otro <code>end_time</code> y se respeta de inmediato.</li>
         <li><b>reload</b> — compara md5 contra baseline, incluyendo <code>uhm-grace.txt</code>, O un cambio en <code>mac-*.txt</code> marcado por el watcher independiente (abajo) en el ciclo anterior. Si algo cambió, o si pasó más de <code>RELOAD_SAFETY_INTERVAL_SECONDS</code> (default una hora) desde el último reload, invoca <code>UHM_RELOAD</code>, esperando a que termine sin ningún límite de tiempo propio (<code>uhmreload.sh</code> acota cada uno de sus propios pasos por separado — ver <a href="#uhmreload">uhmreload</a>) — una sola invocación cubre ambos disparadores si coinciden. El camino de seguridad es el que promueve entradas de gracia expiradas a <code>blockdhcp.txt</code> en redes inactivas donde ningún cliente nuevo dispararía un reload. Si no hay nada pendiente, no se registra nada — el daemon permanece en silencio en los ciclos sin cambios, por diseño (ver sección LOGS más abajo).</li>
@@ -942,7 +978,7 @@ sudo bash uhmsetup.sh
 | 8880 | TCP | LAN → controller | Captive portal HTTP | Portal cautivo HTTP |
 | 8881 | TCP | LAN → controller | Captive portal HTTP alternate | Portal cautivo HTTP alternativo |
 | 8882 | TCP | LAN → controller | Captive portal HTTP alternate | Portal cautivo HTTP alternativo |
-| 8843 | — | not opened | Captive portal HTTPS -- **not used**: `uhm` only serves the captive portal over plain HTTP, never HTTPS (see UNIFI PRE-CONFIGURATION above) | No usado: `uhm` sirve el portal cautivo solo por HTTP plano, nunca HTTPS (ver UNIFI PRE-CONFIGURATION arriba) |
+| 8843 | — | not opened | Captive portal HTTPS -- **not used**: `UHM` only serves the captive portal over plain HTTP, never HTTPS (see UNIFI PRE-CONFIGURATION above) | No usado: `UHM` sirve el portal cautivo solo por HTTP plano, nunca HTTPS (ver UNIFI PRE-CONFIGURATION arriba) |
 | 6789 | TCP | LAN → controller | UniFi speed test / throughput measurement | Prueba de velocidad UniFi / medición de throughput |
 | 10001 | UDP | LAN ↔ APs | Device discovery | Descubrimiento de dispositivos |
 | 3478 | UDP | LAN → WAN | STUN for APs behind NAT | STUN para APs detrás de NAT |
@@ -956,9 +992,9 @@ sudo bash uhmsetup.sh
 
 ---
 
-`core/` holds the reload mechanism itself (see <a href="#scope">Scope</a>). `uhmd.sh`/`uhmd.service` run the daemon, `uhmreload.sh` is the wrapper it invokes on every ACL change, and `uhmleases.sh` is the actual ACL/lease reconciliation `uhmreload.sh` calls. `tools/` (next section) holds independent, optional utilities uhm runs fine without. `uhmiptables.sh` is the one exception living under `tools/`: required for firewall enforcement, but its absence does not stop `uhmd` from starting or from classifying clients correctly — see [Failure handling](#failure-handling) under [`uhmreload`](#uhmreload) below for exactly how failures of each script are handled.
+`core/` holds the reload mechanism itself (see <a href="#scope">Scope</a>). `uhmd.sh`/`uhmd.service` run the daemon, `uhmreload.sh` is the wrapper it invokes on every ACL change, and `uhmleases.sh` is the actual ACL/lease reconciliation `uhmreload.sh` calls. `tools/` (next section) holds independent, optional utilities UHM runs fine without. `uhmiptables.sh` is the one exception living under `tools/`: required for firewall enforcement, but its absence does not stop `uhmd` from starting or from classifying clients correctly — see [Failure handling](#failure-handling) under [`uhmreload`](#uhmreload) below for exactly how failures of each script are handled.
 
-`core/` contiene el mecanismo de reload en sí (ver <a href="#scope">Scope</a>). `uhmd.sh`/`uhmd.service` ejecutan el daemon, `uhmreload.sh` es el wrapper que este invoca en cada cambio de ACL, y `uhmleases.sh` es la reconciliación real de ACLs/leases que `uhmreload.sh` llama. `tools/` (siguiente sección) contiene utilidades independientes y opcionales sin las cuales uhm funciona igual. `uhmiptables.sh` es la única excepción que vive bajo `tools/`: necesario para la aplicación del firewall, pero su ausencia no impide que `uhmd` arranque o clasifique clientes correctamente — ver [Failure handling](#failure-handling) bajo [`uhmreload`](#uhmreload) abajo para el detalle exacto de cómo se maneja el fallo de cada script.
+`core/` contiene el mecanismo de reload en sí (ver <a href="#scope">Scope</a>). `uhmd.sh`/`uhmd.service` ejecutan el daemon, `uhmreload.sh` es el wrapper que este invoca en cada cambio de ACL, y `uhmleases.sh` es la reconciliación real de ACLs/leases que `uhmreload.sh` llama. `tools/` (siguiente sección) contiene utilidades independientes y opcionales sin las cuales UHM funciona igual. `uhmiptables.sh` es la única excepción que vive bajo `tools/`: necesario para la aplicación del firewall, pero su ausencia no impide que `uhmd` arranque o clasifique clientes correctamente — ver [Failure handling](#failure-handling) bajo [`uhmreload`](#uhmreload) abajo para el detalle exacto de cómo se maneja el fallo de cada script.
 
 ### uhmd
 
@@ -1157,14 +1193,14 @@ sudo bash uhmsetup.sh
       <br><br>
       The script runs from <code>/etc/uhm/core/uhmleases.sh</code> and detects the existence of <code>/etc/pydhcp</code> (required). Configuration is read exclusively from <code>/etc/uhm/uhm.env</code> (generated and managed by <code>uhmsetup.sh</code>). To reconfigure, edit <code>uhm.env</code> directly or re-run <code>uhmsetup.sh</code>.
       <br><br>
-      ⚠️ <b>WARNING:</b> <code>uhmleases.sh</code> and <code>pyleases.sh</code> both fully rebuild the same <code>/etc/pydhcp/pydhcpd.conf</code> from ACL sources on every run. They are <b>mutually exclusive</b> on the same installation — running both (e.g. one from cron, the other via <code>uhmreload.sh</code>) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from <code>uhmleases.sh</code>, or any change made through <code>pyleases.sh</code>). If you install <code>uhm</code>, use <code>uhmleases.sh</code> exclusively and do not run <code>pyleases.sh</code> on the same host.
+      ⚠️ <b>WARNING:</b> <code>uhmleases.sh</code> and <code>pyleases.sh</code> both fully rebuild the same <code>/etc/pydhcp/pydhcpd.conf</code> from ACL sources on every run. They are <b>mutually exclusive</b> on the same installation — running both (e.g. one from cron, the other via <code>uhmreload.sh</code>) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from <code>uhmleases.sh</code>, or any change made through <code>pyleases.sh</code>). If you install <code>UHM</code>, use <code>uhmleases.sh</code> exclusively and do not run <code>pyleases.sh</code> on the same host.
     </td>
     <td style="width: 50%; vertical-align: top;">
       <b>uhmleases.sh</b> es una <b>reimplementación</b> del <code>pyleases.sh</code> que viene por defecto con <a href="https://github.com/maravento/pydhcp">pydhcp</a>, con integración UniFi Hotspot incorporada. La versión original gestiona leases DHCP y ACLs pero no sabe nada del portal cautivo de UniFi. Esta versión añade el módulo <i>UniFi Hotspot Integration</i>: uhmleases lee <code>/etc/uhm/acl/uhm-auth.txt</code> y <code>/etc/uhm/acl/uhm-grace.txt</code> como listas autoritativas de clasificación durante el procesamiento de leases, aplica un período de gracia para MACs nuevas (<code>BLOCKDHCP_GRACE_SECONDS</code>, default 24h), y sincroniza entradas ACL relacionadas con el hotspot.
       <br><br>
       El script se ejecuta desde <code>/etc/uhm/core/uhmleases.sh</code> y detecta la existencia de <code>/etc/pydhcp</code> (requerido). La configuración se lee exclusivamente desde <code>/etc/uhm/uhm.env</code> (generado y gestionado por <code>uhmsetup.sh</code>). Para reconfigurar, edite <code>uhm.env</code> directamente o vuelva a correr <code>uhmsetup.sh</code>.
       <br><br>
-      ⚠️ <b>ADVERTENCIA:</b> <code>uhmleases.sh</code> y <code>pyleases.sh</code> reconstruyen completamente el mismo <code>/etc/pydhcp/pydhcpd.conf</code> a partir de fuentes ACL en cada ejecución. Son <b>mutuamente excluyentes</b> en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía <code>uhmreload.sh</code>) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de <code>uhmleases.sh</code>, o cualquier cambio hecho mediante <code>pyleases.sh</code>). Si instala <code>uhm</code>, use exclusivamente <code>uhmleases.sh</code> y no ejecute <code>pyleases.sh</code> en el mismo host.
+      ⚠️ <b>ADVERTENCIA:</b> <code>uhmleases.sh</code> y <code>pyleases.sh</code> reconstruyen completamente el mismo <code>/etc/pydhcp/pydhcpd.conf</code> a partir de fuentes ACL en cada ejecución. Son <b>mutuamente excluyentes</b> en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía <code>uhmreload.sh</code>) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de <code>uhmleases.sh</code>, o cualquier cambio hecho mediante <code>pyleases.sh</code>). Si instala <code>UHM</code>, use exclusivamente <code>uhmleases.sh</code> y no ejecute <code>pyleases.sh</code> en el mismo host.
     </td>
   </tr>
 </table>
@@ -1201,11 +1237,11 @@ Every list ends up validated by `uhmleases.sh::normalize_acl_lists()` on every r
 
 | List | Owned by | Before the final gate (every daemon cycle) | Antes de la verificación final (cada ciclo del daemon) |
 |---|---|---|---|
-| `mac-*.txt` | pydhcp (external) | Never rewritten by uhm at all -- a malformed line only ever surfaces at the final gate | uhm nunca la reescribe -- una línea malformada solo aparece en la verificación final |
+| `mac-*.txt` | pydhcp (external) | Never rewritten by UHM at all -- a malformed line only ever surfaces at the final gate | UHM nunca la reescribe -- una línea malformada solo aparece en la verificación final |
 | `blockdhcp.txt` | pydhcp/iptables (external) | `uhmd.sh`'s dedup step recovers the line if MAC/IP/hostname can still be parsed out validly (e.g. a missing trailing `;`); otherwise discards it with a WARNING instead of writing it back broken | El paso dedup de `uhmd.sh` recupera la línea si el MAC/IP/hostname aún se pueden extraer válidos (ej. falta el `;` final); si no, la descarta con un WARNING en vez de reescribirla rota |
-| `uhm-auth.txt` | uhm (own) | `uhmd.sh`'s expire step keeps a line with a malformed `END_TIME_EPOCH` exactly as-is (WARNING only) -- erring toward not revoking a real client | El paso expire de `uhmd.sh` conserva tal cual una línea con `END_TIME_EPOCH` malformado (solo WARNING) -- prefiere no revocar por error a un cliente real |
-| `uhm-grace.txt` | uhm (own) | `uhmleases.sh`'s own expire step discards a malformed line (WARNING) instead of keeping it -- safe because the entry is self-healing, the client gets a fresh valid line on its next lease | El propio paso expire de `uhmleases.sh` descarta una línea malformada (WARNING) en vez de conservarla -- es seguro porque la entrada se autorrepara, el cliente obtiene una línea válida nueva en su próximo lease |
-| lease removal queue | uhm (own, internal) | uhm only ever appends MACs it already validated itself -- a malformed line here can only come from an external edit | uhm solo agrega MACs que ya validó él mismo -- una línea malformada acá solo puede venir de una edición externa |
+| `uhm-auth.txt` | UHM (own) | `uhmd.sh`'s expire step keeps a line with a malformed `END_TIME_EPOCH` exactly as-is (WARNING only) -- erring toward not revoking a real client | El paso expire de `uhmd.sh` conserva tal cual una línea con `END_TIME_EPOCH` malformado (solo WARNING) -- prefiere no revocar por error a un cliente real |
+| `uhm-grace.txt` | UHM (own) | `uhmleases.sh`'s own expire step discards a malformed line (WARNING) instead of keeping it -- safe because the entry is self-healing, the client gets a fresh valid line on its next lease | El propio paso expire de `uhmleases.sh` descarta una línea malformada (WARNING) en vez de conservarla -- es seguro porque la entrada se autorrepara, el cliente obtiene una línea válida nueva en su próximo lease |
+| lease removal queue | UHM (own, internal) | UHM only ever appends MACs it already validated itself -- a malformed line here can only come from an external edit | UHM solo agrega MACs que ya validó él mismo -- una línea malformada acá solo puede venir de una edición externa |
 
 #### Access model: which lists authorize anything
 
@@ -1250,11 +1286,11 @@ Losing a genuinely unrecoverable line is never a security gap, only a MAC that g
 | `UHM_PATH` | /etc/uhm | Hotspot working directory | Directorio de trabajo del hotspot |
 | `ACL_MAC_PROXY` | *(from pydhcp.env)* | Proxy-forced clients | Clientes forzados por proxy |
 | `ACL_MAC_UNLIMITED` | *(from pydhcp.env)* | Unrestricted clients | Clientes sin restricciones |
-| `UHM_MACAUTH` | /etc/uhm/acl/uhm-auth.txt | Hotspot authorized -- uhm's own | Autorizados del hotspot -- propia de uhm |
+| `UHM_MACAUTH` | /etc/uhm/acl/uhm-auth.txt | Hotspot authorized -- UHM's own | Autorizados del hotspot -- propia de UHM |
 | `ACL_BLOCK_FILE` | *(from pydhcp.env)* | Blocked clients | Clientes bloqueados |
-| `UHM_GRACE` | /etc/uhm/acl/uhm-grace.txt | Grace period clients -- uhm's own | Clientes en período de gracia -- propia de uhm |
+| `UHM_GRACE` | /etc/uhm/acl/uhm-grace.txt | Grace period clients -- UHM's own | Clientes en período de gracia -- propia de UHM |
 | `BLOCKDHCP_GRACE_SECONDS` | 86400 | Grace period duration (seconds, 24h) | Duración del período de gracia (segundos, 24h) |
-| *(derived)* | `AUTHORIZED_LEASE_TIME` / 60 | `authorize-guest` duration in minutes for `mac-*.txt` MACs UniFi reports unauthorized -- taken from pydhcp's own lease time, not a separate uhm value | Duración de `authorize-guest` en minutos para MACs de `mac-*.txt` que UniFi reporta sin autorizar -- tomada del propio lease time de pydhcp, no es un valor aparte de uhm |
+| *(derived)* | `AUTHORIZED_LEASE_TIME` / 60 | `authorize-guest` duration in minutes for `mac-*.txt` MACs UniFi reports unauthorized -- taken from pydhcp's own lease time, not a separate UHM value | Duración de `authorize-guest` en minutos para MACs de `mac-*.txt` que UniFi reporta sin autorizar -- tomada del propio lease time de pydhcp, no es un valor aparte de UHM |
 | `CLEANUP_INTERVAL` | *(from pydhcp.env)* | Cleanup frequency and pool lease time (seconds) | Frecuencia de limpieza y tiempo de lease del pool (segundos) |
 | `AUTHORIZED_LEASE_TIME` | *(from pydhcp.env)* | Lease duration for authorized clients (30 days) | Duración del lease para clientes autorizados (30 días) |
 | `QUARANTINE_DURATION` | *(from pydhcp.env)* | Seconds an IP is held out of the pool after a DHCPDECLINE or a `ping-check` conflict, written into `pydhcpd.conf` as `abandon-lease-time` (default `60`) | Segundos que una IP se aparta del pool tras un DHCPDECLINE o un conflicto de `ping-check`, escrito en `pydhcpd.conf` como `abandon-lease-time` (default `60`) |
@@ -1276,7 +1312,6 @@ Losing a genuinely unrecoverable line is never a security gap, only a MAC that g
 | `abandon-lease-time N;` | Seconds an IP is held out of the pool after a DHCPDECLINE or `ping-check` conflict (controlled via `QUARANTINE_DURATION` in `uhm.env`) | Segundos que una IP se aparta del pool tras un DHCPDECLINE o un conflicto de `ping-check` (controlado via `QUARANTINE_DURATION` en `uhm.env`) |
 | `server-identifier IP;` | IP the server uses to identify itself in DHCP replies | IP con la que el servidor se identifica en las respuestas DHCP |
 | `deny duplicates;` | Reject requests from a MAC that already holds a lease | Rechaza solicitudes de una MAC que ya tiene un lease |
-| `one-lease-per-client true;` | Release old lease before assigning a new one to the same MAC | Libera el lease anterior antes de asignar uno nuevo a la misma MAC |
 | `deny declines;` | Ignore DHCPDECLINE messages | Ignora mensajes DHCPDECLINE |
 | `ping-check true\|false;` | Ping IP before OFFER to detect conflicts (controlled via `PING_CHECK_ENABLED` in `uhm.env`) | Ping a la IP antes del OFFER para detectar conflictos (controlado via `PING_CHECK_ENABLED` en `uhm.env`) |
 | `ping-timeout N;` | Seconds to wait for the ICMP reply before giving up and sending the OFFER (controlled via `PING_TIMEOUT_SECONDS` in `uhm.env`); default `1` | Segundos a esperar la respuesta ICMP antes de desistir y enviar el OFFER (controlado via `PING_TIMEOUT_SECONDS` en `uhm.env`); default `1` |
@@ -1340,19 +1375,13 @@ Losing a genuinely unrecoverable line is never a security gap, only a MAC that g
 2026-07-18 20:32:50 ACL configuration error detected -- aborting
 ```
 
-Desktop notification sent for any of the three cases above / Notificación de escritorio enviada para cualquiera de los tres casos anteriores:
-
-| Title / Título | Body / Cuerpo |
-|---|---|
-| `Warning: Abort` | `ACL configuration error. Check /var/log/uhm.log` |
-
 ## TOOLS
 
 ---
 
-> **Independent, optional utilities — uhm runs fine without any of these.** See [CORE](#core) above for the reload mechanism itself.
+> **Independent, optional utilities — UHM runs fine without any of these.** See [CORE](#core) above for the reload mechanism itself.
 >
-> **Utilidades independientes y opcionales — uhm funciona igual sin ninguna de estas.** Ver [CORE](#core) arriba para el mecanismo de reload en sí.
+> **Utilidades independientes y opcionales — UHM funciona igual sin ninguna de estas.** Ver [CORE](#core) arriba para el mecanismo de reload en sí.
 
 ### uhmaudit
 
@@ -1429,10 +1458,10 @@ AVAILABLE ACTIONS
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmcheck.sh</b> -- Interactive diagnostic tool that verifies the presence and consistency of MAC addresses across every DHCP/ACL data source used by <code>pydhcpd</code> and <code>uhm</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>acl_mac/*.txt</code>, <code>pydhcpd.leases</code> and (options 1 and 5) the UniFi controller's <code>stat/sta</code>/<code>stat/guest</code>. Launched with no arguments, it presents a menu with five operations:
+      <b>uhmcheck.sh</b> -- Interactive diagnostic tool that verifies the presence and consistency of MAC addresses across every DHCP/ACL data source used by <code>pydhcpd</code> and <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>acl_mac/*.txt</code>, <code>pydhcpd.leases</code> and (options 1 and 5) the UniFi controller's <code>stat/sta</code>/<code>stat/guest</code>. Launched with no arguments, it presents a menu with five operations:
       <ul>
         <li><b>Check MAC</b> -- inspect a single MAC across all local data sources and flag contradictory states (e.g. a MAC present in both <code>blockdhcp</code> and <code>acl_mac</code>). When the MAC is in the grace period, it also prints the remaining time before promotion to <code>blockdhcp</code>. Also queries UniFi live for that MAC's <code>essid</code>, <code>authorized</code> and <code>is_guest</code> flags (plus <code>voucher_code</code> from <code>stat/guest</code> if present) -- this is the only reliable way to see whether the AP is actually holding the client at the captive portal, since a MAC can be fully correct across every local ACL file above and still be held there if UniFi itself reports <code>authorized=false</code> on a Guest-type WLAN (example output below)</li>
-        <li><b>Grace period status</b> -- list every MAC currently in <code>uhm-grace.txt</code> with IP, hostname and time remaining, colored by urgency (red &lt; 2 h, yellow &lt; 6 h, green otherwise).</li>
+        <li><b>Grace period status</b> -- list every MAC currently in <code>uhm-grace.txt</code> with IP, hostname and time remaining, plus a total/expired/active count. Output is plain text with bold headers only, no color, so it stays legible on light and dark terminals.</li>
         <li><b>Consistency check + system summary</b> -- iterate over every MAC found in any source, print only those that violate a consistency rule, and finish with a per-state population summary (grace, blocked, ACL permanent, hotspot, active leases, total warnings).</li>
         <li><b>Search by IP or hostname</b> -- resolve an IP or hostname to its MAC(s) by scanning all sources, then run the full per-MAC consistency check on each match.</li>
         <li><b>UniFi: unauthorized clients on the ESSID</b> -- query the UniFi controller's <code>stat/sta</code> endpoint and list clients connected to the configured hotspot ESSID that UniFi has not authorized.</li>
@@ -1440,10 +1469,10 @@ AVAILABLE ACTIONS
       Exits <code>0</code> on normal termination, <code>2</code> if not run as root. Requires root because the underlying files are owned by <code>root</code>/<code>pydhcpd</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmcheck.sh</b> -- Herramienta interactiva de diagnostico que verifica la presencia y consistencia de direcciones MAC en todas las fuentes de datos DHCP/ACL usadas por <code>pydhcpd</code> y <code>uhm</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>acl_mac/*.txt</code>, <code>pydhcpd.leases</code> y (opciones 1 y 5) el <code>stat/sta</code>/<code>stat/guest</code> del controlador UniFi. Lanzada sin argumentos, presenta un menu con cinco operaciones:
+      <b>uhmcheck.sh</b> -- Herramienta interactiva de diagnostico que verifica la presencia y consistencia de direcciones MAC en todas las fuentes de datos DHCP/ACL usadas por <code>pydhcpd</code> y <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>acl_mac/*.txt</code>, <code>pydhcpd.leases</code> y (opciones 1 y 5) el <code>stat/sta</code>/<code>stat/guest</code> del controlador UniFi. Lanzada sin argumentos, presenta un menu con cinco operaciones:
       <ul>
         <li><b>Check MAC</b> -- inspecciona una sola MAC en todas las fuentes locales y marca estados contradictorios (ej. una MAC presente en <code>blockdhcp</code> y <code>acl_mac</code> al mismo tiempo). Si la MAC esta en periodo de gracia, tambien imprime el tiempo restante antes de promocion a <code>blockdhcp</code>. Tambien consulta en vivo a UniFi los flags <code>essid</code>, <code>authorized</code> e <code>is_guest</code> de esa MAC (mas <code>voucher_code</code> de <code>stat/guest</code> si existe) -- es la unica forma confiable de saber si el AP realmente esta reteniendo al cliente en el portal cautivo, ya que una MAC puede estar perfectamente correcta en todos los archivos ACL locales de arriba y aun asi quedar retenida si UniFi mismo reporta <code>authorized=false</code> en una WLAN tipo Guest (ejemplo de salida abajo)</li>
-        <li><b>Grace period status</b> -- lista cada MAC actualmente en <code>uhm-grace.txt</code> con IP, hostname y tiempo restante, coloreado por urgencia (rojo &lt; 2 h, amarillo &lt; 6 h, verde en otro caso).</li>
+        <li><b>Grace period status</b> -- lista cada MAC actualmente en <code>uhm-grace.txt</code> con IP, hostname y tiempo restante, más un conteo total/expiradas/activas. La salida es texto plano con encabezados en negrita solamente, sin color, para que siga siendo legible en terminales claras y oscuras.</li>
         <li><b>Consistency check + system summary</b> -- itera sobre cada MAC encontrada en cualquier fuente, imprime solo las que violan alguna regla de consistencia, y termina con un resumen por estado (gracia, bloqueadas, ACL permanente, hotspot, leases activos, total de advertencias).</li>
         <li><b>Search by IP or hostname</b> -- resuelve una IP o hostname a su(s) MAC(s) escaneando todas las fuentes, y luego corre el check completo de consistencia por cada coincidencia.</li>
         <li><b>UniFi: unauthorized clients on the ESSID</b> -- consulta el endpoint <code>stat/sta</code> del controlador UniFi y lista los clientes conectados al ESSID configurado del hotspot que UniFi no ha autorizado.</li>
@@ -1489,7 +1518,7 @@ sudo bash /etc/uhm/tools/uhmcheck.sh
 ```text
 Select option [1-6]: 1
 
-  Enter MAC address (XX:XX:XX:XX:XX:XX): 02:00:00:aa:bb:01
+  Enter MAC address (XX:XX:XX:XX:XX:XX, empty to cancel): 02:00:00:aa:bb:01
 === 02:00:00:aa:bb:01 ===
   uhm-auth.txt:   N
   uhm-grace.txt:     Y
@@ -1507,7 +1536,7 @@ Same option, this time for a managed (`mac-*.txt`) device -- the UniFi query is 
 ```text
 Select option [1-6]: 1
 
-  Enter MAC address (XX:XX:XX:XX:XX:XX): 02:00:00:aa:bb:99
+  Enter MAC address (XX:XX:XX:XX:XX:XX, empty to cancel): 02:00:00:aa:bb:99
 === 02:00:00:aa:bb:99 ===
   uhm-auth.txt:   N
   uhm-grace.txt:     N
@@ -1622,7 +1651,7 @@ sudo /etc/uhm/tools/uhmalert.sh install
 
 ```text
 ==================================
-Installing uhmalert (uhm alert)
+Installing uhmalert (UHM alert)
 ==================================
 
 Added UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD and
@@ -1704,12 +1733,12 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The first <code>HTTP 502</code> (proxy up, backend not yet) followed immediately by <code>HTTP 000</code> on every subsequent request (connection itself unreachable) is the fingerprint of a UniFi OS controller restart, not a network/firewall problem on the <code>uhm</code> side — worth checking the controller's own system log for that window if it happens outside a planned update.
+      The first <code>HTTP 502</code> (proxy up, backend not yet) followed immediately by <code>HTTP 000</code> on every subsequent request (connection itself unreachable) is the fingerprint of a UniFi OS controller restart, not a network/firewall problem on the <code>UHM</code> side — worth checking the controller's own system log for that window if it happens outside a planned update.
       <br><br>
       A <b>server reboot</b> shows a different, unrelated-looking pattern instead — quiet <code>INFO</code>-level login retries while UniFi OS is still booting, followed by a login success, followed by a few data-endpoint failures before the backend settles — with no alert firing, since <code>uhmalert.sh</code> is also inside its own startup grace window at that point. See <a href="#uhmd">uhmd</a> above for that log sequence in full.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El primer <code>HTTP 502</code> (proxy activo, backend aún no) seguido de inmediato por <code>HTTP 000</code> en cada petición posterior (la conexión misma es inalcanzable) es la firma de un reinicio del controlador UniFi OS, no un problema de red/firewall del lado de <code>uhm</code> — vale la pena revisar el log propio del sistema del controlador en esa ventana si ocurre fuera de una actualización planificada.
+      El primer <code>HTTP 502</code> (proxy activo, backend aún no) seguido de inmediato por <code>HTTP 000</code> en cada petición posterior (la conexión misma es inalcanzable) es la firma de un reinicio del controlador UniFi OS, no un problema de red/firewall del lado de <code>UHM</code> — vale la pena revisar el log propio del sistema del controlador en esa ventana si ocurre fuera de una actualización planificada.
       <br><br>
       Un <b>reinicio del servidor</b> muestra un patrón distinto y aparentemente no relacionado — reintentos de login silenciosos en nivel <code>INFO</code> mientras UniFi OS todavía está arrancando, seguidos de un login exitoso, seguidos de algunos fallos en los endpoints de datos antes de que el backend se asiente — sin que se dispare ninguna alerta, ya que <code>uhmalert.sh</code> también está dentro de su propia ventana de gracia de arranque en ese momento. Ver <a href="#uhmd">uhmd</a> arriba para esa secuencia de log completa.
     </td>
@@ -1733,16 +1762,16 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> is a <b>mandatory</b>, standalone services watchdog — installed automatically by <code>uhmsetup.sh</code>, not offered as a yes/no prompt like <code>uhmalert</code>/<code>uhmmon</code>. Every unit it watches already has its own systemd <code>Restart=</code> policy, but that alone gives up permanently once its <code>StartLimitBurst</code> is exhausted, with no further attempt and no alert of its own (see below). <code>uhmwatch</code> is the last line of defense against that — it runs every minute, independent of whatever state systemd itself gave up in, so <code>uhm</code>'s essential services don't stay down indefinitely just because systemd stopped trying. Checks every service <code>uhm</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), <code>pydhcpd.service</code> (always -- external dependency uhm cannot function without, watched here since pydhcp's own <code>Restart=on-failure</code> gives up silently after its burst with no alerting of its own), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run. Each recovery attempt runs <code>systemctl reset-failed</code> right before <code>start</code>/<code>restart</code> — every unit already carries its own <code>Restart=</code> policy with a <code>StartLimitBurst</code>, and once that burst is exhausted systemd stops trying on its own and stays quiet about it, which would otherwise make this watchdog's own restart attempt fail silently right when it's needed most. To avoid then hammering a persistently broken service every single minute, each restart attempt (successful or not) is timestamped per-service under <code>/run/uhmwatch/</code> (cleared on reboot), and a new attempt is skipped — logged only, not acted on — until <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) has passed since the last one.
+      <b>uhmwatch.sh</b> is a <b>mandatory</b>, standalone services watchdog — installed automatically by <code>uhmsetup.sh</code>, not offered as a yes/no prompt like <code>uhmalert</code>/<code>uhmmon</code>. Every unit it watches already has its own systemd <code>Restart=</code> policy, but that alone gives up permanently once its <code>StartLimitBurst</code> is exhausted, with no further attempt and no alert of its own (see below). <code>uhmwatch</code> is the last line of defense against that — it runs every minute, independent of whatever state systemd itself gave up in, so <code>UHM</code>'s essential services don't stay down indefinitely just because systemd stopped trying. Checks every service <code>UHM</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), <code>pydhcpd.service</code> (always -- external dependency UHM cannot function without, watched here since pydhcp's own <code>Restart=on-failure</code> gives up silently after its burst with no alerting of its own), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run. Each recovery attempt runs <code>systemctl reset-failed</code> right before <code>start</code>/<code>restart</code> — every unit already carries its own <code>Restart=</code> policy with a <code>StartLimitBurst</code>, and once that burst is exhausted systemd stops trying on its own and stays quiet about it, which would otherwise make this watchdog's own restart attempt fail silently right when it's needed most. To avoid then hammering a persistently broken service every single minute, each restart attempt (successful or not) is timestamped per-service under <code>/run/uhmwatch/</code> (cleared on reboot), and a new attempt is skipped — logged only, not acted on — until <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) has passed since the last one.
       <br><br>
-      Standalone — never reads or modifies <code>uhmd.sh</code>, only manages services via <code>systemctl</code>. Writes to the same shared <code>/var/log/uhm.log</code> as the rest of <code>uhm</code> (no separate log file or logrotate of its own). Silent on a healthy run — nothing is logged unless a check finds a problem or takes a fix action.
+      Standalone — never reads or modifies <code>uhmd.sh</code>, only manages services via <code>systemctl</code>. Writes to the same shared <code>/var/log/uhm.log</code> as the rest of <code>UHM</code> (no separate log file or logrotate of its own). Silent on a healthy run — nothing is logged unless a check finds a problem or takes a fix action.
       <br><br>
       The <code>pydhcpd.service</code> check specifically skips its "OFFLINE" verdict (no WARNING, no restart) if <code>uhmleases.sh</code> currently holds the same cycle lock <code>uhmd.sh</code> uses (<code>/var/lock/uhmd-cycle.lock</code>) — a normal reload stops/reconfigures/starts <code>pydhcpd</code> itself for a few seconds, and a cron tick landing in that window would otherwise "fix" a service that isn't actually broken, restarting it out from under <code>uhmleases.sh</code>'s own pending restart and aborting that reload.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> es un vigilante de servicios <b>obligatorio</b> e independiente — se instala automáticamente con <code>uhmsetup.sh</code>, no se ofrece como pregunta sí/no como <code>uhmalert</code>/<code>uhmmon</code>. Cada unidad que vigila ya tiene su propia política <code>Restart=</code> de systemd, pero eso solo se rinde para siempre en cuanto agota su <code>StartLimitBurst</code>, sin más intentos y sin aviso propio (ver más abajo). <code>uhmwatch</code> es la última línea de defensa contra eso — corre cada minuto, independiente del estado en que systemd se haya rendido, para que los servicios esenciales de <code>uhm</code> no queden caídos indefinidamente solo porque systemd dejó de intentarlo. Verifica cada servicio del que depende <code>uhm</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), <code>pydhcpd.service</code> (siempre -- dependencia externa sin la cual uhm no puede funcionar, vigilada acá porque el propio <code>Restart=on-failure</code> de pydhcp se rinde en silencio tras agotar su cupo, sin ningún aviso propio), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida. Cada intento de recuperación corre <code>systemctl reset-failed</code> justo antes de <code>start</code>/<code>restart</code> — cada unidad ya trae su propia política <code>Restart=</code> con un <code>StartLimitBurst</code>, y una vez agotado ese cupo systemd deja de reintentar por su cuenta y no avisa — lo que de otro modo haría fallar en silencio el intento de este vigilante justo cuando más se lo necesita. Para no machacar después con un restart cada minuto a un servicio persistentemente roto, cada intento de recuperación (exitoso o no) queda con marca de tiempo por servicio bajo <code>/run/uhmwatch/</code> (se limpia en cada reinicio), y un nuevo intento se salta -- solo se loguea, no se actúa -- hasta que pasen <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) desde el último.
+      <b>uhmwatch.sh</b> es un vigilante de servicios <b>obligatorio</b> e independiente — se instala automáticamente con <code>uhmsetup.sh</code>, no se ofrece como pregunta sí/no como <code>uhmalert</code>/<code>uhmmon</code>. Cada unidad que vigila ya tiene su propia política <code>Restart=</code> de systemd, pero eso solo se rinde para siempre en cuanto agota su <code>StartLimitBurst</code>, sin más intentos y sin aviso propio (ver más abajo). <code>uhmwatch</code> es la última línea de defensa contra eso — corre cada minuto, independiente del estado en que systemd se haya rendido, para que los servicios esenciales de <code>UHM</code> no queden caídos indefinidamente solo porque systemd dejó de intentarlo. Verifica cada servicio del que depende <code>UHM</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), <code>pydhcpd.service</code> (siempre -- dependencia externa sin la cual UHM no puede funcionar, vigilada acá porque el propio <code>Restart=on-failure</code> de pydhcp se rinde en silencio tras agotar su cupo, sin ningún aviso propio), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida. Cada intento de recuperación corre <code>systemctl reset-failed</code> justo antes de <code>start</code>/<code>restart</code> — cada unidad ya trae su propia política <code>Restart=</code> con un <code>StartLimitBurst</code>, y una vez agotado ese cupo systemd deja de reintentar por su cuenta y no avisa — lo que de otro modo haría fallar en silencio el intento de este vigilante justo cuando más se lo necesita. Para no machacar después con un restart cada minuto a un servicio persistentemente roto, cada intento de recuperación (exitoso o no) queda con marca de tiempo por servicio bajo <code>/run/uhmwatch/</code> (se limpia en cada reinicio), y un nuevo intento se salta -- solo se loguea, no se actúa -- hasta que pasen <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) desde el último.
       <br><br>
-      Independiente — nunca lee ni modifica <code>uhmd.sh</code>, solo gestiona servicios vía <code>systemctl</code>. Escribe al mismo <code>/var/log/uhm.log</code> compartido con el resto de <code>uhm</code> (sin log ni logrotate propio). Silencioso en una corrida sana — no registra nada salvo que un chequeo encuentre un problema o tome una acción de reparación.
+      Independiente — nunca lee ni modifica <code>uhmd.sh</code>, solo gestiona servicios vía <code>systemctl</code>. Escribe al mismo <code>/var/log/uhm.log</code> compartido con el resto de <code>UHM</code> (sin log ni logrotate propio). Silencioso en una corrida sana — no registra nada salvo que un chequeo encuentre un problema o tome una acción de reparación.
       <br><br>
       El chequeo de <code>pydhcpd.service</code> específicamente se salta el veredicto "OFFLINE" (sin WARNING, sin restart) si <code>uhmleases.sh</code> tiene tomado en ese momento el mismo lock de ciclo que usa <code>uhmd.sh</code> (<code>/var/lock/uhmd-cycle.lock</code>) — un reload normal detiene/reconfigura/arranca <code>pydhcpd</code> él mismo durante unos segundos, y una corrida de cron que caiga en esa ventana de otro modo "arreglaría" un servicio que no está realmente roto, reiniciándolo por debajo del restart que <code>uhmleases.sh</code> ya tenía pendiente y abortando ese reload.
     </td>
@@ -1757,7 +1786,7 @@ sudo /etc/uhm/core/uhmwatch.sh install
 
 ```text
 ==================================
-Installing uhmwatch (uhm services watchdog)
+Installing uhmwatch (UHM services watchdog)
 ==================================
 
 Deploying script to /etc/uhm/core/uhmwatch.sh...
@@ -1821,8 +1850,8 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 2026-07-31 23:59:04 ERROR: Could not log in to UniFi after 120s -- exiting
 
 # from uhmwatch.sh, on its next check:
-2026-07-31 23:59:15 WARNING: rate limited by controller (HTTP 429) -- too many login attempts, not a credentials problem
-2026-07-31 23:59:15 Stop uhmd + uhmwatch cron before restarting the controller -- see README, uhmwatch: Controller lockout
+2026-07-31 23:59:15 WARNING: rate limited (HTTP 429), not a credentials issue
+2026-07-31 23:59:15 Stop uhmd+uhmwatch cron before restarting (see README)
 ```
 
 <table>
@@ -1869,26 +1898,28 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. <code>uhmd</code> classifies every line as <code>INFO:</code>, <code>WARNING:</code>, or <code>ERROR:</code>; <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, and <code>uhmiptables.sh</code> only prefix genuine <code>WARNING:</code>/<code>ERROR:</code> conditions and otherwise log plain step messages — the Webmin viewer (<code>uhmmon.sh</code>) groups these unprefixed lines under a generic level so you can still tell "daemon-level event" apart from "reload-chain internals" at a glance. Each of the three sub-scripts announces its own boundaries with <code>"&lt;name&gt; start..."</code> / <code>"&lt;name&gt; done"</code> so you can tell which component produced which lines when several are nested in the same reload chain. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
+      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. Every component classifies every line as <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code>, or (for <code>uhmalert.sh</code>) <code>ALERT:</code> — including continuation lines, since a message split across two physical lines to respect the 80-column limit always carries the same level on both. The Webmin viewer (<code>uhmmon.sh</code>) groups the few genuinely level-less lines (the compact <code>field=value|field=value</code> counters, and each sub-script's own <code>"&lt;name&gt; start..."</code>/<code>"&lt;name&gt; done"</code> boundary markers) under a generic <code>RELOAD</code> level. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. <code>uhmd</code> clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code> o <code>ERROR:</code>; <code>uhmreload.sh</code>, <code>uhmleases.sh</code> y <code>uhmiptables.sh</code> solo prefijan condiciones reales de <code>WARNING:</code>/<code>ERROR:</code> y el resto queda como mensajes de paso sin prefijo — el visor de Webmin (<code>uhmmon.sh</code>) agrupa estas líneas sin prefijo bajo un nivel genérico, para poder distinguir de un vistazo "evento de nivel daemon" de "maquinaria interna del reload". Cada uno de los tres sub-scripts anuncia su propio inicio y cierre con <code>"&lt;nombre&gt; start..."</code> / <code>"&lt;nombre&gt; done"</code>, para poder identificar qué componente produjo cada línea cuando varios quedan anidados dentro de la misma cadena de reload. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
+      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. Cada componente clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code> o (en <code>uhmalert.sh</code>) <code>ALERT:</code> — incluidas las líneas de continuación, ya que un mensaje partido en dos líneas físicas por el límite de 80 columnas siempre lleva el mismo nivel en ambas. El visor de Webmin (<code>uhmmon.sh</code>) agrupa las pocas líneas genuinamente sin nivel (los contadores compactos <code>campo=valor|campo=valor</code>, y las marcas de inicio/cierre <code>"&lt;nombre&gt; start..."</code>/<code>"&lt;nombre&gt; done"</code> de cada sub-script) bajo un nivel genérico <code>RELOAD</code>. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
     </td>
   </tr>
 </table>
 
 ```text
 --------------------------------------------------------------------------------
-2026-07-01 06:47:35 INFO: New client 02:00:00:aa:bb:10 ip=192.168.0.231 hostname=no_name_fde07d34be -> uhm-grace.txt
-2026-07-01 06:47:35 INFO: process_new_leases -> added 1 new client(s) to uhm-grace.txt
+2026-07-01 06:47:35 INFO: New client 02:00:00:aa:bb:10 ip=192.168.0.231
+2026-07-01 06:47:35 INFO: hostname=no_name_fde07d34be -> grace
+2026-07-01 06:47:35 INFO: added 1 new client(s)
+2026-07-01 06:47:35 INFO: add to uhm-grace
 2026-07-01 06:47:35 INFO: uhm-grace.txt changed
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
 2026-07-01 06:47:35 uhmreload start...
 2026-07-01 06:47:35 uhmleases start...
-2026-07-01 06:47:36 expire_grace_entries: expired 02:00:00:aa:bb:11
-2026-07-01 06:47:36   (age=43346s) -> blockdhcp
-2026-07-01 06:47:36 expire_grace_entries: queued removal for 02:00:00:aa:bb:11
-2026-07-01 06:47:40 ACL: blockdhcp=67 | proxy=105 | unlimited=35 | hotspot=17 | grace=8
+2026-07-01 06:47:36 INFO: 02:00:00:aa:bb:11 expired (age=43346s)
+2026-07-01 06:47:36 INFO: add 02:00:00:aa:bb:11 to blockdhcp
+2026-07-01 06:47:36 INFO: queued removal for 02:00:00:aa:bb:11
+2026-07-01 06:47:40 blockdhcp=67|proxy=105|unlimited=35|hotspot=17|grace=8
 2026-07-01 06:47:40 uhmleases done at: Wed Jul  1 06:47:40 -05 2026
 2026-07-01 06:47:40 uhmiptables start...
 2026-07-01 06:47:42 uhmiptables done at: Wed Jul  1 06:47:42 -05 2026
@@ -1935,8 +1966,9 @@ No client connected, no voucher redeemed, no grace entry expired? The log betwee
 </table>
 
 ```text
-2026-07-01 06:47:36 expire_grace_entries: expired 02:00:00:aa:bb:11 (age=43346s) -> blockdhcp
-2026-07-01 06:47:36 expire_grace_entries: queued removal for 02:00:00:aa:bb:11
+2026-07-01 06:47:36 INFO: 02:00:00:aa:bb:11 expired (age=43346s)
+2026-07-01 06:47:36 INFO: add 02:00:00:aa:bb:11 to blockdhcp
+2026-07-01 06:47:36 INFO: queued removal for 02:00:00:aa:bb:11
 ```
 
 <table>
@@ -1972,7 +2004,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 
 | Note | Description | Descripción |
 |------|-----|-----|
-| **Synchronization** | `uhm` depends on correct synchronization between UniFi Network, the DHCP server, and the user-maintained firewall script. It is not guaranteed to work on every Linux system. | `uhm` depende de la correcta sincronización entre UniFi Network, el servidor DHCP y el script firewall que mantiene el usuario. No se garantiza su funcionamiento en todos los sistemas Linux. |
+| **Synchronization** | `UHM` depends on correct synchronization between UniFi Network, the DHCP server, and the user-maintained firewall script. It is not guaranteed to work on every Linux system. | `UHM` depende de la correcta sincronización entre UniFi Network, el servidor DHCP y el script firewall que mantiene el usuario. No se garantiza su funcionamiento en todos los sistemas Linux. |
 | **Lease queue** | The script queues lease removals for MACs it manages (via `uhm-queue.txt`). Actual removal is performed by `uhmleases.sh` during its safe DHCP stop→modify→start cycle. Leases for hotspot MACs are short-lived by design. `uhm-queue.txt`'s path comes from the `UHM_QUEUE` config variable; it is an internal working file consumed by both scripts, not an ACL — do not edit its contents manually. | El script encola remociones de leases para los MACs que gestiona (vía `uhm-queue.txt`). La remoción real la ejecuta `uhmleases.sh` durante su ciclo seguro de detener→modificar→arrancar DHCP. Los leases para MACs del hotspot son de corta vida por diseño. La ruta de `uhm-queue.txt` la fija la variable de configuración `UHM_QUEUE`; es un archivo de trabajo interno que consumen ambos scripts, no una ACL — no debe editarse su contenido manualmente. |
 | **Firewall scope** | Both `uhm-grace.txt` and `uhm-auth.txt` clients must be reachable via your DHCP server. Only `uhm-auth.txt` clients should be granted full Internet by your firewall; grace-period clients (`macgrace` ipset) should only reach the captive portal ports. | Los clientes de `uhm-grace.txt` y `uhm-auth.txt` deben ser alcanzables por su servidor DHCP. Solo `uhm-auth.txt` debe tener Internet completo vía firewall; los clientes en período de gracia (ipset `macgrace`) solo deben llegar a los puertos del portal cautivo. |
 | **Script header** | Read the script header before deploying — it documents the full flow and any newly added behavior. | Lea el header del script antes de desplegarlo — documenta el flujo completo y cualquier comportamiento recién añadido. |
@@ -2035,7 +2067,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 |------------|------------|-----|-----|
 | **`stat/guest` doesn't distinguish deleted vs. quota-exhausted vouchers** | **`stat/guest` no distingue vouchers eliminados de vouchers con cuota agotada** | When a voucher is deleted manually from the UniFi UI, `stat/guest` still retains session records tagged with that `voucher_code`, indistinguishable from a voucher whose quota simply ran out. This lets affected clients reconnect without re-entering a code. Reported to Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigated in `uhmaudit.sh` by **Revoke by voucher code** (action 4), which cleans `stat/guest`/`stat/sta` directly instead of relying on `stat/voucher` state. | Cuando un voucher se elimina manualmente desde la UI de UniFi, `stat/guest` sigue reteniendo registros de sesión con ese `voucher_code`, indistinguibles de un voucher cuya cuota simplemente se agotó. Esto permite que los clientes afectados se reconecten sin volver a ingresar un código. Reportado a Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigado en `uhmaudit.sh` mediante **Revoke by voucher code** (acción 4), que limpia `stat/guest`/`stat/sta` directamente sin depender del estado de `stat/voucher`. |
 | **`stat/voucher` has no historical record of expired vouchers** | **`stat/voucher` no tiene registro histórico de vouchers expirados** | UniFi does not retain a voucher in `stat/voucher` once it expires or its quota is fully consumed; the entry disappears entirely instead of being marked expired. Verified directly against a live controller: five vouchers confirmed issued and consumed via `/var/log/uhm.log` (`Authorized`/`Expired` lines) returned zero matches when queried by code against `stat/voucher` after expiry. As a result, `uhmaudit.sh`'s Vouchers section and **Delete expired vouchers** (action 3) can only ever act on what the controller still tracks at query time — they cannot produce a historical report of all vouchers ever issued. The only durable record of past voucher activity is `/var/log/uhm.log`. | UniFi no retiene un voucher en `stat/voucher` una vez que expira o su cuota se consume por completo; la entrada desaparece por completo en vez de marcarse como expirada. Verificado directamente contra un controlador en vivo: cinco vouchers confirmados como emitidos y consumidos vía `/var/log/uhm.log` (líneas `Authorized`/`Expired`) devolvieron cero coincidencias al consultarlos por código contra `stat/voucher` después de expirar. Como consecuencia, la sección Vouchers de `uhmaudit.sh` y **Delete expired vouchers** (acción 3) solo pueden actuar sobre lo que el controlador todavía rastrea al momento de la consulta — no pueden producir un reporte histórico de todos los vouchers emitidos alguna vez. El único registro duradero de actividad histórica de vouchers es `/var/log/uhm.log`. |
-| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; both log lines are written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick` / `e8:6f:38:7a:aa:bb (HTTP 400)` followed by `WARNING: kick_newly_authorized: client may keep its stale IP` / `until its own DHCP renewal` (each logged as two lines, per the 80-column limit on log messages). The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; ambas líneas de log las escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `WARNING: kick_newly_authorized: failed to kick` / `e8:6f:38:7a:aa:bb (HTTP 400)` seguido de `WARNING: kick_newly_authorized: client may keep its stale IP` / `until its own DHCP renewal` (cada uno logueado en dos líneas, por el límite de 80 columnas en mensajes de log). El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
+| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; both log lines are written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `WARNING: failed to kick` / `WARNING: 02:00:00:aa:bb:20 (HTTP 400)` followed by `WARNING: client may keep its stale IP` / `WARNING: until its own DHCP renewal` (each logged as two lines, per the 80-column limit on log messages). The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; ambas líneas de log las escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `WARNING: failed to kick` / `WARNING: 02:00:00:aa:bb:20 (HTTP 400)` seguido de `WARNING: client may keep its stale IP` / `WARNING: until its own DHCP renewal` (cada uno logueado en dos líneas, por el límite de 80 columnas en mensajes de log). El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
 
 ### MongoDB - UniFi Controller Database
 
@@ -2113,8 +2145,8 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 
 | Content | Licensed Under |
 |---|---|
-|Scripts, Binaries, Infrastructure|[![GPL-3.0](https://img.shields.io/badge/Open_Core-GPLv3-blue.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](https://www.gnu.org/licenses/gpl.txt)|
-|RAG, Workers, Specialized Modules, Docs|[![CC](https://img.shields.io/badge/Core_Engine-CC_BY--NC--ND_4.0-lightgrey.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](https://creativecommons.org/licenses/by-nc-nd/4.0/)|
+|Scripts, Binaries, Infrastructure|[![GPL-3.0](https://img.shields.io/badge/Open_Core-GPLv3-blue.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](LICENSE)|
+|RAG, Workers, Specialized Modules, Docs|[![CC](https://img.shields.io/badge/Core_Engine-CC_BY--NC--ND_4.0-lightgrey.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](docs/LICENSE-CC-BY-NC-ND-4.0.md)|
 
 ## DISCLAIMER
 

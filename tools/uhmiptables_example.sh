@@ -3,6 +3,8 @@
 
 ################################################################################
 # THIS IS AN EXAMPLE SCRIPT -- DO NOT USE IN PRODUCTION
+# uhmsetup.sh never deploys, renames, or executes this file -- it exists
+# only as reference material for the administrator to copy from by hand.
 # Adapt interface names, IPs, and ACL paths to your environment.
 # See the full reference implementation and README at:
 # https://github.com/maravento/uhm
@@ -57,7 +59,7 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "Script $(basename "$0") is already running"
+    log "WARNING: script $(basename "$0") is already running"
     exit 1
 fi
 
@@ -468,7 +470,7 @@ iptables -A INPUT -i "$lan" -p tcp -m multiport --dports "$unifi_tcp" -j ACCEPT
 iptables -A INPUT -i "$lan" -p udp --dport "$unifi_udp_local" -j ACCEPT
 iptables -A FORWARD -i "$lan" -o "$wan" -p udp -m multiport --dports "$unifi_udp_wan" -j ACCEPT
 
-# Unifi Portal Acess
+# Unifi Portal Access
 # Optional https: 8843
 cpd_tcp="8880,8881,8882"
 
@@ -541,7 +543,7 @@ if [ -n "$mac2ip" ]; then
         [[ -n "$_m2i_ip" ]] && mac2ip_args+=("$_m2i_ip")
     done <<< "$mac2ip"
     create_acl "${mac2ip_args[@]}"
-    iptables -t mangle -N MACCHECK 2>/dev/null
+    iptables -t mangle -N MACCHECK 2>/dev/null || true
     iptables -t mangle -F MACCHECK
     iptables -t mangle -A PREROUTING -i "$lan" -j MACCHECK
     iptables -t mangle -A MACCHECK -m set --match-set macip src,src -j RETURN
@@ -558,7 +560,7 @@ if [ -n "$mac2ip" ]; then
     done
 else
     log "WARNING: No static DHCP entries found in $dhcp_conf"
-    log "  macip binding skipped"
+    log "WARNING: macip binding skipped"
 fi
 
 # MACUNLIMITED (MAC + IP for Access Points, Switch, etc.)
@@ -597,7 +599,7 @@ if [ -f "$hotspot_path/acl/uhm-auth.txt" ]; then
     done
 else
     log "WARNING: $hotspot_path/acl/uhm-auth.txt not found"
-    log "  skipping macports"
+    log "WARNING: skipping macports"
 fi
 
 # NTP
@@ -619,7 +621,7 @@ for chain in INPUT FORWARD; do
     iptables -A "$chain" -i "$lan" -p udp -m multiport --dports 5683,5684 -j DROP
 done
 # syncflood
-iptables -N syn_flood
+iptables -N syn_flood 2>/dev/null || true
 iptables -A INPUT -i "$wan" -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -j syn_flood
 iptables -A INPUT -i "$lan" -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -j syn_flood
 iptables -A FORWARD -i "$wan" -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -j syn_flood
@@ -671,7 +673,7 @@ iptables -A FORWARD -i "$lan" -o "$wan" -p icmp -j DROP
 
 ### MAC RULES ###
 
-# MACPROXY (PAC 18100 - Opcion 252 DHCP, HTTP 80 -> Squid intercept port)
+# MACPROXY (PAC 18100 - DHCP option 252, HTTP 80 -> Squid intercept port)
 if ! ipset list macproxy &>/dev/null; then
     ipset create macproxy hash:mac -exist
 else
@@ -685,7 +687,7 @@ iptables -t nat -A PREROUTING -i "$lan" -p tcp --dport 80 -m set --match-set mac
 iptables -A INPUT -i "$lan" -p tcp --dport "$squid_intercept_port" -m set --match-set macproxy src -m conntrack --ctstate DNAT -j ACCEPT
 iptables -A INPUT -i "$lan" -p tcp -m multiport --dports 18100,$squid_port -m set --match-set macproxy src -j ACCEPT
 
-# MACHOTSPOT (PAC 18100 - Opcion 252 DHCP, HTTP 80 -> Squid intercept port)
+# MACHOTSPOT (PAC 18100 - DHCP option 252, HTTP 80 -> Squid intercept port)
 if ! ipset list machotspot &>/dev/null; then
     ipset create machotspot hash:mac -exist
 else
@@ -697,7 +699,7 @@ if [ -f "$hotspot_path/acl/uhm-auth.txt" ]; then
     done
 else
     log "WARNING: $hotspot_path/acl/uhm-auth.txt not found"
-    log "  skipping machotspot"
+    log "WARNING: skipping machotspot"
 fi
 # UNIFI PORTAL ACCESS + PAC (18100)
 iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set machotspot src -p tcp -m multiport --dports "$cpd_tcp,18100,80,$squid_port" -j ACCEPT

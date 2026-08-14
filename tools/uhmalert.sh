@@ -7,7 +7,7 @@
 #
 # DESCRIPTION:
 # Watches /var/log/uhm.log in real time and sends a push
-# notification via ntfy.sh on two kinds of events:
+# notification via ntfy.sh on three kinds of events:
 #
 # 1. Connectivity loss to the UniFi controller -- anchors on the
 # "Could not load vouchers" line, which uhmd.sh's
@@ -38,13 +38,18 @@
 # and "cycle lock held unexpectedly" (expected/already handled, see
 # uhmd.sh run_cycle() -- not a bug).
 #
+# 3. Any FIX: line -- written only by uhmwatch.sh when it successfully
+# recovers a service. Fires immediately, same as #2, and closes out
+# the WARNING alert that reported the problem in the first place.
+#
 # Standalone -- never reads or modifies uhmd.sh, only tails its log
 # file. Runs as its own systemd service (uhmalert.service), independent of
 # uhmd, so the daemon stays byte-identical to upstream. Optional:
 # uhmd.sh runs fine with or without uhmalert installed.
 #
 # DEPENDENCIES:
-# - bash, curl, GNU coreutils (date -d, tail -F) -- standard on Ubuntu/Debian
+# - bash, curl, mawk, grep, sed, util-linux (flock), GNU coreutils
+# (date -d, tail -F) -- standard on Ubuntu/Debian
 # - systemd (systemctl) -- only needed for `install`/`uninstall`
 # - uhmd.sh already installed and running (this reads its log; it
 # does not start or manage the daemon itself)
@@ -107,7 +112,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # DEPENDENCIES
-for dep in curl mawk coreutils util-linux systemd; do
+for dep in curl mawk coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -255,7 +260,7 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "Script $(basename "$0") is already running"
+    log "WARNING: script $(basename "$0") is already running"
     exit 1
 fi
 
@@ -273,9 +278,9 @@ _gdigit="${_perms: -2:1}"
 _odigit="${_perms: -1}"
 if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
     log "ERROR: $CONFIG_FILE has unsafe owner/permissions"
-    log "  (owner=$_owner perms=$_perms)"
+    log "ERROR: (owner=$_owner perms=$_perms)"
     log "ERROR: must be owned by root with no group/other access"
-    log "  (600)"
+    log "ERROR: (600)"
     exit 1
 fi
 # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
@@ -413,7 +418,7 @@ while true; do
             _now_epoch=$(date +%s)
             if [[ "$msg" == "$last_generic_msg" ]] && (( _now_epoch - last_generic_time < DEDUP_WINDOW )); then
                 log "INFO: suppressing repeated alert"
-                log "  (same message within ${DEDUP_WINDOW}s) -- $msg"
+                log "INFO: (same message within ${DEDUP_WINDOW}s) -- $msg"
                 continue
             fi
             last_generic_msg="$msg"
@@ -442,13 +447,13 @@ while true; do
             uhmd_start=$(uhmd_started_at)
             if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UHM_ALERT_QUIET_PERIOD )); then
                 log "INFO: $streak consecutive failures within uhmd startup grace"
-            log "  window (${UHM_ALERT_QUIET_PERIOD}s)"
+                log "INFO: window (${UHM_ALERT_QUIET_PERIOD}s)"
                 log "INFO: suppressing alert"
                 streak=0
             else
                 notify "uhm: $streak consecutive failed cycles reaching the controller (since $ts)"
                 log "ALERT: sent -- $streak consecutive cycle failures"
-            log "  latest at $ts"
+                log "ALERT: latest at $ts"
                 alerted=1
             fi
         fi

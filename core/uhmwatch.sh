@@ -122,7 +122,7 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "Script $(basename "$0") is already running"
+    log "WARNING: script $(basename "$0") is already running"
     exit 1
 fi
 
@@ -262,7 +262,7 @@ _UH_UINT='^(0|[1-9][0-9]*)$'
 RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
 if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
     log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid"
-    log "  ($RECOVERY_COOLDOWN_SECONDS) -- using default 600"
+    log "WARNING: ($RECOVERY_COOLDOWN_SECONDS) -- using default 600"
     RECOVERY_COOLDOWN_SECONDS=600
 fi
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
@@ -424,7 +424,7 @@ check_uosserver() {
     # process's argv (/proc/<pid>/cmdline).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
         log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set"
-        log "Skipping functional login check"
+        log "WARNING: skipping functional login check"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':11443\b'; then
             log "WARNING: UOS BROKEN_PORTS"
@@ -482,10 +482,10 @@ check_uosserver() {
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "Stop uhmd+uhmwatch cron before restarting (see README)"
+        log "WARNING: stop uhmd+uhmwatch cron before restarting (see README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
-        log "Check uhm.env - UOS itself is responding"
+        log "WARNING: check uhm.env - UOS itself is responding"
     fi
 }
 
@@ -513,7 +513,7 @@ check_unifi_classic() {
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
         log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set"
-        log "Skipping functional login check"
+        log "WARNING: skipping functional login check"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
             log "WARNING: UniFi (classic) BROKEN_PORTS"
@@ -571,10 +571,10 @@ check_unifi_classic() {
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "Stop uhmd+uhmwatch cron before restarting (see README)"
+        log "WARNING: stop uhmd+uhmwatch cron before restarting (see README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
-        log "Check uhm.env - unifi.service is responding"
+        log "WARNING: check uhm.env - unifi.service is responding"
     fi
 }
 

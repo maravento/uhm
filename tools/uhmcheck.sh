@@ -94,7 +94,7 @@ cleanup_temp() {
 trap cleanup_temp EXIT
 
 # DEPENDENCIES
-for dep in curl jq mawk coreutils util-linux ncurses-bin grep sed; do
+for dep in curl jq mawk coreutils util-linux ncurses-bin grep sed findutils; do
     if ! dpkg -s "$dep" &>/dev/null; then
         echo "ERROR: Required dependency '$dep' is not installed." >&2
         exit 1

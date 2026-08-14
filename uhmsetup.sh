@@ -59,6 +59,12 @@
 # pydhcp is not an apt package; install it from
 # https://github.com/maravento/pydhcp before running this script.
 #
+# Hard dependency NOT an apt package (aborts if missing/unreachable):
+# UniFi Network self-hosted or UniFi OS Server, installed and reachable on
+# this same host (classic on 8443, unifi-os on 11443). If neither is
+# installed yet, use unifisetup.sh to install it first:
+# https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh
+#
 # CONFIG FILE (uhm.env):
 # Written as pydhcp.env copied verbatim, followed by uhm's own block. A key
 # already present in pydhcp.env -- pydhcp's own, or one added there by
@@ -260,6 +266,7 @@ check_repo_files() {
     [[ -r "$REPO_SERVICE" ]] || abort "Missing $(basename "$REPO_SERVICE"). Run uhmsetup.sh from inside the cloned uhm repository."
     [[ -r "${REPO_CORE}/uhmreload.sh" ]] || abort "Missing core/uhmreload.sh. Run uhmsetup.sh from inside the cloned uhm repository."
     [[ -r "${REPO_CORE}/uhmleases.sh" ]] || abort "Missing core/uhmleases.sh. Run uhmsetup.sh from inside the cloned uhm repository."
+    [[ -r "${REPO_CORE}/uhmwatch.sh" ]] || abort "Missing core/uhmwatch.sh. Run uhmsetup.sh from inside the cloned uhm repository."
     [[ -d "$REPO_TOOLS" ]] || abort "Missing tools/ directory. Run uhmsetup.sh from inside the cloned uhm repository."
     [[ -d "$REPO_ACL" ]] || abort "Missing acl/ directory. Run uhmsetup.sh from inside the cloned uhm repository."
     info "Repo files located"
@@ -592,7 +599,7 @@ run_setup_wizard() {
         found_url="$DISCOVERED_URL"
         found_type="$DISCOVERED_TYPE"
     else
-        abort "No UniFi controller detected. Check the UniFi configuration (credentials, that it is running and reachable) and restart the installation."
+        abort "No UniFi controller detected. Check the UniFi configuration (credentials, that it is running and reachable) and restart the installation. If UniFi Network self-hosted / UniFi OS Server is not installed yet, use unifisetup.sh to install it (see README)."
     fi
 
     step "Hotspot SSID"
@@ -632,13 +639,16 @@ run_setup_wizard() {
             ;;
     esac
     if [[ -z "$detected_version" ]]; then
+        if [[ "$found_type" == "unifi-os" ]] && ! command -v podman &>/dev/null; then
+            abort "Could not detect the installed UniFi version: 'podman' is not available on this host, and it is required to query the uosserver container. Install podman (or check the UniFi OS Server installation) and retry. unifisetup.sh installs UniFi OS Server together with podman (see README)."
+        fi
         abort "Could not detect the installed UniFi version (type: ${found_type}). uhm only supports versions tested to date -- install aborted."
     fi
     if ! version_ge "$detected_version" "$min_version"; then
         abort "Detected UniFi version ${detected_version} (${found_type}) is below the minimum tested version ${min_version}. uhm only supports ${min_version} and above for this type -- install aborted."
     fi
     info "UniFi version ${detected_version} (${found_type}) meets minimum"
-        info "  tested version (${min_version})"
+    info "  tested version (${min_version})"
 
     step "TLS certificate pin"
     local CFG_CERT_PIN=""
@@ -1318,15 +1328,20 @@ main() {
             detect_dhcp_backend
             load_pydhcp_env
             do_install
+            log "uhmsetup done at: $(date)"
+            exit 0
             ;;
         --update|update)
             detect_local_user
             check_apt_deps
             detect_dhcp_backend
             do_update
+            log "uhmsetup done at: $(date)"
+            exit 0
             ;;
         --remove|remove|--uninstall|uninstall)
             do_remove
+            exit 0
             ;;
         *)
             err "Unknown option: $1"
@@ -1334,7 +1349,6 @@ main() {
             exit 1
             ;;
     esac
-    log "uhmsetup done at: $(date)"
 }
 
 main "$@"

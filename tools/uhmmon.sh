@@ -6,7 +6,7 @@
 # uhmmon - module installation/uninstallation script for Webmin
 #
 # Description:
-# This script installs or uninstalls the UniFi Hotspot Log Viewer module
+# This script installs or uninstalls the UHM Log Viewer module
 # for Webmin. Provides real-time log monitoring for the uhmd daemon
 # with live polling, filtering, and full-log search.
 #
@@ -70,7 +70,7 @@ ETCDIR="/etc/webmin/$MODNAME"
 install_module() {
     echo ""
     echo "=========================================="
-    echo "Installing UniFi Hotspot Log Viewer Module"
+    echo "Installing UHM Log Viewer Module"
     echo "=========================================="
     echo ""
 
@@ -183,7 +183,7 @@ if [[ "$action" == "grep" ]]; then
         [[ "$line" == -* ]] && continue
 
         ts="" level="" msg=""
-        if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR):\ (.*) ]]; then
+        if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT):\ (.*) ]]; then
             ts="${BASH_REMATCH[1]}"
             level="${BASH_REMATCH[2]}"
             msg="${BASH_REMATCH[3]}"
@@ -242,7 +242,7 @@ while IFS= read -r line; do
     [[ "$line" == -* ]] && continue
 
     ts="" level="" msg=""
-    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR):\ (.*) ]]; then
+    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT):\ (.*) ]]; then
         ts="${BASH_REMATCH[1]}"
         level="${BASH_REMATCH[2]}"
         msg="${BASH_REMATCH[3]}"
@@ -270,7 +270,7 @@ APICGI
     # ============================================================
     cat > "$MODDIR/index.cgi" <<'INDEXCGI'
 #!/usr/bin/perl
-# UniFi Hotspot Log Viewer -- Main interface
+# UHM Log Viewer -- Main interface
 use strict;
 use warnings;
 
@@ -442,7 +442,13 @@ print <<'HTMLBLOCK';
 .hl{background:var(--hl-bg);border-radius:2px;color:var(--hl-color)}
 .mc{color:var(--mc-color);font-weight:600}
 .ip{color:var(--ip-color)}
-.kw{color:var(--kw-color);font-weight:600}
+/* Colorblind-safe palette: blue = positive, amber = negative, grey = neutral -- never green/red. */
+.kw-ok{color:var(--mc-color);font-weight:600}
+.kw-w{color:var(--cap-color);font-weight:600}
+.kw-n{color:var(--ts-color);font-weight:600}
+.fld-ok{color:var(--kw-color);font-weight:600}
+.fld-w{color:var(--cap-color);font-weight:600}
+.fld-i{color:var(--mc-color);font-weight:600}
 .uh-empty{text-align:center;padding:50px 20px;color:var(--text3);background:var(--bg)}
 
 /* -- New rows banner ------------------------------------------ */
@@ -463,7 +469,7 @@ print <<'HTMLBLOCK';
     <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." onkeydown="if(event.key==='Enter')uhGS()">
     <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Search entire log file">Full log</button>
   </div>
-  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="RELOAD">RELOAD</option></select>
+  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="RELOAD">RELOAD</option></select>
   <select id="uhLn" onchange="uhRL()"><option value="200">Last 200</option><option value="500" selected>Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
   <select id="uhIv" onchange="uhCI()"><option value="1000">1s</option><option value="3000">3s</option><option value="5000" selected>5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
   <button class="uh-btn" onclick="uhRL()" title="Reload log">Reload</button>
@@ -507,7 +513,7 @@ try{if(localStorage.getItem('uh_dm')==='1'){dm=true;document.getElementById('uhm
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function hl(t,q){if(!q)return esc(t);try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return esc(t).replace(r,'<span class="hl">$1</span>')}catch(e){return esc(t)}}
-function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|unauthorized|expired|revoked|pending|skipping|reload|voucher|evicting|managed)\b/gi,'<span class="kw">$1</span>');return s}
+function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|proxy|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
 function mf(r){var lv=document.getElementById('uhLv').value;if(lv&&r.level!==lv)return false;var q=(document.getElementById('uhQ').value||'').toLowerCase().trim();if(!grep&&q&&r._i.indexOf(q)===-1)return false;return true}
 
@@ -537,7 +543,7 @@ function rt(q,an){
 function ucs(){
   var bar=document.getElementById('uhCB');
   for(var i=0;i<ALL.length;i++){
-    var m=ALL[i].msg.match(/vouchers=(\d+)\s*\|\s*authorized=(\d+)\s*\|\s*grace=(\d+)\s*\|\s*new_auth=(\d+)\s*\|\s*revoked=(\d+)/);
+    var m=ALL[i].msg.match(/vouchers=(\d+)\|auth=(\d+)\|grace=(\d+)\|new_auth=(\d+)\|revoked=(\d+)/);
     if(m){bar.innerHTML='<span class="uh-cp uh-cp-i">Vouchers '+m[1]+'</span><span class="uh-cp uh-cp-ok">Authorized '+m[2]+'</span><span class="uh-cp uh-cp-w">Grace '+m[3]+'</span><span class="uh-cp uh-cp-ok">New Auth '+m[4]+'</span><span class="uh-cp '+(parseInt(m[5])>0?'uh-cp-w':'uh-cp-d')+'">Revoked '+m[5]+'</span>';return}
   }
 }
@@ -615,7 +621,7 @@ INDEXCGI
     # 3. module.info
     # ============================================================
     cat > "$MODDIR/module.info" <<'EOF'
-desc=UniFi Hotspot Log Viewer
+desc=UHM Log Viewer
 longdesc=Real-time log viewer for the uhmd daemon
 category=net
 os_support=*-linux
@@ -636,7 +642,7 @@ EOF
     # 4. Language files
     # ============================================================
     cat > "$MODDIR/lang/en" <<'EOF'
-index_title=UniFi Hotspot Log Viewer
+index_title=UHM Log Viewer
 index=Webmin Index
 EOF
 
@@ -704,7 +710,7 @@ EOF
 
     echo ""
     echo "=========================================="
-    echo "UniFi Hotspot Log Viewer installed!"
+    echo "UHM Log Viewer installed!"
     echo "=========================================="
     echo ""
     echo "Module location: $MODDIR"
@@ -718,7 +724,7 @@ EOF
 uninstall_module() {
     echo ""
     echo "=========================================="
-    echo "Uninstalling UniFi Hotspot Log Viewer"
+    echo "Uninstalling UHM Log Viewer"
     echo "=========================================="
     echo ""
 
@@ -785,8 +791,8 @@ main() {
         show_menu
         read -r option
         case $option in
-            1) install_module; echo ""; read -p "Press Enter to continue..." ;;
-            2) uninstall_module; echo ""; read -p "Press Enter to continue..." ;;
+            1) install_module; echo ""; read -rp "Press Enter to continue..." _ ;;
+            2) uninstall_module; echo ""; read -rp "Press Enter to continue..." _ ;;
             3|"") echo ""; exit 0 ;;
             *) echo "Invalid option."; sleep 2 ;;
         esac
