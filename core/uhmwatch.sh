@@ -81,7 +81,8 @@
 # uhmwatch.sh -h, --help Show this help
 #
 # CONFIG: /etc/uhm/uhm.env (reads UNIFI_TYPE, UNIFI_CONTROLLER_URL,
-# UNIFI_USERNAME, UNIFI_PASSWORD)
+# UNIFI_USERNAME, UNIFI_PASSWORD, UNIFI_CERT_PIN,
+# RECOVERY_COOLDOWN_SECONDS)
 # LOG: /var/log/uhm.log (shared with the rest of uhm). Silent on
 # a healthy run -- nothing is written unless a check finds a problem
 # or takes a fix action (WARNING/FIX/ERROR only).
@@ -148,7 +149,7 @@ _uhm_reload_in_progress() {
 }
 
 # DEPENDENCIES
-for dep in curl jq iproute2 cron coreutils util-linux grep systemd; do
+for dep in curl jq mawk coreutils util-linux iproute2 cron grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -201,8 +202,7 @@ uninstall_module() {
     echo "Removing uhmwatch cron entry..."
     if crontab -l 2>/dev/null | grep -qF -e "$TARGET" -e "$LEGACY_TARGET"; then
         crontab -l 2>/dev/null | grep -vF -e "$TARGET" -e "$LEGACY_TARGET" | crontab -
-        echo "Cron entry removed. $TARGET was left in place --"
-        echo "delete it manually if desired."
+        echo "Cron entry removed. The uhmwatch.sh script was not deleted."
     else
         echo "No cron entry found for $TARGET."
     fi
@@ -226,7 +226,7 @@ esac
 _UHM_CONF="/etc/uhm/uhm.env"
 _load_conf() {
     local file="$1" line key value
-    [[ ! -f "$file" ]] && { log "WARNING: $file not found - using built-in defaults"; return 1; }
+    [[ ! -f "$file" ]] && { log "WARNING: $file not found -- using defaults"; return 1; }
     local _owner _perms _gdigit _odigit
     _owner=$(stat -c '%U' "$file" 2>/dev/null)
     _perms=$(stat -c '%a' "$file" 2>/dev/null)
@@ -482,7 +482,8 @@ check_uosserver() {
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before restarting (see README)"
+        log "WARNING: stop uhmd+uhmwatch cron before"
+        log "WARNING: restarting (check README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env - UOS itself is responding"
@@ -571,7 +572,8 @@ check_unifi_classic() {
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before restarting (see README)"
+        log "WARNING: stop uhmd+uhmwatch cron before"
+        log "WARNING: restarting (check README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env - unifi.service is responding"

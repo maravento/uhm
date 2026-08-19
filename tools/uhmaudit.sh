@@ -98,7 +98,7 @@ if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" 
     log "ERROR: $CONFIG has unsafe owner/permissions"
     log "ERROR: (owner=$_owner perms=$_perms)"
     log "ERROR: must be owned by root with no group/other access"
-    log "ERROR: (600). Refusing to source it."
+    log "ERROR: (600). Refusing to read it."
     exit 1
 fi
 
@@ -278,9 +278,12 @@ if [[ "$STA_RC" == "error" && "$GUEST_RC" == "error" && "$VCH_RC" == "error" ]];
     exit 1
 fi
 
-log "INFO: stat/sta -> $STA_RC ($(echo "$STA" | jq '.data|length' 2>/dev/null) entries)"
-log "INFO: stat/guest -> $GUEST_RC ($(echo "$GUEST" | jq '.data|length' 2>/dev/null) entries)"
-log "INFO: stat/voucher -> $VCH_RC ($(echo "$VOUCHER" | jq '.data|length' 2>/dev/null) entries)"
+log "INFO: stat/sta -> $STA_RC"
+log "INFO: $(echo "$STA" | jq '.data|length' 2>/dev/null) entries"
+log "INFO: stat/guest -> $GUEST_RC"
+log "INFO: $(echo "$GUEST" | jq '.data|length' 2>/dev/null) entries"
+log "INFO: stat/voucher -> $VCH_RC"
+log "INFO: $(echo "$VOUCHER" | jq '.data|length' 2>/dev/null) entries"
 
 # -- Section 1: Authorized clients (uhm-auth.txt + stat/guest + stat/sta) ---
 # VOUCHER RESOLUTION STRATEGY:
@@ -306,8 +309,7 @@ print_authorized() {
     sta_map=$(echo "$STA" | jq -r --arg essid "$UHM_ESSID" '
         .data[]
         | select(.essid == $essid)
-        | [(.mac | ascii_downcase), (if .authorized == true then "YES" else "NO" end)]
-        | @tsv
+        | (.mac | ascii_downcase)
     ' 2>/dev/null)
 
     {
@@ -351,7 +353,7 @@ print_authorized() {
             [ -z "$vstatus" ] && vstatus="N/A"
             vstatus=$(echo "$vstatus" | sed 's/USED_MULTIPLE/MULTI/;s/VALID_ONE/VALID/;s/VALID_MULTI/MULTI/')
 
-            connected=$(echo "$sta_map" | awk -v mac="${mac}" 'tolower($1) == tolower(mac) {print "YES"; exit}' FS='\t')
+            connected=$(echo "$sta_map" | awk -v mac="${mac}" 'tolower($1) == tolower(mac) {print "YES"; exit}')
             [ -z "$connected" ] && connected="NO"
 
             echo "$mac|$ip|$vcode|$vstatus|$expires|$connected"
@@ -588,7 +590,8 @@ interactive_delete_expired() {
         if [ "$rc" = "ok" ]; then
             log "INFO: Deleted voucher: $code"
         else
-            log "WARNING: Failed to delete voucher: $code -- skipping its clients"
+            log "WARNING: Failed to delete voucher: $code"
+            log "WARNING: skipping its clients"
             continue
         fi
 
@@ -885,7 +888,8 @@ interactive_revoke_by_code() {
             || log "WARNING: Failed to forget: $mac (rc=$frc)"
     done
 
-    log "INFO: Revocation complete for code: $TARGET_CODE ($target_note)"
+    log "INFO: Revocation complete for code: $TARGET_CODE"
+    log "INFO: ($target_note)"
 }
 
 # -- Interactive action menu ---------------------------------------------------
@@ -909,11 +913,9 @@ case "$ACTION" in
     3) interactive_delete_expired ;;
     4) interactive_revoke_by_code ;;
     5) interactive_purge_all ;;
-    q|Q) log "INFO: Goodbye." ;;
+    q|Q) log "INFO: Exiting without changes." ;;
     *) log "WARNING: Invalid option. Exiting." ;;
 esac
-
-echo ""
 
 # End
 log "uhmaudit done at: $(date)"

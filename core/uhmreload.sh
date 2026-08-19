@@ -22,10 +22,10 @@
 # abort the reload (WARNING + exit 1). It is the core ACL/lease
 # reconciliation step -- nothing downstream can be trusted without it.
 # - uhmiptables.sh: missing or not executable only warns and continues (the
-# reload still counts as done). It also ships as a stub that
-# intentionally exits 1 until configured, detected and skipped the same
-# way. A genuine execution failure (script exists, runs, exits non-zero)
-# still aborts (WARNING + exit 1) -- only its absence is tolerated.
+# reload still counts as done). uhmsetup.sh deploys it as a minimal
+# working template, so a normal install always has it. A genuine
+# execution failure (script exists, runs, exits non-zero) still aborts
+# (WARNING + exit 1) -- only its absence is tolerated.
 #
 # TIMEOUTS (uhm.env):
 # uhmd.sh invokes this script with no time limit of its own -- it just
@@ -77,7 +77,7 @@ _UH_UINT='^(0|[1-9][0-9]*)$'
 CONFIG_FILE="/etc/uhm/uhm.env"
 UHM_LEASES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_LEASES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set in $CONFIG_FILE"
+    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set"
     log "WARNING: using default 120"
     UHM_LEASES_TIMEOUT_SECONDS=120
 fi
@@ -109,11 +109,11 @@ if [[ -z "$UHM_IPTABLES" ]]; then
     UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
 fi
 
-# UHM_RELOAD_ACTIVE: not set here. The daemon exports it before calling
-# this script (so uhmleases.sh skips its own guard, since the daemon already
-# holds CYCLE_LOCK). If this script is run manually (not by the daemon),
-# UHM_RELOAD_ACTIVE stays unset, so uhmleases.sh acquires CYCLE_LOCK
-# itself instead, to avoid racing a daemon cycle that might be in progress.
+# No mechanism lock is taken here. This script is a convenience wrapper that
+# invokes uhmleases.sh and uhmiptables.sh in order, and could be replaced by
+# two direct invocations at any time. The guard belongs to the script that
+# writes: uhmleases.sh acquires CYCLE_LOCK itself, with its own descriptor,
+# whoever invoked it -- so nothing is lost if this wrapper goes away.
 
 # Start
 log "uhmreload start..."
@@ -136,7 +136,8 @@ fi
 run_step() {
     local script="$1" name="$2" step_timeout="$3"
     if [[ ! -x "$script" ]]; then
-        log "WARNING: $name not found or not executable: $script"
+        log "WARNING: $name not found or not executable:"
+        log "WARNING: $script"
         log "WARNING: aborting"
         exit 1
     fi
@@ -149,13 +150,15 @@ run_step() {
         # timestamp) -- a persistent failure retries every cycle, and an
         # unbounded trace per attempt would fill /var/log over time.
         local trace_dest="/var/log/${name%.sh}-failure.trace"
-        mv -f "$trace_file" "$trace_dest" 2>/dev/null || { log "WARNING: failed to move trace to $trace_dest -- discarding"; rm -f "$trace_file"; }
+        mv -f "$trace_file" "$trace_dest" 2>/dev/null || { log "WARNING: failed to move trace -- discarding"; log "WARNING: $trace_dest"; rm -f "$trace_file"; }
         if [[ "$exit_code" == "124" ]]; then
             log "WARNING: $name timed out after ${step_timeout}s"
-            log "WARNING: aborting; trace saved to $trace_dest"
+            log "WARNING: aborting; trace saved to"
+            log "WARNING: $trace_dest"
         else
             log "WARNING: $name failed (exit $exit_code)"
-            log "WARNING: aborting; trace saved to $trace_dest"
+            log "WARNING: aborting; trace saved to"
+            log "WARNING: $trace_dest"
         fi
         exit 1
     fi
@@ -164,20 +167,15 @@ run_step() {
 
 run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS"
 
-# uhmiptables.sh ships as a stub that always exits 1 until the admin replaces
-# it with real firewall rules (see README) -- that is the normal state right
-# after install, not a failure. Only invoke it once it looks configured, so
-# an unconfigured stub does not trigger a WARNING/trace file on every reload.
-# Unlike uhmleases.sh above, a missing uhmiptables.sh warns and continues rather
-# than aborting -- uhmleases.sh is the core ACL/lease reconciliation and its
-# absence must stop the reload chain; uhmiptables.sh only enforces at the
-# firewall level, and ACL classification keeps working correctly without it.
+# uhmsetup.sh deploys uhmiptables.sh as a minimal but working template, so a
+# normal install always has a runnable file here. Unlike uhmleases.sh above, a
+# missing uhmiptables.sh warns and continues rather than aborting --
+# uhmleases.sh is the core ACL/lease reconciliation and its absence must stop
+# the reload chain; uhmiptables.sh only enforces at the firewall level, and ACL
+# classification keeps working correctly without it.
 if [[ ! -x "$UHM_IPTABLES" ]]; then
     log "WARNING: uhmiptables.sh not found or not executable"
     log "WARNING: path: $UHM_IPTABLES -- skipping"
-elif grep -qF "UHM_STUB_MARKER" "$UHM_IPTABLES" 2>/dev/null; then
-    log "INFO: uhmiptables.sh not configured yet"
-    log "INFO: skipping firewall reload (see README)"
 else
     run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS"
 fi

@@ -48,7 +48,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in coreutils ncurses-bin grep sed systemd; do
+for dep in coreutils util-linux ncurses-bin grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         echo "ERROR: Required dependency '$dep' is not installed." >&2
         exit 1
@@ -168,7 +168,7 @@ if [[ "$action" == "grep" ]]; then
         exit 0
     fi
     # Sanitize
-    if [[ ! "$term" =~ ^[[:alnum:][:space:].\-:/@_]+$ ]]; then
+    if [[ ! "$term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
         echo '{"error":"Invalid search term","rows":[]}'
         exit 0
     fi
