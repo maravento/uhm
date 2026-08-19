@@ -52,7 +52,7 @@
 # blockdhcp.txt dedup.
 #
 # That DHCP/firewall-level bypass alone is NOT sufficient to skip UniFi's own
-# captive portal: on any WLAN configured as Guest/Hotspot (see README UNIFI
+# captive portal: on any WLAN configured as Guest/Hotspot (check README UNIFI
 # PRE-CONFIGURATION), the AP holds a client at the portal based on UniFi's own
 # per-client "authorized" flag in stat/sta -- independent of DHCP/firewall
 # state, and confirmed by direct API queries showing is_guest=true/
@@ -205,15 +205,17 @@ _UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9
 _UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 _UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 _UH_UINT='^(0|[1-9][0-9]*)$'
+_UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+_UH_MAC='^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
-# IPv4 <-> integer. Every octet is forced base 10 (10#) so a value like 010
-# is never read as octal. Ranges are walked and compared as integers, so no
+# IPv4 <-> integer. Callers validate with _UH_IPV4 before calling, which
+# rejects leading zeros. Ranges are walked and compared as integers, so no
 # step below assumes a particular netmask or a three-octet prefix.
 _ip_to_int() {
     local a b c d
     IFS='.' read -r a b c d <<< "$1"
-    echo $(( (10#$a << 24) + (10#$b << 16) + (10#$c << 8) + 10#$d ))
+    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
 }
 
 _int_to_ip() {
@@ -229,12 +231,13 @@ _ip_in_lan() {
 }
 
 # CYCLE_LOCK is separate from SCRIPT_LOCK (the singleton instance guard, held
-# for the daemon's entire lifetime). CYCLE_LOCK is only held while run_cycle
-# is actively mutating ACL files (~1-3s), released during the sleep between
-# cycles. A manual, standalone run of uhmleases.sh (UHM_RELOAD_ACTIVE
-# unset) checks THIS lock, not SCRIPT_LOCK, so it only waits during the
-# narrow window where a real race on the ACL files could occur -- not for
-# the daemon's entire uptime.
+# for the daemon's entire lifetime). CYCLE_LOCK is the mechanism lock: it is
+# only held while ACL files are actively being mutated (~1-3s), released
+# during the sleep between cycles, and released again before delegating to
+# uhmreload.sh so uhmleases.sh can acquire it with its own descriptor. Every
+# script that writes acquires THIS lock, not SCRIPT_LOCK, so they only wait
+# during the narrow window where a real race on the ACL files could occur --
+# not for the daemon's entire uptime.
 CYCLE_LOCK="/var/lock/uhmd-cycle.lock"
 exec 201>"$CYCLE_LOCK"
 
@@ -252,7 +255,7 @@ cleanup_temp() {
     # whatever was last logged instead of opening a delimiter block of its
     # own -- a raya must mark the start of a cycle/session, never a shutdown.
     if (( rc != 1 )) && declare -F log_raw &>/dev/null; then
-        log_raw "INFO: uhmd done at: $(date)"
+        log_raw "uhmd done at: $(date)"
     fi
 }
 trap cleanup_temp EXIT
@@ -414,13 +417,13 @@ load_config() {
     fi
 
     if ! [[ "$SERVER_IP" =~ $_UH_IPV4 ]]; then
-        log "ERROR: SERVER_IP is not a valid IPv4 address in $CONFIG_FILE"
+        log "ERROR: SERVER_IP is not valid IPv4 in $CONFIG_FILE"
         log "ERROR: got: '$SERVER_IP'"
         exit 1
     fi
 
     if ! [[ "$SERV_SUBNET" =~ $_UH_IPV4 ]] || ! [[ "$SERV_MASK" =~ $_UH_NETMASK ]]; then
-        log "ERROR: SERV_SUBNET/SERV_MASK are not a valid network in $CONFIG_FILE"
+        log "ERROR: SERV_SUBNET/SERV_MASK invalid in $CONFIG_FILE"
         log "ERROR: got: '$SERV_SUBNET'/'$SERV_MASK'"
         exit 1
     fi
@@ -679,13 +682,13 @@ api_get() {
     rm -f "$hdr"
 
     if [[ -z "$code" ]]; then
-        log "WARNING: API GET $url -> no response"
+        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} -> no response"
         log "WARNING: (timeout or network error)"
         echo "{}"
         return 0
     fi
     if [[ "$code" != "200" ]]; then
-        log "WARNING: API GET $url -> HTTP $code"
+        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} -> HTTP $code"
         echo "{}"
         return 0
     fi
@@ -789,7 +792,7 @@ assign_ip_and_hostname() {
 queue_lease_removal() {
     local mac="$1"
     local lc_mac
-    lc_mac=$(echo "$mac" | tr '[:upper:]' '[:lower:]')
+    lc_mac="${mac,,}"
     if grep -qxF "$lc_mac" "$UHM_QUEUE" 2>/dev/null; then
         return 0
     fi
@@ -846,7 +849,7 @@ check_mac_lists_changed() {
 is_managed_mac() {
     local m="${1,,}" f
     [[ -z "$m" ]] && return 1
-    [[ "$m" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || return 1
+    [[ "$m" =~ $_UH_MAC ]] || return 1
     shopt -s nullglob
     local files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
@@ -866,11 +869,11 @@ list_managed_macs() {
     shopt -u nullglob
     (( ${#files[@]} == 0 )) && return
     awk -F';' '/^a;/{print tolower($2)}' "${files[@]}" 2>/dev/null \
-        | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' | sort -u
+        | grep -E "$_UH_MAC" | sort -u
 }
 
 # -- UniFi authorization for managed MACs (mac-*.txt) --------------------------
-# On any WLAN configured as Guest/Hotspot (see README UNIFI PRE-CONFIGURATION),
+# On any WLAN configured as Guest/Hotspot (check README UNIFI PRE-CONFIGURATION),
 # UniFi enforces its own captive-portal state per client via the "authorized"
 # flag in stat/sta -- entirely independent of pydhcpd's fixed-address DHCP
 # bypass or uhmiptables.sh's firewall rules. A mac-*.txt device is still held
@@ -922,7 +925,7 @@ authorize_managed_macs() {
             log "INFO: Authorized managed MAC $mac in UniFi"
             log "INFO: (minutes=$minutes)"
         else
-            log "WARNING: Failed to authorize managed MAC $mac in UniFi"
+            log "WARNING: Failed to authorize MAC $mac in UniFi"
             log "WARNING: (HTTP $http_code)"
         fi
     done <<< "$managed_macs"
@@ -935,7 +938,7 @@ dedup_mac_lists() {
     local all_macs
     all_macs=$(
         awk -F';' '/^a;/{print tolower($2)}' "$UHM_MACAUTH" 2>/dev/null \
-          | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' \
+          | grep -E "$_UH_MAC" \
           | sort -u || true
     )
 
@@ -954,14 +957,14 @@ dedup_mac_lists() {
             fi
             local bmac bip bhostname field_count
             IFS=';' read -r _ bmac bip bhostname _ <<< "$line"
-            bmac=$(echo "$bmac" | tr '[:upper:]' '[:lower:]')
+            bmac="${bmac,,}"
             if echo "$all_macs" | grep -q "^${bmac}$"; then
                 log "INFO: dedup -> removed $bmac from blockdhcp.txt"
                 continue
             fi
             field_count=$(echo "$line" | tr -cd ';' | wc -c)
             if (( field_count != 4 )); then
-                if [[ "$bmac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] && \
+                if [[ "$bmac" =~ $_UH_MAC ]] && \
                    [[ "$bip" =~ $_UH_IPV4 ]] && \
                    [[ "$bhostname" =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then
                     echo "a;${bmac};${bip};${bhostname};" >> "$tmp_block"
@@ -1018,7 +1021,7 @@ sort_acl_files() {
 add_mac_to_acl() {
     local mac="$1" ip="$2" hostname="$3" end_time="$4"
 
-    if [[ ! "$mac" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]]; then
+    if [[ ! "$mac" =~ $_UH_MAC ]]; then
         log "ERROR: bad MAC '$mac'"
         log "ERROR: not added"
         return 1
@@ -1244,7 +1247,7 @@ process_sessions() {
 
     while IFS=$'\t' read -r mac end_time api_voucher_code; do
         [[ -z "$mac" || "$mac" == "null" ]] && continue
-        if ! [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; then
+        if ! [[ "$mac" =~ $_UH_MAC ]]; then
             log "WARNING: malformed mac from API"
             log "WARNING: ($mac) -- skipping"
             continue
@@ -1315,7 +1318,7 @@ process_sessions() {
         voucher_code=$(printf '%s' "$voucher_code" | tr -cd 'A-Za-z0-9._-')
         # Fallback guard: voucher_code is UniFi API data, with no length
         # guarantee from our side. uhmleases.sh's _normalize_acl_file()
-        # rejects any uhm-auth.txt hostname over 63 chars (see README
+        # rejects any uhm-auth.txt hostname over 63 chars (check README
         # Fallback section) and aborts normalization for the whole file --
         # not just this one client. No known UniFi version actually returns
         # a code long enough to trigger this (observed codes are short,
@@ -1327,7 +1330,7 @@ process_sessions() {
                 assigned_hostname="${assigned_hostname}-${voucher_code}"
             else
                 log "WARNING: voucher code too long for hostname field"
-                log "WARNING: ($mac) -- keeping plain guest hostname, code omitted"
+                log "WARNING: ($mac) -- plain hostname, no code"
             fi
         fi
 
@@ -1402,7 +1405,7 @@ revoke_unauthorized() {
     local mac
     for mac in "${macs_to_revoke[@]+"${macs_to_revoke[@]}"}"; do
         [[ -z "$mac" ]] && continue
-        if [[ ! "$mac" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]]; then
+        if [[ ! "$mac" =~ $_UH_MAC ]]; then
             log "ERROR: bad MAC '$mac'"
             log "ERROR: skipping"
             continue
@@ -1414,7 +1417,7 @@ revoke_unauthorized() {
             (( revoked++ )) || true
         else
             log "WARNING: sed failed to remove $mac"
-            log "WARNING: from $UHM_MACAUTH -- will retry next cycle"
+            log "WARNING: from $UHM_MACAUTH -- retry next cycle"
         fi
     done
 
@@ -1467,7 +1470,8 @@ check_and_reload_if_changed() {
         [[ "$cur_grace" != "$_ACL_SNAPSHOT_GRACE" ]] && log "INFO: uhm-grace.txt changed"
         (( mac_reload_triggered )) && log "INFO: mac-*.txt change from previous cycle -- reloading now"
     else
-        log "INFO: ${RELOAD_SAFETY_INTERVAL_SECONDS}s since last reload -- forcing safety-net reload"
+        log "INFO: ${RELOAD_SAFETY_INTERVAL_SECONDS}s since last reload"
+        log "INFO: forcing safety-net reload"
     fi
 
     _MAC_RELOAD_PENDING=0
@@ -1475,7 +1479,10 @@ check_and_reload_if_changed() {
     _RELOAD_OK=0
     if [[ -n "${UHM_RELOAD:-}" && -x "$UHM_RELOAD" ]]; then
         log "INFO: invoking $UHM_RELOAD"
-        export UHM_RELOAD_ACTIVE=1
+        # Release the mechanism lock before delegating: uhmleases.sh acquires
+        # it itself, with its own descriptor, and cannot do so while this
+        # daemon still holds it. Reacquired below for the rest of the cycle.
+        flock -u 201 2>/dev/null || log "WARNING: failed to release cycle lock (fd 201)"
         if "$UHM_RELOAD" >/dev/null 2>>"$LOG_FILE"; then
             _RELOAD_OK=1
             _LAST_RELOAD_EPOCH=$now
@@ -1490,11 +1497,11 @@ check_and_reload_if_changed() {
             # safety-net cadence. ACL-change-triggered reloads are unaffected:
             # they fire on the next real diff, not on this timer.
             _LAST_RELOAD_EPOCH=$now
-            log "WARNING: $UHM_RELOAD exited with error (code $rc)"
+            log "WARNING: $UHM_RELOAD failed (code $rc)"
             log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s)"
             log "WARNING: will not retry every cycle"
         fi
-        unset UHM_RELOAD_ACTIVE
+        flock -n 201 || log "WARNING: cycle lock not reacquired after reload"
     else
         # Same reasoning as the failure branch above: update the epoch here
         # too, so a misconfigured UHM_RELOAD (missing or not
@@ -1680,8 +1687,9 @@ main() {
     (( _reload_floor < 600 )) && _reload_floor=600
     RELOAD_SAFETY_INTERVAL_SECONDS="${RELOAD_SAFETY_INTERVAL_SECONDS:-3600}"
     if ! [[ "$RELOAD_SAFETY_INTERVAL_SECONDS" =~ $_UH_UINT ]] || (( RELOAD_SAFETY_INTERVAL_SECONDS < _reload_floor )); then
-        log "ERROR: RELOAD_SAFETY_INTERVAL_SECONDS must be an integer >= ${_reload_floor}"
-        log "ERROR: (3x UHM_LEASES_TIMEOUT_SECONDS + UHM_IPTABLES_TIMEOUT_SECONDS)"
+        log "ERROR: RELOAD_SAFETY_INTERVAL_SECONDS must be >= ${_reload_floor}"
+        log "ERROR: (3x UHM_LEASES_TIMEOUT_SECONDS"
+        log "ERROR: + UHM_IPTABLES_TIMEOUT_SECONDS)"
         log "ERROR: got: $RELOAD_SAFETY_INTERVAL_SECONDS"
         exit 1
     fi
@@ -1697,7 +1705,7 @@ main() {
     verify_installation
     init_acl_files
 
-    log "INFO: uhmd start..."
+    log "uhmd start..."
 
     # UniFi-OS can take a while to come back up after a reboot -- this host and
     # the controller often boot together. Retry quietly (INFO, no alert) for
@@ -1721,7 +1729,6 @@ main() {
     # Force one reload here, on every daemon start, regardless of ACL state.
     if [[ -n "${UHM_RELOAD:-}" && -x "$UHM_RELOAD" ]]; then
         log "INFO: Startup -- invoking uhmreload (ACLs + firewall)"
-        export UHM_RELOAD_ACTIVE=1
         if "$UHM_RELOAD" >/dev/null 2>>"$LOG_FILE"; then
             _LAST_RELOAD_EPOCH=$(date +%s)
         else
@@ -1729,7 +1736,6 @@ main() {
             log "WARNING: firewall may be incomplete until next ACL change"
             _LAST_RELOAD_EPOCH=$(date +%s)
         fi
-        unset UHM_RELOAD_ACTIVE
     else
         log "WARNING: UHM_RELOAD not set or not executable"
         log "WARNING: firewall not rebuilt at startup"

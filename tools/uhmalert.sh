@@ -146,6 +146,7 @@ insert_after_last_delimiter() {
 }
 
 install_module() {
+    local gen_topic
     echo ""
     echo "=================================="
     echo "Installing uhmalert (uhm alert)"
@@ -238,8 +239,7 @@ uninstall_module() {
     systemctl disable uhmalert.service 2>/dev/null || true
     rm -f "$UNIT_PATH"
     systemctl daemon-reload
-    echo "uhmalert.service removed. $TARGET was left in place --"
-        echo "delete it manually if desired."
+    echo "uhmalert.service removed. The uhmalert.sh script was not deleted."
 }
 
 case "${1:-}" in
@@ -308,13 +308,15 @@ load_env_file() {
 load_env_file "$CONFIG_FILE"
 
 if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
-    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE -- aborting"
+    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE"
+    log "ERROR: aborting"
     exit 1
 fi
 
 FAIL_THRESHOLD="${UHM_API_FAIL_THRESHOLD:-3}"
 if ! [[ "$FAIL_THRESHOLD" =~ $_UH_UINT ]] || (( FAIL_THRESHOLD == 0 )); then
-    log "WARNING: UHM_API_FAIL_THRESHOLD invalid ($FAIL_THRESHOLD) -- using default 3"
+    log "WARNING: UHM_API_FAIL_THRESHOLD invalid ($FAIL_THRESHOLD)"
+    log "WARNING: using default 3"
     FAIL_THRESHOLD=3
 fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
@@ -323,7 +325,7 @@ if ! [[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
     POLL_INTERVAL=20
 fi
 UHM_ALERT_QUIET_PERIOD="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
-[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid ($UHM_ALERT_QUIET_PERIOD) -- using default 120"; UHM_ALERT_QUIET_PERIOD=120; }
+[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid ($UHM_ALERT_QUIET_PERIOD)"; log "WARNING: using default 120"; UHM_ALERT_QUIET_PERIOD=120; }
 MARGIN=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
             # falsely look like a gap with a silent recovery in between
 API_MAX_TIME=30 # matches curl --max-time in uhmd.sh's api_get calls
@@ -418,13 +420,13 @@ while true; do
             _now_epoch=$(date +%s)
             if [[ "$msg" == "$last_generic_msg" ]] && (( _now_epoch - last_generic_time < DEDUP_WINDOW )); then
                 log "INFO: suppressing repeated alert"
-                log "INFO: (same message within ${DEDUP_WINDOW}s) -- $msg"
+                log "INFO: (same within ${DEDUP_WINDOW}s) -- ${msg:0:25}"
                 continue
             fi
             last_generic_msg="$msg"
             last_generic_time="$_now_epoch"
             notify "uhm: $msg"
-            log "ALERT: sent -- $msg"
+            log "ALERT: sent -- ${msg:0:45}"
             continue
         fi
 

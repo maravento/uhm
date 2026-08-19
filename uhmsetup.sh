@@ -23,8 +23,8 @@
 # ./tools/uhmcheck.sh
 # ./tools/uhmmon.sh
 # ./tools/uhmalert.sh
-# ./tools/uhmiptables_example.sh (reference template only -- see below,
-# not required, not deployed)
+# ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
+# ./tools/uhmiptables_example.txt (reference example only, never deployed)
 # ./acl/uhm-auth.txt
 # ./acl/uhm-queue.txt
 # ./acl/uhm-grace.txt
@@ -40,9 +40,10 @@
 # overwritten afterward) --
 # not to be confused with /etc/acl, which belongs to pydhcp/iptables.
 #
-# tools/uhmiptables_example.sh is a reference template, not a functional
-# script -- the administrator copies it to /etc/uhm/tools/uhmiptables.sh
-# and adapts it manually. deploy_scripts() below explicitly excludes it
+# tools/uhmiptables.sh is a minimal but working template (IPv4 forwarding +
+# NAT). tools/uhmiptables_example.txt is the full reference ruleset, never
+# deployed -- the administrator copies it over uhmiptables.sh and adapts it
+# manually. deploy_scripts() below excludes uhmiptables.sh
 # from the tools/*.sh deploy loop; it is never installed automatically.
 #
 # DEPENDENCIES:
@@ -50,7 +51,7 @@
 # none of these are auto-installed):
 # curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
 # mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
-# grep, sed, systemd, ncurses-bin
+# grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (xargs)
 #
 # Hard dependency NOT an apt package (aborts if missing):
 # pydhcpd must be installed and running, with /etc/pydhcp/pydhcp.env
@@ -128,7 +129,7 @@ CONFIG_FILE="${HOTSPOT_DIR}/uhm.env"
 PYDHCP_ENV="/etc/pydhcp/pydhcp.env"
 LOG_FILE="/var/log/uhm.log"
 LOGROTATE_FILE="/etc/logrotate.d/uhm"
-UHM_IPTABLES_STUB="${TOOLS_DIR}/uhmiptables.sh"
+UHM_IPTABLES_DEST="${TOOLS_DIR}/uhmiptables.sh"
 SERVICE_DEST="/etc/systemd/system/uhmd.service"
 
 # --- Repo file expectations (relative to this script) ------------------------
@@ -140,7 +141,7 @@ REPO_UHMD="${REPO_CORE}/uhmd.sh"
 REPO_SERVICE="${REPO_CORE}/uhmd.service"
 
 # --- Required apt packages ----------------------------------------------------
-APT_DEPS=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin)
+APT_DEPS=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils)
 
 # --- Discovered runtime values (filled during install) -----------------------
 DHCP_BACKEND="" # "pydhcpd"
@@ -169,6 +170,8 @@ _UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9
 _UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 _UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 _UH_UINT='^(0|[1-9][0-9]*)$'
+_UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+_UH_MAC='^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # Appends $2 (one or more lines) right after the file's LAST
@@ -599,7 +602,7 @@ run_setup_wizard() {
         found_url="$DISCOVERED_URL"
         found_type="$DISCOVERED_TYPE"
     else
-        abort "No UniFi controller detected. Check the UniFi configuration (credentials, that it is running and reachable) and restart the installation. If UniFi Network self-hosted / UniFi OS Server is not installed yet, use unifisetup.sh to install it (see README)."
+        abort "No UniFi controller detected. Check the UniFi configuration (credentials, that it is running and reachable) and restart the installation. If UniFi Network self-hosted / UniFi OS Server is not installed yet, use unifisetup.sh to install it (check README)."
     fi
 
     step "Hotspot SSID"
@@ -640,7 +643,7 @@ run_setup_wizard() {
     esac
     if [[ -z "$detected_version" ]]; then
         if [[ "$found_type" == "unifi-os" ]] && ! command -v podman &>/dev/null; then
-            abort "Could not detect the installed UniFi version: 'podman' is not available on this host, and it is required to query the uosserver container. Install podman (or check the UniFi OS Server installation) and retry. unifisetup.sh installs UniFi OS Server together with podman (see README)."
+            abort "Could not detect the installed UniFi version: 'podman' is not available on this host, and it is required to query the uosserver container. Install podman (or check the UniFi OS Server installation) and retry. unifisetup.sh installs UniFi OS Server together with podman (check README)."
         fi
         abort "Could not detect the installed UniFi version (type: ${found_type}). uhm only supports versions tested to date -- install aborted."
     fi
@@ -747,7 +750,7 @@ RECOVERY_COOLDOWN_SECONDS=600
 UHM_RELOAD="${RELOAD_SCRIPT_Q}"
 UHM_LEASES="${CORE_DIR}/uhmleases.sh"
 # By sysadmin
-UHM_IPTABLES="${UHM_IPTABLES_STUB}"
+UHM_IPTABLES="${UHM_IPTABLES_DEST}"
 # Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
 UHM_LEASES_TIMEOUT_SECONDS=120
 UHM_IPTABLES_TIMEOUT_SECONDS=60
@@ -828,10 +831,10 @@ deploy_scripts() {
     install -m 755 -o root -g root "${REPO_CORE}/uhmwatch.sh" "${CORE_DIR}/uhmwatch.sh"
     local f
     for f in "${REPO_TOOLS}/"*.sh; do
-        # uhmiptables_example.sh is a reference template for the administrator
-        # to adapt manually into tools/uhmiptables.sh (see deploy_uhmiptables_stub)
-        # -- never deployed as-is.
-        [[ "$(basename "$f")" == "uhmiptables_example.sh" ]] && continue
+        # uhmiptables.sh is the administrator's own file once customized, so it
+        # is deployed by deploy_uhmiptables() below (only when absent) instead
+        # of being overwritten here on every run.
+        [[ "$(basename "$f")" == "uhmiptables.sh" ]] && continue
         install -m 755 -o root -g root "$f" "${TOOLS_DIR}/"
     done
     # Remove any copy left at the pre-restructure locations (directly under
@@ -842,38 +845,13 @@ deploy_scripts() {
     info "Scripts deployed to ${HOTSPOT_DIR}"
 }
 
-deploy_uhmiptables_stub() {
-    if [[ -f "$UHM_IPTABLES_STUB" ]]; then
+deploy_uhmiptables() {
+    if [[ -f "$UHM_IPTABLES_DEST" ]]; then
         info "uhmiptables.sh already exists -- leaving untouched"
         return 0
     fi
-    cat > "$UHM_IPTABLES_STUB" <<'STUB'
-#!/bin/bash
-# /etc/uhm/tools/uhmiptables.sh
-# UHM_STUB_MARKER -- do not remove this line while the script is
-# unconfigured; uhmreload.sh looks for it to skip the reload gracefully
-# instead of treating this stub's exit 1 as a real failure. It is removed
-# automatically once you replace this file's content with real rules.
-#
-# Firewall rules for uhm. Invoked by uhmreload.sh after every ACL change.
-#
-# This file is a STUB. Copy the reference rules from tools/uhmiptables_example.sh
-# into this file and adapt the variables (wan, lan, wan_ip) to your network.
-#
-# The script must do two things:
-# 1. Flush and repopulate the ipsets `macgrace` and `machotspot` from the
-# ACL files at /etc/uhm/acl/uhm-grace.txt and /etc/uhm/acl/uhm-auth.txt
-# 2. Apply (idempotently) the iptables rules that consume those ipsets.
-#
-# Without this script populated, ACL changes will not reach the firewall and
-# the captive portal will not work.
-
-echo "uhmiptables.sh: not configured. Edit /etc/uhm/tools/uhmiptables.sh." >&2
-exit 1
-STUB
-    chown root:root "$UHM_IPTABLES_STUB"
-    chmod 750 "$UHM_IPTABLES_STUB"
-    warn "Stub created at $UHM_IPTABLES_STUB -- YOU MUST EDIT IT (see README)"
+    install -m 750 -o root -g root "${REPO_TOOLS}/uhmiptables.sh" "$UHM_IPTABLES_DEST"
+    info "Minimal template deployed to $UHM_IPTABLES_DEST (routing + NAT only)"
 }
 
 install_logrotate() {
@@ -931,8 +909,8 @@ final_sanity_check() {
     step "Sanity check"
     local issues=0
 
-    if [[ ! -x "$UHM_IPTABLES_STUB" ]] || grep -qF "UHM_STUB_MARKER" "$UHM_IPTABLES_STUB" 2>/dev/null; then
-        warn "uhmiptables.sh is not configured"
+    if [[ ! -x "$UHM_IPTABLES_DEST" ]]; then
+        warn "uhmiptables.sh is missing or not executable"
         warn "  ACL changes will not reach the firewall"
         (( issues++ )) || true
     fi
@@ -975,7 +953,7 @@ do_install() {
     deploy_directories
     deploy_scripts
     deploy_acl_files
-    deploy_uhmiptables_stub
+    deploy_uhmiptables
 
     run_setup_wizard
 
@@ -1017,7 +995,8 @@ do_install() {
     echo "uhm installed."
     echo ""
     echo "Next steps:"
-    echo "1. Edit ${UHM_IPTABLES_STUB} with the firewall rules from tools/uhmiptables_example.sh."
+    echo "1. Optional: ${UHM_IPTABLES_DEST} is a minimal template (routing + NAT). For full"
+    echo "   enforcement, copy tools/uhmiptables_example.txt over it and adapt it."
     echo "2. Check service: systemctl status uhmd"
     echo "3. Check logs: tail -f ${LOG_FILE}"
     echo "------------------------------------------------------"
@@ -1106,16 +1085,16 @@ do_update() {
 
     step "ACL data files"
     # ACL_DIR (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), CONFIG_FILE
-    # and UHM_IPTABLES_STUB are the administrator's own live/customized data.
+    # and UHM_IPTABLES_DEST are the administrator's own live/customized data.
     # --update never renames, moves or overwrites anything already present --
-    # deploy_acl_files()/deploy_uhmiptables_stub() below only create what's
+    # deploy_acl_files()/deploy_uhmiptables() below only create what's
     # missing (e.g. a partial/broken install, warning about it since that
     # should not normally happen) and leave every existing file untouched.
     # No unconditional mkdir/chmod on an already-existing ACL_DIR either;
     # only created (and chmod 700) here if it doesn't exist yet.
     [[ -d "$ACL_DIR" ]] || { mkdir -p "$ACL_DIR"; chmod 700 "$ACL_DIR"; }
     deploy_acl_files warn
-    deploy_uhmiptables_stub
+    deploy_uhmiptables
 
     step "Logrotate"
     install_logrotate warn
@@ -1158,7 +1137,7 @@ do_update() {
     echo ""
     echo "Preserved (never renamed/moved/overwritten if already present):"
     echo "- ${CONFIG_FILE}"
-    echo "- ${UHM_IPTABLES_STUB}"
+    echo "- ${UHM_IPTABLES_DEST}"
     echo "- ACL data files (*.txt)"
     echo "- Logrotate config"
     echo ""
@@ -1192,7 +1171,7 @@ do_remove() {
     warn "  - ${LOGROTATE_FILE}"
     warn "  - ${HOTSPOT_DIR} entirely: $CONFIG_FILE"
     warn "  (credentials), ${ACL_DIR}/"
-    warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UHM_IPTABLES_STUB"
+    warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UHM_IPTABLES_DEST"
     warn "    (YOUR firewall script"
     warn "  back it up first if needed), ${HOTSPOT_DIR}/bak/"
     warn "    (script backups from --update runs)"
@@ -1341,6 +1320,7 @@ main() {
             ;;
         --remove|remove|--uninstall|uninstall)
             do_remove
+            printf ' \e[32m \e[0m %s\n' "uhmsetup done at: $(date)"
             exit 0
             ;;
         *)
