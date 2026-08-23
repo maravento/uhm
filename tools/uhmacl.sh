@@ -3,16 +3,16 @@
 #
 ################################################################################
 #
-# uhmcheck - MAC Address Consistency Checker (uhm) -- Interactive Menu
+# uhmacl - Local ACL Consistency Checker (uhm) -- Interactive Menu
 #
 # DESCRIPTION:
 # Diagnostic tool that verifies the presence and consistency of one or more
-# MAC addresses across all DHCP/ACL data sources used by pydhcpd and
+# MAC addresses across all local DHCP/ACL data sources used by pydhcpd and
 # uhm. Designed for troubleshooting client connectivity issues and
 # validating that ACL state is coherent after lease/block operations.
 #
 # USAGE:
-# sudo bash uhmcheck.sh
+# sudo bash uhmacl.sh
 #
 # MENU OPTIONS:
 # 1. Check MAC - verify a single MAC across all local data sources, plus
@@ -21,10 +21,7 @@
 # 2. Grace period - list all MACs in grace period with time remaining
 # 3. Consistency check - check all MACs from all sources + system summary
 # 4. Search by IP/name - find MAC by IP or hostname and run consistency check
-# 5. UniFi unauthorized - clients connected to the hotspot ESSID that
-# UniFi reports as NOT authorized (direct query
-# to the UniFi API via stat/sta)
-# 6. Exit
+# 5. Exit
 #
 # DATA SOURCES CHECKED:
 # uhm-auth.txt - Clients with an active voucher (hotspot authorized)
@@ -32,14 +29,13 @@
 # blockdhcp.txt - Blocked MACs (grace expired without voucher)
 # acl_mac/*.txt - Permanent ACL lists (proxy, unlimited)
 # pydhcpd.leases - Active DHCP lease file
-# UniFi stat/sta/ - Live state of the UniFi controller (options 1 and 5;
+# UniFi stat/sta/ - Live state of the UniFi controller (option 1 only;
 # stat/guest requires UNIFI_* credentials in uhm.env). This is the
 # only source of truth for whether the AP is actually
 # holding a client at the captive portal -- a MAC can be
 # fully correct across every local ACL file above and
 # still be held at the portal if UniFi itself reports it
-# authorized=false on a Guest-type WLAN (see uhmd.sh's
-# MANAGED MACS note)
+# authorized=false on a Guest-type WLAN
 #
 # CONSISTENCY RULES:
 # A MAC should appear in only one logical state at a time. The checker
@@ -173,10 +169,10 @@ press_enter() {
     read -rp " Press ENTER to continue..." _
 }
 
-# --- Shared: UniFi live query (used by check_mac and option 5) ---------------
+# --- Shared: UniFi live query (used by check_mac) ----------------------------
 
 # Path to the full configuration file (contains UniFi credentials). Only used
-# by the UniFi-querying paths below -- the local ACL/lease checks don't need it.
+# by the UniFi-querying path below -- the local ACL/lease checks don't need it.
 HOTSPOT_CONF="/etc/uhm/uhm.env"
 
 # Loads the UNIFI_* variables from uhm.env, but only if the file is owned by
@@ -641,64 +637,27 @@ menu_search() {
     press_enter
 }
 
-# --- Option 5: unauthorized clients in UniFi ---------------------------------
-# Reuses unifi_fetch_sta()'s cached stat/sta (see the shared section above) --
-# same login/query path as print_unifi_status(), just filtered to one ESSID
-# and one authorized/is_guest condition instead of a single MAC.
-menu_unifi_unauthorized() {
-    echo ""
-    if ! unifi_fetch_sta; then
-        press_enter
-        return
-    fi
-
-    printf " ${BOLD}=== Clients on %s NOT authorized by UniFi ===${NC}\n\n" "$UHM_ESSID"
-
-    local rows
-    rows=$(jq -r --arg essid "$UHM_ESSID" '
-        .data[]
-        | select(.essid == $essid)
-        | select(.authorized == false)
-        | "\(.mac)\t\(.hostname // "no-hostname")\t\(.ip // "no-ip")\t\(.last_seen // "n/a")"
-    ' "$_UNIFI_STA_JSON" 2>/dev/null)
-
-    if [[ -z "$rows" ]]; then
-        printf " ${BOLD}None -- all clients on %s are authorized${NC}\n" "$UHM_ESSID"
-    else
-        printf " ${BOLD}%-20s %-25s %-18s %s${NC}\n" "MAC" "HOSTNAME" "IP" "LAST_SEEN"
-        printf " %s\n" "$(printf -- '-%.0s' {1..80})"
-        while IFS=$'\t' read -r mac hostname ip last_seen; do
-            [[ -z "$mac" ]] && continue
-            printf " %-20s %-25s %-18s %s\n" "$mac" "$hostname" "$ip" "$last_seen"
-        done <<< "$rows"
-    fi
-
-    press_enter
-}
-
 # --- Main menu ---------------------------------------------------------------
 main_menu() {
     while true; do
         clear
-        printf "${BOLD}###################################${NC}\n"
-        printf "${BOLD}# uhmcheck -- MAC Diagnostic Tool #${NC}\n"
-        printf "${BOLD}###################################${NC}\n"
+        printf "${BOLD}#######################################${NC}\n"
+        printf "${BOLD}# uhmacl -- Local ACL Diagnostic Tool #${NC}\n"
+        printf "${BOLD}#######################################${NC}\n"
         echo ""
         printf " 1. Check MAC\n"
         printf " 2. Grace period status\n"
         printf " 3. Consistency check + system summary\n"
         printf " 4. Search by IP or hostname\n"
-        printf " 5. UniFi: unauthorized clients on the ESSID\n"
-        printf " 6. Exit\n"
+        printf " 5. Exit\n"
         echo ""
-        read -rp " Select option [1-6]: " opt
+        read -rp " Select option [1-5]: " opt
         case "$opt" in
             1) menu_check_mac ;;
             2) menu_grace_period ;;
             3) menu_consistency ;;
             4) menu_search ;;
-            5) menu_unifi_unauthorized ;;
-            6|"") echo ""; exit 0 ;;
+            5|"") echo ""; exit 0 ;;
             *) printf " ${BOLD}Invalid option${NC}\n"; sleep 1 ;;
         esac
     done

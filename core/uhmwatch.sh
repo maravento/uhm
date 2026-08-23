@@ -6,7 +6,7 @@
 # uhmwatch -- UniFi Hotspot Services Watchdog
 #
 # DESCRIPTION:
-# Mandatory -- installed automatically by uhmsetup.sh, not offered as a
+# Mandatory -- installed automatically, not offered as a
 # yes/no prompt like uhmalert/uhmmon. Every unit it watches (uhmd,
 # pydhcpd, the UniFi backend) already has its own systemd Restart=
 # policy, but that alone gives up permanently once StartLimitBurst is
@@ -49,7 +49,11 @@
 # uhmd.sh itself uses -- credentials via jq env, payload via curl
 # stdin, never in argv), using UNIFI_USERNAME/UNIFI_PASSWORD from
 # uhm.env. HTTP 200 = healthy. HTTP 000 or 5xx = unresponsive,
-# restarts the service. Any 4xx = credentials rejected but the service
+# restarts the service -- except within STARTUP_GRACE_SECONDS of
+# uhmd.service's own start (same margin and same config key uhmd.sh
+# uses for its own login retries): logged as INFO instead of WARNING,
+# no restart attempted, since the controller is expected to still be
+# booting after a reboot. Any 4xx = credentials rejected but the service
 # itself is up and answering -- logged as a warning, no restart (a
 # restart wouldn't fix a wrong password in uhm.env anyway).
 # If those credentials are not set in uhm.env, falls back to a
@@ -74,7 +78,7 @@
 # watchdog (if any); this one only knows about uhm's own dependencies.
 #
 # USAGE:
-# sudo ./uhmwatch.sh install Deploy to /etc/uhm/core/uhmwatch.sh,
+# sudo ./uhmwatch.sh install Deploy the script,
 # register cron entry (* * * * *)
 # sudo ./uhmwatch.sh uninstall Remove the cron entry
 # uhmwatch.sh Run the checks directly (what cron invokes)
@@ -82,7 +86,7 @@
 #
 # CONFIG: /etc/uhm/uhm.env (reads UNIFI_TYPE, UNIFI_CONTROLLER_URL,
 # UNIFI_USERNAME, UNIFI_PASSWORD, UNIFI_CERT_PIN,
-# RECOVERY_COOLDOWN_SECONDS)
+# RECOVERY_COOLDOWN_SECONDS, STARTUP_GRACE_SECONDS)
 # LOG: /var/log/uhm.log (shared with the rest of uhm). Silent on
 # a healthy run -- nothing is written unless a check finds a problem
 # or takes a fix action (WARNING/FIX/ERROR only).
@@ -250,7 +254,7 @@ _load_conf() {
             value="${value//\\\\/\\}"
         fi
         case "$key" in
-            UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN|RECOVERY_COOLDOWN_SECONDS)
+            UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN|RECOVERY_COOLDOWN_SECONDS|STARTUP_GRACE_SECONDS)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
@@ -265,6 +269,25 @@ if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || (( RECOVERY_COOLDOWN_SEC
     log "WARNING: ($RECOVERY_COOLDOWN_SECONDS) -- using default 600"
     RECOVERY_COOLDOWN_SECONDS=600
 fi
+# Same key uhmd.sh reads for its own startup-grace login retries -- reused
+# here so the two share one margin instead of drifting apart. Without this,
+# uhmd.sh stays quiet while UniFi is still booting after a reboot, but this
+# script's own functional login check (below) had no such exemption and
+# alerted anyway for the exact same, already-expected condition.
+STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
+if ! [[ "$STARTUP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
+    log "WARNING: STARTUP_GRACE_SECONDS invalid"
+    log "WARNING: ($STARTUP_GRACE_SECONDS) -- using default 120"
+    STARTUP_GRACE_SECONDS=120
+fi
+
+# Time since uhmd.service itself became active -- same reasoning and same
+# config key as uhmalert.sh's own uhmd_started_at().
+uhmd_started_at() {
+    local ts
+    ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
+    date -d "$ts" +%s 2>/dev/null || echo 0
+}
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
     UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
 else
@@ -463,6 +486,14 @@ check_uosserver() {
     if [[ "$http_code" == "200" ]]; then
         _clear_recovery_attempt "uosserver.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
+        local _uhmd_start _now
+        _uhmd_start=$(uhmd_started_at)
+        _now=$(date +%s)
+        if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
+            log "INFO: UniFi login attempt failed (HTTP $http_code)"
+            log "INFO: still within startup grace window"
+            return
+        fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "uosserver.service"; then
             log "INFO: uosserver restarted recently -- skip (grace)"
@@ -553,6 +584,14 @@ check_unifi_classic() {
     if [[ "$http_code" == "200" ]]; then
         _clear_recovery_attempt "unifi.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
+        local _uhmd_start _now
+        _uhmd_start=$(uhmd_started_at)
+        _now=$(date +%s)
+        if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
+            log "INFO: UniFi login attempt failed (HTTP $http_code)"
+            log "INFO: still within startup grace window"
+            return
+        fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "unifi.service"; then
             log "INFO: unifi restarted recently -- skip (grace)"

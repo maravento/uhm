@@ -10,12 +10,6 @@
 # (RELOAD_SAFETY_INTERVAL_SECONDS in uhm.env, default 1h) -- no cron
 # entry needed. Can also be run manually for troubleshooting, but only while
 # uhmd.service is active -- it aborts otherwise (see the guard below).
-# Installed alongside uhmleases.sh, uhmd.sh and uhmwatch.sh under
-# /etc/uhm/core/ -- these four plus uhmd.service are mandatory, either as
-# the reload mechanism itself or (uhmwatch.sh) as the services watchdog.
-# /etc/uhm/tools/ holds independent, optional scripts: uhmaudit.sh,
-# uhmcheck.sh, uhmmon.sh, uhmalert.sh, plus the admin-provided
-# uhmiptables.sh.
 # Runs uhmleases.sh (lease/ACL rebuild) then uhmiptables.sh (firewall rules), in
 # that order. The two are not treated the same on failure:
 # - uhmleases.sh: missing, not executable, or a genuine execution failure all

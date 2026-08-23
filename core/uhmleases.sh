@@ -10,17 +10,14 @@
 # Not compatible with isc-dhcp-server or any other DHCP daemon.
 #
 # DESCRIPTION:
-# Runs from /etc/uhm/core/ and operates on pydhcpd
-# data located in /etc/pydhcp (which must exist). Despite living next to
-# uhmreload.sh/uhmd.sh under core/, this is not an auxiliary tool: it is
-# the reconciliation step uhmreload.sh invokes on every reload, and its
-# absence or failure aborts the whole reload chain (see uhmreload.sh).
+# Operates on pydhcpd data. This is the reconciliation step, and its
+# absence or failure aborts the whole reload chain.
 #
 # This script:
 # - Drains the lease removal queue written by uhmd
-# - Parses and cleans /etc/pydhcp/pydhcpd.leases
+# - Parses and cleans pydhcpd.leases
 # - Detects unauthorized clients and adds them to block lists
-# - Dynamically rebuilds /etc/pydhcp/pydhcpd.conf based on ACL sources
+# - Dynamically rebuilds pydhcpd.conf based on ACL sources
 # - Applies static mappings (MAC -> IP) from ACL files
 # - Detects duplicate or conflicting entries across ACL sources and aborts
 # - Safely restarts the pydhcpd service
@@ -33,21 +30,16 @@
 # - Automatic cleanup and normalization of ACL files
 # - ACL conflict detection with fail-safe abort (duplicate MAC/IP/hostname,
 # and mac-*.txt IPs landing inside a reserved range)
-# - Configuration read from /etc/uhm/uhm.env (managed by uhmsetup.sh)
+# - Configuration read from uhm.env
 # - All paths, ACL files and network settings read from uhm.env
 # - Optional WPAD/PAC support (see WPAD/PAC OPTION below)
 # - UniFi Hotspot integration
 # - Grace period for unknown MACs before blocking
-# - Lease removal queue: drains /etc/uhm/acl/uhm-queue.txt
-# (written by uhmd) during the safe stop->modify->start cycle
-#
-# LOCATION:
-# Installed at /etc/uhm/core/uhmleases.sh
-# Requires /etc/pydhcp to exist (pydhcpd backend)
-# Configuration stored in /etc/uhm/uhm.env
+# - Lease removal queue: drains the queue file written by uhmd during the
+# safe stop->modify->start cycle
 #
 # REQUIREMENTS:
-# - pydhcpd installed and running (/etc/pydhcp must exist)
+# - pydhcpd installed and running
 # - ACL directories and files as defined in uhm.env
 # - Root privileges
 #
@@ -75,7 +67,6 @@
 # NOTES:
 # - Designed for environments enforcing DHCP-based access control
 # - Incorrect ACL data may disrupt IP assignments
-# - Configuration managed by uhmsetup.sh -- run uhmsetup.sh to reconfigure
 #
 # UNIFI HOTSPOT MODULE:
 # Integration layer that:
@@ -93,14 +84,13 @@
 # WPAD/PAC OPTION (option 252)
 # If you need WPAD/PAC for proxy auto-configuration:
 # 1. Install and configure Apache2
-# 2. Create virtual host on the WPAD_PORT of /etc/uhm/uhm.env (default 18100)
+# 2. Create virtual host on the WPAD_PORT of uhm.env (default 18100)
 # 3. Create wpad.pac file in Apache document root
-# 4. Set WPAD_ENABLED=true in /etc/uhm/uhm.env
+# 4. Set WPAD_ENABLED=true in uhm.env
 # The lines are only written if http://SERVER_IP:WPAD_PORT/wpad.pac answers 200
 #
 # NOTE on logging:
-# - Writes to /var/log/uhm.log (shared with uhmreload.sh). Rotation
-# (/etc/logrotate.d/uhm) is installed by uhmsetup.sh only.
+# - Writes to a log file shared with the rest of the reload chain.
 #
 ################################################################################
 
@@ -401,8 +391,7 @@ if ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
 fi
 CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
 if ! [[ "$CLEANUP_INTERVAL" =~ $_UH_UINT ]] || (( CLEANUP_INTERVAL == 0 )); then
-    log "WARNING: CLEANUP_INTERVAL invalid"
-    log "WARNING: ($CLEANUP_INTERVAL) -- using default 60"
+    log "WARNING: CLEANUP_INTERVAL invalid ($CLEANUP_INTERVAL) -- using default 60"
     CLEANUP_INTERVAL=60
 fi
 AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
@@ -1163,9 +1152,7 @@ drain_lease_queue() {
     before_leases=$(grep -c '^lease ' "$dhcpd_leases" 2>/dev/null) || before_leases=0
     after_leases=$(grep -c '^lease ' "$tmp" 2>/dev/null) || after_leases=0
     if (( before_leases - after_leases != removed )); then
-        log "ERROR: count mismatch"
-        log "ERROR: (before=$before_leases after=$after_leases)"
-        log "ERROR: (removed=$removed)"
+        log "ERROR: count mismatch (before=$before_leases after=$after_leases) (removed=$removed)"
         log "ERROR: skipping update of $dhcpd_leases"
         rm -f "$tmp"
         return

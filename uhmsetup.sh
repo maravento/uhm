@@ -19,8 +19,8 @@
 # ./core/uhmreload.sh
 # ./core/uhmleases.sh
 # ./core/uhmwatch.sh
-# ./tools/uhmaudit.sh
-# ./tools/uhmcheck.sh
+# ./tools/uhmunifi.sh
+# ./tools/uhmacl.sh
 # ./tools/uhmmon.sh
 # ./tools/uhmalert.sh
 # ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
@@ -54,7 +54,7 @@
 # grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (xargs)
 #
 # Hard dependency NOT an apt package (aborts if missing):
-# pydhcpd must be installed and running, with /etc/pydhcp/pydhcp.env
+# pydhcpd must be installed and running, with pydhcp.env
 # present and complete (network values pysetup.sh already collected --
 # uhmsetup.sh reads them from there instead of asking again).
 # pydhcp is not an apt package; install it from
@@ -1177,7 +1177,7 @@ do_remove() {
     warn "    (script backups from --update runs)"
     warn "    and everything else in it"
     warn "  - ${LOG_FILE}, rotated logs"
-    warn "  - uhmaudit.log and reload failure traces"
+    warn "  - uhmunifi.log and reload failure traces"
     warn "Package dependencies"
     warn "  (curl, jq, iptables, ipset, etc.) are NOT removed."
     echo ""
@@ -1274,7 +1274,7 @@ _perform_remove() {
     # Logs
     step "Logs"
     local extra_logs=()
-    for f in /var/log/uhmaudit.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
+    for f in /var/log/uhmunifi.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
         [[ -f "$f" ]] && extra_logs+=("$f")
     done
     if compgen -G "${LOG_FILE}*" >/dev/null || [[ ${#extra_logs[@]} -gt 0 ]]; then

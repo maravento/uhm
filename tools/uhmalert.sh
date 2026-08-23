@@ -6,7 +6,7 @@
 # uhmalert -- UniFi Hotspot Alert Watcher (optional)
 #
 # DESCRIPTION:
-# Watches /var/log/uhm.log in real time and sends a push
+# Watches the shared uhm log in real time and sends a push
 # notification via ntfy.sh on three kinds of events:
 #
 # 1. Connectivity loss to the UniFi controller -- anchors on the
@@ -61,7 +61,7 @@
 # CONFIGURATION:
 # `install` appends UHM_NTFY_TOPIC (auto-generated, unpredictable),
 # UHM_API_FAIL_THRESHOLD=3 and UHM_ALERT_QUIET_PERIOD_SECONDS=120 to
-# /etc/uhm/uhm.env on first run, and prints the generated
+# uhm.env on first run, and prints the generated
 # topic name so you can subscribe the ntfy app to it. Never overwrites
 # any of them if already present (safe to re-run/upgrade).
 # To change them later, edit uhm.env directly and restart the
@@ -70,7 +70,7 @@
 # matching uhmd.sh's own cycle interval.
 #
 # USAGE:
-# sudo ./uhmalert.sh install Deploy to /etc/uhm/tools/uhmalert.sh,
+# sudo ./uhmalert.sh install Deploy the script,
 # create+enable+start uhmalert.service
 # (creates the systemd unit if missing)
 # sudo ./uhmalert.sh uninstall Stop+disable the service, remove the unit
@@ -356,7 +356,17 @@ notify() {
     curl -s -d "$msg" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
 }
 
-trap 'log "uhmalert done at: $(date)"; exit 0' TERM INT
+# Bash builtins only, no fork -- systemd's default KillMode=control-group
+# sends TERM to this whole cgroup at once, so an external `date` (forked
+# either by log()'s own timestamp prefix or by this line's message) can be
+# killed before it prints anything, logging this line with an empty
+# timestamp. printf's %()T is bash's own strftime, no subprocess involved.
+_on_term() {
+    printf -v _term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
+    echo "$_term_ts uhmalert done at: $_term_ts" | tee -a "$log_file" 2>/dev/null || true
+    exit 0
+}
+trap _on_term TERM INT
 
 # Start
 log "uhmalert start..."

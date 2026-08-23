@@ -22,15 +22,14 @@
 # TLS (UNIFI_CERT_PIN in uhm.env):
 # The UniFi controller normally uses a self-signed certificate, so every API
 # call disables chain verification (curl -k). If UNIFI_CERT_PIN is set
-# (computed by uhmsetup.sh at install time, format "sha256//<base64>"), it is
-# passed as curl --pinnedpubkey alongside -k, so the connection is rejected
-# outright if the controller's certificate is ever swapped for a different
-# one (MITM or unexpected controller change). Empty/unset UNIFI_CERT_PIN
-# falls back to -k with no pinning.
+# (format "sha256//<base64>"), it is passed as curl --pinnedpubkey alongside
+# -k, so the connection is rejected outright if the controller's certificate
+# is ever swapped for a different one (MITM or unexpected controller
+# change). Empty/unset UNIFI_CERT_PIN falls back to -k with no pinning.
 #
-# Session tokens are persisted to TOKEN_STATE_FILE (/run/uhmd_session)
-# so that re-authentication inside $(...) subshells propagates correctly to
-# subsequent API calls in the same cycle.
+# Session tokens are persisted to TOKEN_STATE_FILE so that re-authentication
+# inside $(...) subshells propagates correctly to subsequent API calls in
+# the same cycle.
 #
 # STARTUP LOGIN (main()):
 # On startup, retries the initial UniFi login quietly (no ERROR log, no
@@ -99,7 +98,10 @@
 # trigger RELOAD (step 9), which invokes uhmleases.sh to
 # do the actual classification/expiry/blocking of grace
 # entries.
-# 7. SESSIONS -- promote voucher-authenticated clients to uhm-auth, except
+# 7. SESSIONS -- promote voucher-authenticated clients to uhm-auth. Only a
+# session UniFi reports as authorized_by=voucher qualifies: stat/guest
+# also lists authorize-guest grants (authorized_by=api), which are not
+# voucher redemptions and never belong in uhm-auth. Also excludes
 # a MAC revoked in an earlier cycle whose stat/guest session is
 # still the same one it had when it was revoked (REVOKED_SESSIONS)
 # 8. REVOKE -- remove UniFi-unauthorized clients from uhm-auth and record
@@ -124,16 +126,9 @@
 # both the file and the journal.
 # SERVICE: systemctl status uhmd
 #
-# LOCATION:
-# Installed at /etc/uhm/core/uhmd.sh, alongside uhmd.service, uhmreload.sh,
-# uhmleases.sh, and uhmwatch.sh -- these five are mandatory, either as the
-# reload mechanism itself or (uhmwatch.sh) as the services watchdog (see
-# its own header for why). /etc/uhm/tools/ holds independent, optional
-# scripts (uhmaudit.sh, uhmcheck.sh, uhmmon.sh, uhmalert.sh, plus the
-# admin-provided uhmiptables.sh) -- uhm runs fine without any of those. The reload
-# script path itself is read from UHM_RELOAD in uhm.env
-# (set by uhmsetup.sh, default /etc/uhm/core/uhmreload.sh) -- nothing here
-# hardcodes it, so relocating core/ only requires updating that one value.
+# The reload script path is read from UHM_RELOAD in uhm.env (set by
+# uhmsetup.sh, default /etc/uhm/core/uhmreload.sh) -- nothing here hardcodes
+# it, so relocating the reload script only requires updating that one value.
 #
 ################################################################################
 
@@ -682,8 +677,7 @@ api_get() {
     rm -f "$hdr"
 
     if [[ -z "$code" ]]; then
-        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} -> no response"
-        log "WARNING: (timeout or network error)"
+        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} timeout. No response"
         echo "{}"
         return 0
     fi
@@ -800,8 +794,7 @@ queue_lease_removal() {
         log "INFO: Queued lease removal for $lc_mac"
         return 0
     fi
-    log "WARNING: failed to write $lc_mac"
-    log "WARNING: to $UHM_QUEUE"
+    log "WARNING: failed to write $lc_mac to $UHM_QUEUE"
     return 1
 }
 
@@ -923,10 +916,8 @@ authorize_managed_macs() {
         http_code=$(api_post "$url" "{\"cmd\":\"authorize-guest\",\"mac\":\"${mac}\",\"minutes\":${minutes}}")
         if [[ "$http_code" == "200" ]]; then
             log "INFO: Authorized managed MAC $mac in UniFi"
-            log "INFO: (minutes=$minutes)"
         else
-            log "WARNING: Failed to authorize MAC $mac in UniFi"
-            log "WARNING: (HTTP $http_code)"
+            log "WARNING: Failed to authorize MAC $mac (HTTP $http_code)"
         fi
     done <<< "$managed_macs"
 }
@@ -1022,8 +1013,7 @@ add_mac_to_acl() {
     local mac="$1" ip="$2" hostname="$3" end_time="$4"
 
     if [[ ! "$mac" =~ $_UH_MAC ]]; then
-        log "ERROR: bad MAC '$mac'"
-        log "ERROR: not added"
+        log "ERROR: bad MAC '$mac' -- not added"
         return 1
     fi
 
@@ -1046,8 +1036,8 @@ add_mac_to_acl() {
                 log "ERROR: (sed -i failed)"
                 return 1
             fi
-            log "INFO: Updated end_time for $mac"
-            log "INFO: ($existing_end -> $end_time)"
+            log "INFO: updated end_time for $mac"
+            log "INFO: new end_time $existing_end -> $end_time"
         fi
     else
         queue_lease_removal "$mac"
@@ -1126,8 +1116,8 @@ clean_expired_macs() {
     local after_count
     after_count=$(grep -c '^#\{0,1\}a;' "$tmp" 2>/dev/null); after_count=$(( ${after_count:-0} + 0 ))
     if (( before_count - after_count != moved )); then
-        log "ERROR: count mismatch"
-        log "ERROR: (before=$before_count after=$after_count moved=$moved) -- skipping"
+        log "ERROR: count mismatch -- skip"
+        log "ERROR: before=$before_count after=$after_count moved=$moved"
         rm -f "$tmp"
         return
     fi
@@ -1245,20 +1235,30 @@ process_sessions() {
         ' 2>/dev/null || true)
     fi
 
-    while IFS=$'\t' read -r mac end_time api_voucher_code; do
+    while IFS=$'\t' read -r mac end_time api_voucher_code api_authorized_by; do
         [[ -z "$mac" || "$mac" == "null" ]] && continue
         if ! [[ "$mac" =~ $_UH_MAC ]]; then
-            log "WARNING: malformed mac from API"
-            log "WARNING: ($mac) -- skipping"
+            log "WARNING: malformed MAC from API"
             continue
         fi
         [[ -z "$end_time" || "$end_time" == "null" ]] && continue
         if ! [[ "$end_time" =~ $_UH_UINT ]]; then
-            log "WARNING: malformed end_time for $mac"
-            log "WARNING: ($end_time) -- skipping"
+            log "WARNING: malformed line $mac -- skip"
             continue
         fi
         (( end_time <= now )) && continue
+
+        # uhm-auth.txt is the voucher list: only a client that actually
+        # redeemed one belongs here. stat/guest reports every guest
+        # authorization regardless of origin, and UniFi records that origin
+        # per session in authorized_by -- "voucher" for a redeemed voucher,
+        # "api" for a cmd/stamgr authorize-guest (this daemon's
+        # authorize_managed_macs, the UniFi UI, or any external integration).
+        # Only the former belongs in this list; the latter carries whatever
+        # duration that other grant chose and no voucher backs it.
+        # authorized_by is stored on the session itself, so it stays valid
+        # even after UniFi auto-purges the voucher on quota exhaustion.
+        [[ "$api_authorized_by" != "voucher" ]] && continue
 
         # No log here, on purpose: uhmd.sh does not process mac-*.txt
         # (see MANAGED MACS note above) and a managed device having a live
@@ -1316,21 +1316,24 @@ process_sessions() {
             voucher_code="${_voucher_by_end[$end_time]:-}"
         fi
         voucher_code=$(printf '%s' "$voucher_code" | tr -cd 'A-Za-z0-9._-')
-        # Fallback guard: voucher_code is UniFi API data, with no length
-        # guarantee from our side. uhmleases.sh's _normalize_acl_file()
-        # rejects any uhm-auth.txt hostname over 63 chars (check README
-        # Fallback section) and aborts normalization for the whole file --
-        # not just this one client. No known UniFi version actually returns
-        # a code long enough to trigger this (observed codes are short,
-        # numeric), so this never fires in practice; if it ever did, the
-        # code is simply omitted from the hostname (kept as plain "guestN")
-        # instead of writing a line that would break the entire reload.
+        # Plain "guestN" (no "-code" suffix) is written whenever voucher_code
+        # ends up empty here -- not just from the length guard below.
+        # voucher_code is empty when neither source above had it: the API
+        # didn't return api_voucher_code AND _voucher_by_end[$end_time] had
+        # no match, which happens whenever VOUCHER_CACHE was empty for this
+        # cycle (load_all_vouchers() failed, e.g. stat/voucher not yet ready
+        # right after a restart -- see the startup grace loop in main()).
+        # The length guard below (uhmleases.sh's _normalize_acl_file() rejects
+        # any uhm-auth.txt hostname over 63 chars and aborts normalization for
+        # the whole file) is the second, much rarer way to land here: no known
+        # UniFi version actually returns a code long enough to trigger it
+        # (observed codes are short, numeric).
         if [[ -n "$voucher_code" ]]; then
             if (( ${#assigned_hostname} + 1 + ${#voucher_code} <= 63 )); then
                 assigned_hostname="${assigned_hostname}-${voucher_code}"
             else
                 log "WARNING: voucher code too long for hostname field"
-                log "WARNING: ($mac) -- plain hostname, no code"
+                log "WARNING: for $mac -- hostname with no code"
             fi
         fi
 
@@ -1347,7 +1350,7 @@ process_sessions() {
         .data[]
         | select(.mac != null and .mac != "")
         | select(.end != null)
-        | [(.mac | ascii_downcase), (.end | tostring), (.voucher_code // "")]
+        | [(.mac | ascii_downcase), (.end | tostring), (.voucher_code // ""), (.authorized_by // "")]
         | join("\t")
     ' 2>/dev/null || true)
 
@@ -1510,11 +1513,9 @@ check_and_reload_if_changed() {
         # every single cycle.
         _LAST_RELOAD_EPOCH=$now
         if (( acl_changed == 1 )); then
-            log "WARNING: ACLs changed but UHM_RELOAD is not set"
-            log "WARNING: or not executable"
+            log "WARNING: ACLs changed but UHM_RELOAD is not set or not executable"
         else
-            log "WARNING: safety-net reload due but no reload script set"
-            log "WARNING: set or not executable"
+            log "WARNING: safety-net reload due but UHM_RELOAD is not set or not executable"
         fi
         log "WARNING: backing off to safety-net cadence (${RELOAD_SAFETY_INTERVAL_SECONDS}s)"
         log "WARNING: will not retry every cycle"
@@ -1671,8 +1672,7 @@ main() {
     fi
     STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
     if ! [[ "$STARTUP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
-        log "WARNING: STARTUP_GRACE_SECONDS invalid"
-        log "WARNING: ($STARTUP_GRACE_SECONDS) -- using default 120"
+        log "WARNING: STARTUP_GRACE_SECONDS invalid (default 120)"
         STARTUP_GRACE_SECONDS=120
     fi
     UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
@@ -1720,6 +1720,29 @@ main() {
             exit 1
         fi
         sleep 10
+    done
+
+    # stat/voucher can still fail right after login even though the login
+    # endpoint itself just answered -- UniFi-OS brings its subsystems up
+    # gradually after a reboot. Without this, a guest authorized by the
+    # very first run_cycle() would get its hostname written without the
+    # voucher-code suffix (process_sessions() falls back to plain "guestN"
+    # when VOUCHER_CACHE is empty, uhmd.sh:1328), and that hostname is never
+    # recomputed later. Same grace pattern as unifi_login above, but a
+    # persistent failure only logs a warning and continues instead of
+    # exiting -- the daemon can still authorize/revoke without vouchers.
+    local _voucher_start _voucher_elapsed
+    _voucher_start=$(date +%s)
+    load_all_vouchers
+    while (( _VOUCHERS_OK == 0 )); do
+        _voucher_elapsed=$(( $(date +%s) - _voucher_start ))
+        if (( _voucher_elapsed >= STARTUP_GRACE_SECONDS )); then
+            log "WARNING: Could not load vouchers after ${STARTUP_GRACE_SECONDS}s at startup"
+            log "WARNING: continuing -- new guests this cycle may lack a voucher code in hostname"
+            break
+        fi
+        sleep 10
+        load_all_vouchers
     done
 
     # iptables/ipset state does not survive a reboot, but the ACL files

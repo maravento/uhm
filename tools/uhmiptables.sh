@@ -6,14 +6,12 @@
 # Minimal firewall template for uhm
 #
 # DESCRIPTION:
-# Invoked by uhmreload.sh after every ACL change.
-#
 # Enables IPv4 forwarding and NAT -- neither is on by default in Ubuntu, and
 # without them LAN clients get a lease but reach nothing. Nothing else: no
 # proxy redirect, no port filtering, no ipsets. Client classification and the
 # captive portal do not depend on this file.
 #
-# For the full ruleset, copy tools/uhmiptables_example.txt over this file and
+# For the full ruleset, copy uhmiptables_example.txt over this file and
 # adapt it to your network.
 #
 # Rules live in UHM_NAT, flushed and rebuilt on every run so they never

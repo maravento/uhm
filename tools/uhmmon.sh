@@ -189,7 +189,7 @@ if [[ "$action" == "grep" ]]; then
             msg="${BASH_REMATCH[3]}"
         elif [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
             ts="${BASH_REMATCH[1]}"
-            level="RELOAD"
+            level="STATUS"
             msg="${BASH_REMATCH[2]}"
         else
             continue
@@ -248,7 +248,7 @@ while IFS= read -r line; do
         msg="${BASH_REMATCH[3]}"
     elif [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
         ts="${BASH_REMATCH[1]}"
-        level="RELOAD"
+        level="STATUS"
         msg="${BASH_REMATCH[2]}"
     else
         continue
@@ -469,7 +469,7 @@ print <<'HTMLBLOCK';
     <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." onkeydown="if(event.key==='Enter')uhGS()">
     <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Search entire log file">Full log</button>
   </div>
-  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="RELOAD">RELOAD</option></select>
+  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="STATUS">STATUS</option></select>
   <select id="uhLn" onchange="uhRL()"><option value="200">Last 200</option><option value="500" selected>Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
   <select id="uhIv" onchange="uhCI()"><option value="1000">1s</option><option value="3000">3s</option><option value="5000" selected>5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
   <button class="uh-btn" onclick="uhRL()" title="Reload log">Reload</button>
