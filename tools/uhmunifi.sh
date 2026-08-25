@@ -142,10 +142,7 @@ _perms=$(stat -c '%a' "$CONFIG" 2>/dev/null)
 _gdigit="${_perms: -2:1}"
 _odigit="${_perms: -1}"
 if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: $CONFIG has unsafe owner/permissions"
-    log "ERROR: (owner=$_owner perms=$_perms)"
-    log "ERROR: must be owned by root with no group/other access"
-    log "ERROR: (600). Refusing to read it."
+    log "ERROR: uhm.env unsafe owner/perms, must be root-owned 600"
     exit 1
 fi
 
@@ -172,9 +169,8 @@ load_config() {
 load_config "$CONFIG"
 
 if [ -z "${UNIFI_CONTROLLER_URL:-}" ] || [ -z "${UNIFI_USERNAME:-}" ] || [ -z "${UNIFI_PASSWORD:-}" ] || [ -z "${UHM_ESSID:-}" ]; then
-    log "ERROR: Missing required variables in $CONFIG"
-    log "ERROR: (UNIFI_CONTROLLER_URL, UNIFI_USERNAME,"
-    log "ERROR: UNIFI_PASSWORD, UHM_ESSID)"
+    log "ERROR: uhm.env is missing a required UniFi config variable"
+    log "ERROR: check UNIFI_CONTROLLER_URL/USERNAME/PASSWORD, UHM_ESSID"
     exit 1
 fi
 
@@ -227,8 +223,7 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$token" ]; then
-            log "ERROR: Authentication failed"
-            log "ERROR: check credentials in $CONFIG"
+            log "ERROR: Authentication failed -- check credentials in $CONFIG"
             exit 1
         fi
         SESSION_COOKIE="TOKEN=${token}"
@@ -251,8 +246,7 @@ do_login() {
     fi
 
     if [ -z "$SESSION_COOKIE" ]; then
-        log "ERROR: Authentication failed"
-        log "ERROR: check credentials in $CONFIG"
+        log "ERROR: Authentication failed -- check credentials in $CONFIG"
         exit 1
     fi
 }
@@ -335,8 +329,7 @@ VCH_RC=$(echo "$VOUCHER" | jq -r '.meta.rc // "error"' 2>/dev/null)
 # calls came back empty, authentication almost certainly failed -- stop
 # here instead of entering a menu with no usable data.
 if [[ "$STA_RC" == "error" && "$GUEST_RC" == "error" && "$VCH_RC" == "error" ]]; then
-    log "ERROR: Authentication failed -- no data from API"
-    log "ERROR: check credentials in $CONFIG"
+    log "ERROR: no data from API -- check credentials in $CONFIG"
     exit 1
 fi
 
@@ -630,13 +623,11 @@ interactive_forget_no_voucher() {
     echo "============================================================================"
 
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
-        log "ERROR: aborting to prevent unintended mass-forget."
+        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
-        log "ERROR: aborting to prevent unintended mass-forget."
+        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -645,7 +636,7 @@ interactive_forget_no_voucher() {
     local ALLUSER_RC
     ALLUSER_RC=$(echo "$ALLUSER" | jq -r '.meta.rc // "error"' 2>/dev/null)
     if [ "$ALLUSER_RC" != "ok" ]; then
-        log "ERROR: Could not fetch rest/user (rc=$ALLUSER_RC)"
+        log "WARNING: Could not fetch rest/user (rc=$ALLUSER_RC)"
         return
     fi
 
@@ -722,18 +713,15 @@ interactive_delete_expired() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
-        log "ERROR: aborting."
+        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
-        log "ERROR: aborting to prevent unintended client disconnect."
+        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
-        log "ERROR: aborting to prevent unintended client forget."
+        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
 
@@ -782,8 +770,7 @@ interactive_delete_expired() {
         if [ "$rc" = "ok" ]; then
             log "INFO: Deleted voucher: $code"
         else
-            log "WARNING: Failed to delete voucher: $code"
-            log "WARNING: skipping its clients"
+            log "WARNING: failed to delete voucher $code, its clients -- skip"
             continue
         fi
 
@@ -829,18 +816,15 @@ interactive_revoke_by_code() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
-        log "ERROR: aborting."
+        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
-        log "ERROR: aborting to prevent unintended client forget."
+        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
-        log "ERROR: aborting to prevent unintended client disconnect."
+        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -904,8 +888,7 @@ interactive_revoke_by_code() {
             && log "INFO: Deleted voucher: $TARGET_CODE" \
             || log "WARNING: Failed to delete voucher from stat/voucher (rc=$rc)"
     else
-        log "INFO: Voucher not in stat/voucher (manually deleted)"
-        log "INFO: proceeding with cleanup..."
+        log "INFO: voucher $TARGET_CODE not found, proceeding with cleanup"
     fi
 
     mapfile -t GUEST_MACS < <(echo "$GUEST" | jq -r --arg code "$TARGET_CODE" '
@@ -923,8 +906,7 @@ interactive_revoke_by_code() {
     mapfile -t ALL_MACS < <(printf '%s\n' "${GUEST_MACS[@]}" "${STA_MACS[@]}" | sort -u | grep -v '^$')
 
     if [ ${#ALL_MACS[@]} -eq 0 ]; then
-        log "INFO: No client records found linked to code: $TARGET_CODE"
-        log "INFO: Done."
+        log "INFO: no client records for code: $TARGET_CODE"
         return
     fi
 
@@ -974,8 +956,7 @@ interactive_revoke_by_code() {
             || log "WARNING: Failed to forget: $mac (rc=$frc)"
     done
 
-    log "INFO: Revocation complete for code: $TARGET_CODE"
-    log "INFO: ($target_note)"
+    log "INFO: revocation complete for code: $TARGET_CODE ($target_note)"
 }
 
 # -- Action [5]: forget every session marked (!) in report [3] -----------------
@@ -993,13 +974,11 @@ interactive_forget_flagged() {
     echo "============================================================================"
 
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
-        log "ERROR: aborting."
+        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
-        log "ERROR: aborting to prevent unintended client disconnect."
+        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -1062,18 +1041,15 @@ interactive_forget_flagged() {
 # -- Action [6]: purge all vouchers and client history ------------------------
 interactive_purge_all() {
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "ERROR: stat/voucher data unavailable (rc=$VCH_RC)"
-        log "ERROR: aborting purge."
+        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "ERROR: stat/sta data unavailable (rc=$STA_RC)"
-        log "ERROR: aborting purge."
+        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "ERROR: stat/guest data unavailable (rc=$GUEST_RC)"
-        log "ERROR: aborting purge."
+        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
 

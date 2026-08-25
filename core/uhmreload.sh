@@ -71,8 +71,7 @@ _UH_UINT='^(0|[1-9][0-9]*)$'
 CONFIG_FILE="/etc/uhm/uhm.env"
 UHM_LEASES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_LEASES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set"
-    log "WARNING: using default 120"
+    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set -- fallback"
     UHM_LEASES_TIMEOUT_SECONDS=120
 fi
 if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
@@ -81,8 +80,7 @@ fi
 
 UHM_IPTABLES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_IPTABLES_TIMEOUT_SECONDS=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UHM_IPTABLES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set"
-    log "WARNING: using default 60"
+    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set -- fallback"
     UHM_IPTABLES_TIMEOUT_SECONDS=60
 fi
 if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
@@ -91,15 +89,13 @@ fi
 
 UHM_LEASES=$(grep -m1 '^UHM_LEASES=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UHM_LEASES" ]]; then
-    log "WARNING: UHM_LEASES not set in $CONFIG_FILE"
-    log "WARNING: using default /etc/uhm/core/uhmleases.sh"
+    log "WARNING: UHM_LEASES not set -- fallback"
     UHM_LEASES="/etc/uhm/core/uhmleases.sh"
 fi
 
 UHM_IPTABLES=$(grep -m1 '^UHM_IPTABLES=' "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
 if [[ -z "$UHM_IPTABLES" ]]; then
-    log "WARNING: UHM_IPTABLES not set in $CONFIG_FILE"
-    log "WARNING: using default /etc/uhm/tools/uhmiptables.sh"
+    log "WARNING: UHM_IPTABLES not set -- fallback"
     UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
 fi
 
@@ -114,8 +110,7 @@ log "uhmreload start..."
 
 # Abort if uhmd isn't active -- nothing downstream should run blindly.
 if ! systemctl is-active --quiet uhmd; then
-    log "ERROR: uhmd is not active"
-    log "ERROR: aborting (uhmleases.sh/uhmiptables.sh not invoked)"
+    log "ERROR: uhmd not active, uhmleases.sh/uhmiptables.sh not run -- abort"
     exit 1
 fi
 
@@ -130,9 +125,7 @@ fi
 run_step() {
     local script="$1" name="$2" step_timeout="$3"
     if [[ ! -x "$script" ]]; then
-        log "WARNING: $name not found or not executable:"
-        log "WARNING: $script"
-        log "WARNING: aborting"
+        log "WARNING: $name not found or not executable: $script"
         exit 1
     fi
     local trace_file
@@ -144,15 +137,14 @@ run_step() {
         # timestamp) -- a persistent failure retries every cycle, and an
         # unbounded trace per attempt would fill /var/log over time.
         local trace_dest="/var/log/${name%.sh}-failure.trace"
-        mv -f "$trace_file" "$trace_dest" 2>/dev/null || { log "WARNING: failed to move trace -- discarding"; log "WARNING: $trace_dest"; rm -f "$trace_file"; }
+        if ! mv -f "$trace_file" "$trace_dest" 2>/dev/null; then
+            log "WARNING: failed to move trace, discarding: $trace_dest"
+            rm -f "$trace_file"
+        fi
         if [[ "$exit_code" == "124" ]]; then
-            log "WARNING: $name timed out after ${step_timeout}s"
-            log "WARNING: aborting; trace saved to"
-            log "WARNING: $trace_dest"
+            log "WARNING: $name timed out after ${step_timeout}s: $trace_dest"
         else
-            log "WARNING: $name failed (exit $exit_code)"
-            log "WARNING: aborting; trace saved to"
-            log "WARNING: $trace_dest"
+            log "WARNING: $name failed (exit $exit_code), trace: $trace_dest"
         fi
         exit 1
     fi
@@ -168,8 +160,7 @@ run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS"
 # the reload chain; uhmiptables.sh only enforces at the firewall level, and ACL
 # classification keeps working correctly without it.
 if [[ ! -x "$UHM_IPTABLES" ]]; then
-    log "WARNING: uhmiptables.sh not found or not executable"
-    log "WARNING: path: $UHM_IPTABLES -- skipping"
+    log "WARNING: uhmiptables.sh not found or not executable -- skip"
 else
     run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS"
 fi

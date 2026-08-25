@@ -349,11 +349,11 @@ uhm/                      # as cloned -- see note above
 
 This order only decides automatic removal when the lower-priority side is a list `uhmleases.sh` itself generates and maintains (`uhm-auth.txt`, `uhm-grace.txt`, `blockdhcp.txt`, levels 3-5): if the same MAC also sits in a higher-priority list, the entry in the project-maintained one is silently removed — never the other way around, and never an administrator-maintained list.
 
-- `mac-*.txt` vs `uhm-auth.txt`: resolved inside `check_acl_conflicts()` itself (see [ACL consistency check](#acl-consistency-check-check_acl_conflicts) below), before `is_pydhcp()` ever runs — not by a separate cleanup function.
-- `mac-*.txt`/`uhm-auth.txt` vs `blockdhcp.txt`: `clean_block_list()` checks an active (`a;`) entry in either against `blockdhcp.txt`, the same pair `uhmd.sh`'s own `dedup` step (see [Daemon Cycle](#daemon-cycle)) already checks for `uhm-auth.txt` one cycle earlier — this closes the narrow one-cycle window where a MAC voucher-authorized in the same cycle it runs would not yet have been caught by `dedup`.
-- `mac-*.txt`/`uhm-auth.txt` vs `uhm-grace.txt`: `clean_grace_list()`.
+- `mac-*.txt` vs `uhm-auth.txt`: resolved inside `check_duplicate()` itself (see [Duplicate guard](#duplicate-guard-check_duplicate) below), before `is_pydhcp()` ever runs — not by a separate cleanup function.
+- `mac-*.txt`/`uhm-auth.txt`/`uhm-grace.txt` vs `blockdhcp.txt`: also `check_duplicate()`. `uhmd.sh`'s own `dedup` step (see [Daemon Cycle](#daemon-cycle)) checks the `uhm-auth.txt` pair one cycle earlier — this closes the narrow one-cycle window where a MAC voucher-authorized in the same cycle it runs would not yet have been caught by `dedup`.
+- `mac-*.txt`/`uhm-auth.txt` vs `uhm-grace.txt`: also `check_duplicate()`.
 
-Between two administrator-maintained `mac-*.txt` lists (levels 1-2, e.g. `mac-unlimited.txt` vs `mac-proxy.txt`) the same MAC, IP or hostname is never auto-resolved by priority: it is an admin mistake, and `check_acl_conflicts()` aborts the reload naming the field, the value and the files involved, so the administrator fixes it by hand.
+`check_duplicate()` is the single guard for every duplicate/priority check above -- no other function in `uhmleases.sh` does this. Between two administrator-maintained `mac-*.txt` lists (levels 1-2, e.g. `mac-unlimited.txt` vs `mac-proxy.txt`) the same MAC, IP or hostname is never auto-resolved by priority: it is an admin mistake, and `check_duplicate()` aborts the reload naming the field, the value and the files involved, so the administrator fixes it by hand.
 
 ## ARCHITECTURE
 
@@ -1050,12 +1050,9 @@ sudo bash uhmsetup.sh
 </table>
 
 ```text
-2026-07-12 21:41:10 INFO: UniFi login attempt failed (HTTP 000)
-2026-07-12 21:41:10 INFO: still within startup grace window
-2026-07-12 21:41:20 INFO: UniFi login attempt failed (HTTP 000)
-2026-07-12 21:41:20 INFO: still within startup grace window
-2026-07-12 21:41:30 INFO: UniFi login attempt failed (HTTP 000)
-2026-07-12 21:41:30 INFO: still within startup grace window
+2026-07-12 21:41:10 INFO: UniFi login failed (HTTP 000), retry in grace
+2026-07-12 21:41:20 INFO: UniFi login failed (HTTP 000), retry in grace
+2026-07-12 21:41:30 INFO: UniFi login failed (HTTP 000), retry in grace
 2026-07-12 21:41:50 INFO: UniFi login OK
 2026-07-12 21:41:51 WARNING: Could not load vouchers (rc=empty)
 2026-07-12 21:41:56 INFO: stat/guest unavailable -- skipping sessions
@@ -1357,51 +1354,69 @@ Losing a genuinely unrecoverable line is never a security gap, only a MAC that g
 | `uhmleases.sh` fully rebuilds `/etc/pydhcp/pydhcpd.conf` on every run from its ACL files and `uhm.env`. Any manual edits to `pydhcpd.conf` — including custom lease times, pools, or directives — will be lost. If you manage `pydhcpd.conf` manually, do not use `uhmleases.sh`. | `uhmleases.sh` reconstruye completamente `/etc/pydhcp/pydhcpd.conf` en cada ejecución a partir de sus archivos ACL y `uhm.env`. Cualquier edición manual a `pydhcpd.conf` — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona `pydhcpd.conf` manualmente, no utilice `uhmleases.sh`. |
 | **Deactivating a managed MAC**: commenting out a line in a `mac-*.txt` file (prefixing it with `#`) keeps it in place, IP included, but gives it the exact same treatment as a `blockdhcp.txt` entry — `uhmleases.sh` adds it to the `"blockdhcp"` DHCP class in `pydhcpd.conf`, so `pydhcpd` denies it a lease outright. It never physically enters `blockdhcp.txt`. | **Desactivar una MAC gestionada**: comentar una línea en un archivo `mac-*.txt` (agregando `#` al inicio) la deja en su lugar, con su IP incluida, pero recibe exactamente el mismo tratamiento que una entrada de `blockdhcp.txt` — `uhmleases.sh` la agrega a la clase DHCP `"blockdhcp"` en `pydhcpd.conf`, así que `pydhcpd` le niega la lease directamente. Nunca entra físicamente a `blockdhcp.txt`. |
 
-##### ACL consistency check (`check_acl_conflicts`)
+##### Duplicate guard (`check_duplicate`)
 
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      After normalizing and deduplicating the raw ACL files (<code>normalize_acl_lists()</code>, <code>dedup_acl_mac_lines()</code>), but before any classification/expiry/blocking logic runs, <code>uhmleases.sh</code> runs <code>check_acl_conflicts()</code> against every ACL source (<code>mac-*.txt</code> and <code>uhm-auth.txt</code>). It catches two unrelated but equally fatal problems, each reported with its own precise <code>ERROR:</code> line, before aborting with <code>exit 1</code>:
+      <code>check_duplicate()</code> is the single guard against duplicate ACL entries in <code>uhmleases.sh</code> — no other function detects or removes a duplicate. Called twice: right after <code>normalize_acl_lists()</code> (precondition, before anything touches the files) and again at the very end of the script, after <code>is_pydhcp()</code> (postcondition, catching a bug in the script's own processing in between). Priority order: <code>mac-*.txt</code> (admin-owned, fatal on conflict) &gt; <code>uhm-auth.txt</code> &gt; <code>uhm-grace.txt</code> &gt; <code>blockdhcp.txt</code> (owned by pydhcp, least relevant — loses against any other list).
       <br><br>
-      <b>1. Duplicate MAC, IP, or hostname</b> across those sources (e.g. the same device listed in two different <code>mac-*.txt</code> files, or a leftover entry colliding with a live guest).
+      <b>1. <code>mac-*.txt</code> vs itself</b> (MAC, IP, or hostname) — fatal, reported with a precise <code>ERROR:</code> line naming the field, the value, and the files involved, then <code>exit 1</code>. This is always an admin mistake (e.g. the same device listed in two different <code>mac-*.txt</code> files) and is never auto-resolved.
       <br><br>
-      <b>2. A <code>mac-*.txt</code> IP falling inside a range reserved for something else.</b> <code>uhm.env</code> only defines two IP ranges — <code>UHM_INI_RANGE</code>/<code>UHM_END_RANGE</code> (for <code>uhm-auth.txt</code>) and <code>SERV_INI_RANGE_BLOCK</code>/<code>SERV_END_RANGE_BLOCK</code> (the pydhcp pool used by <code>uhm-grace.txt</code>/<code>blockdhcp.txt</code>). <code>mac-*.txt</code> files are administrator-created and administrator-addressed — nothing in <code>uhm.env</code> reserves a range for them, so an IP picked by hand can land inside either of the other two ranges. This is always a misconfiguration, whether or not a guest currently holds that exact IP.
+      <b>2. <code>uhm-auth.txt</code> vs itself</b> (MAC, IP, or hostname) <b>and vs <code>mac-*.txt</code></b> (MAC only, <code>mac-*.txt</code> always wins) — silent, the stale <code>uhm-auth.txt</code> line is removed with an <code>INFO:</code> line naming the MAC.
       <br><br>
-      If neither problem is found, it proceeds straight into <code>is_pydhcp()</code> (the stop→modify→start pydhcpd cycle) as usual.
+      <b>3. <code>uhm-grace.txt</code> vs itself, <code>mac-*.txt</code>, and <code>uhm-auth.txt</code></b> (MAC only) — silent, same as above.
+      <br><br>
+      <b>4. <code>blockdhcp.txt</code> vs itself and every other list</b> (MAC only) — silent, same as above; <code>blockdhcp.txt</code> is the lowest priority, so it loses against any of the other three.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Después de normalizar y deduplicar los archivos ACL crudos (<code>normalize_acl_lists()</code>, <code>dedup_acl_mac_lines()</code>), pero antes de que corra cualquier lógica de clasificación/expiración/bloqueo, <code>uhmleases.sh</code> corre <code>check_acl_conflicts()</code> contra cada fuente ACL (<code>mac-*.txt</code> y <code>uhm-auth.txt</code>). Detecta dos problemas distintos pero igualmente fatales, cada uno con su propia línea <code>ERROR:</code> puntual, antes de abortar con <code>exit 1</code>:
+      <code>check_duplicate()</code> es la única guardia contra entradas ACL duplicadas en <code>uhmleases.sh</code> — ninguna otra función detecta o elimina un duplicado. Se llama dos veces: justo después de <code>normalize_acl_lists()</code> (precondición, antes de que nada toque los archivos) y de nuevo al final del script, después de <code>is_pydhcp()</code> (postcondición, para atrapar un bug del propio procesamiento del script en el medio). Orden de prioridad: <code>mac-*.txt</code> (del administrador, fatal ante conflicto) &gt; <code>uhm-auth.txt</code> &gt; <code>uhm-grace.txt</code> &gt; <code>blockdhcp.txt</code> (de pydhcp, la menos relevante — pierde contra cualquier otra lista).
       <br><br>
-      <b>1. MAC, IP u hostname duplicado</b> entre esas fuentes (ej. el mismo equipo listado en dos archivos <code>mac-*.txt</code> distintos, o una entrada residual que choca con un guest activo).
+      <b>1. <code>mac-*.txt</code> contra sí misma</b> (MAC, IP u hostname) — fatal, se reporta con una línea <code>ERROR:</code> puntual que nombra el campo, el valor y los archivos involucrados, luego <code>exit 1</code>. Siempre es un error del administrador (ej. el mismo equipo listado en dos archivos <code>mac-*.txt</code> distintos) y nunca se auto-repara.
       <br><br>
-      <b>2. Una IP de <code>mac-*.txt</code> que cae dentro de un rango reservado para otra cosa.</b> <code>uhm.env</code> solo define dos rangos de IP — <code>UHM_INI_RANGE</code>/<code>UHM_END_RANGE</code> (para <code>uhm-auth.txt</code>) y <code>SERV_INI_RANGE_BLOCK</code>/<code>SERV_END_RANGE_BLOCK</code> (el pool de pydhcp usado por <code>uhm-grace.txt</code>/<code>blockdhcp.txt</code>). Los archivos <code>mac-*.txt</code> son creados y direccionados por el administrador — nada en <code>uhm.env</code> les reserva un rango, así que una IP elegida a mano puede caer dentro de cualquiera de los otros dos rangos. Esto siempre es un error de configuración, sin importar si en ese momento un guest tiene o no esa IP exacta.
+      <b>2. <code>uhm-auth.txt</code> contra sí misma</b> (MAC, IP u hostname) <b>y contra <code>mac-*.txt</code></b> (solo MAC, siempre gana <code>mac-*.txt</code>) — silencioso, se borra la línea residual de <code>uhm-auth.txt</code> con una línea <code>INFO:</code> que nombra el MAC.
       <br><br>
-      Si no se encuentra ninguno de los dos problemas, continúa directo a <code>is_pydhcp()</code> (el ciclo detener→modificar→arrancar de pydhcpd) normalmente.
+      <b>3. <code>uhm-grace.txt</code> contra sí misma, <code>mac-*.txt</code> y <code>uhm-auth.txt</code></b> (solo MAC) — silencioso, igual que arriba.
+      <br><br>
+      <b>4. <code>blockdhcp.txt</code> contra sí misma y contra cualquier otra lista</b> (solo MAC) — silencioso, igual que arriba; <code>blockdhcp.txt</code> es la de menor prioridad, así que pierde contra cualquiera de las otras tres.
     </td>
   </tr>
 </table>
 
 ```text
-2026-07-18 20:32:50 ERROR: duplicate IP '192.168.0.198'
-2026-07-18 20:32:50 ERROR: in: /etc/acl/acl_mac/mac-unlimited.txt /etc/uhm/acl/uhm-auth.txt
-2026-07-18 20:32:50 ERROR: ACL configuration error detected -- aborting
+2026-07-18 20:32:50 ERROR: duplicate IP '192.168.0.198' in: /etc/acl/acl_mac/mac-unlimited.txt /etc/uhm/acl/uhm-auth.txt
+2026-07-18 20:32:50 ERROR: ACL configuration error detected -- abort
 ```
 
 ```text
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:01
-2026-07-18 20:32:50 ERROR: inside hotspot range 192.168.0.180-192.168.0.220
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: reserved for uhm-auth.txt
-2026-07-18 20:32:50 ERROR: move aa:bb:cc:dd:ee:01 outside it
-2026-07-18 20:32:50 ERROR: ACL configuration error detected -- aborting
+2026-08-25 10:00:00 INFO: dup MAC 'aa:bb:cc:dd:ee:01' removed from blockdhcp.txt
+```
+
+##### IP range guard (`check_mac_ip_ranges`)
+
+<table>
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      A separate guard, unrelated to duplicate detection and never merged into <code>check_duplicate()</code> — each function has a single purpose. Called alongside <code>check_duplicate()</code>, at the same two points (beginning and end of the script). Checks that no <code>mac-*.txt</code> IP falls inside a range reserved for something else. <code>uhm.env</code> only defines two IP ranges — <code>UHM_INI_RANGE</code>/<code>UHM_END_RANGE</code> (for <code>uhm-auth.txt</code>) and <code>SERV_INI_RANGE_BLOCK</code>/<code>SERV_END_RANGE_BLOCK</code> (the pydhcp pool used by <code>uhm-grace.txt</code>/<code>blockdhcp.txt</code>). <code>mac-*.txt</code> files are administrator-created and administrator-addressed — nothing in <code>uhm.env</code> reserves a range for them, so an IP picked by hand can land outside the LAN subnet, on the network/broadcast address, on <code>SERVER_IP</code> itself, or inside either of the other two ranges. This is always a misconfiguration, whether or not a guest currently holds that exact IP -- reported with a precise <code>ERROR:</code> line, then <code>exit 1</code>.
+      <br><br>
+      If neither guard finds a problem on the first pass, the script proceeds into <code>is_pydhcp()</code> (the stop→modify→start pydhcpd cycle) as usual.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Una guardia separada, sin relación con la detección de duplicados y nunca fusionada dentro de <code>check_duplicate()</code> — cada función cumple un solo propósito. Se llama junto a <code>check_duplicate()</code>, en los mismos dos puntos (comienzo y final del script). Verifica que ninguna IP de <code>mac-*.txt</code> caiga dentro de un rango reservado para otra cosa. <code>uhm.env</code> solo define dos rangos de IP — <code>UHM_INI_RANGE</code>/<code>UHM_END_RANGE</code> (para <code>uhm-auth.txt</code>) y <code>SERV_INI_RANGE_BLOCK</code>/<code>SERV_END_RANGE_BLOCK</code> (el pool de pydhcp usado por <code>uhm-grace.txt</code>/<code>blockdhcp.txt</code>). Los archivos <code>mac-*.txt</code> son creados y direccionados por el administrador — nada en <code>uhm.env</code> les reserva un rango, así que una IP elegida a mano puede caer fuera de la subred LAN, en la dirección de red/broadcast, sobre el propio <code>SERVER_IP</code>, o dentro de cualquiera de los otros dos rangos. Esto siempre es un error de configuración, sin importar si en ese momento un guest tiene o no esa IP exacta — se reporta con una línea <code>ERROR:</code> puntual, luego <code>exit 1</code>.
+      <br><br>
+      Si ninguna de las dos guardias encuentra un problema en la primera pasada, el script continúa directo a <code>is_pydhcp()</code> (el ciclo detener→modificar→arrancar de pydhcpd) normalmente.
+    </td>
+  </tr>
+</table>
+
+```text
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:01 inside hotspot range
+2026-07-18 20:32:50 ERROR: ACL configuration error detected -- abort
 ```
 
 ```text
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:02
-2026-07-18 20:32:50 ERROR: inside blockdhcp pool 192.168.0.230-192.168.0.239
-2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: reserved for
-2026-07-18 20:32:50 ERROR: move aa:bb:cc:dd:ee:02 outside uhm-grace/blockdhcp
-2026-07-18 20:32:50 ERROR: ACL configuration error detected -- aborting
+2026-07-18 20:32:50 ERROR: mac-*.txt IP conflict: aa:bb:cc:dd:ee:02 inside blockdhcp pool
+2026-07-18 20:32:50 ERROR: ACL configuration error detected -- abort
 ```
 
 ## TOOLS
@@ -1745,7 +1760,7 @@ Select option [1-5]: 4
 | **Blocked** -- must appear in `blockdhcp.txt` only. Warns if also in `acl_mac`, `uhm-grace`, or `leases` | **Bloqueada** -- debe aparecer solo en `blockdhcp.txt`. Advierte si tambien esta en `acl_mac`, `uhm-grace` o `leases` |
 | **Grace period** -- `uhm-grace` present, `leases` may be absent briefly (60 s pool lease, limited range) | **Periodo de gracia** -- `uhm-grace` presente, `leases` puede estar ausente momentaneamente (lease de pool de 60 s, rango limitado) |
 | **ACL permanent** -- `acl_mac` present, must NOT be in `blockdhcp` | **ACL permanente** -- `acl_mac` presente, NO debe estar en `blockdhcp` |
-| **Hotspot auth** -- `uhm-auth` present, must NOT remain in `uhm-grace` (removed by `clean_grace_list` once promoted; briefly both right after promotion, until the next reload, is expected) | **Hotspot autenticado** -- `uhm-auth` presente, NO debe permanecer en `uhm-grace` (removida por `clean_grace_list` al ser promovida; que este brevemente en ambas justo tras la promocion, hasta el proximo reload, es esperado) |
+| **Hotspot auth** -- `uhm-auth` present, must NOT remain in `uhm-grace` (removed by `check_duplicate` once promoted; briefly both right after promotion, until the next reload, is expected) | **Hotspot autenticado** -- `uhm-auth` presente, NO debe permanecer en `uhm-grace` (removida por `check_duplicate` al ser promovida; que este brevemente en ambas justo tras la promocion, hasta el proximo reload, es esperado) |
 
 ### uhmalert
 
@@ -1971,10 +1986,10 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 ```text
 # from uhmd.sh, repeating every 10s during its own startup retry loop:
-2026-07-31 23:57:13 INFO: UniFi login attempt failed (HTTP 429) -- still within startup grace window
-2026-07-31 23:57:23 INFO: UniFi login attempt failed (HTTP 429) -- still within startup grace window
+2026-07-31 23:57:13 INFO: UniFi login failed (HTTP 429), retry in grace
+2026-07-31 23:57:23 INFO: UniFi login failed (HTTP 429), retry in grace
 ...
-2026-07-31 23:59:04 INFO: UniFi login attempt failed (HTTP 429) -- still within startup grace window
+2026-07-31 23:59:04 INFO: UniFi login failed (HTTP 429), retry in grace
 2026-07-31 23:59:04 ERROR: Could not log in to UniFi after 120s -- exiting
 
 # from uhmwatch.sh, on its next check:
@@ -2034,12 +2049,23 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
   </tr>
 </table>
 
+| Level | English | Español |
+|---|---|---|
+| `ERROR:` | Exclusively for a message that aborts the current flow -- the script or the calling function stops right there, nothing after it runs. | Exclusivo para un mensaje que aborta el flujo actual -- el script o la función que lo invoca se detiene ahí mismo, nada después corre. |
+| `WARNING:` | Something went wrong or was skipped, but execution continues -- the code does not abort. | Algo salió mal o se omitió, pero la ejecución continúa -- el código no aborta. |
+| `INFO:` | Routine state changes and notifications -- everything that is neither an abort nor a non-fatal problem. | Cambios de estado rutinarios y notificaciones -- todo lo que no es ni un aborto ni un problema no fatal. |
+| `ALERT:` | `uhmalert.sh` only -- confirms a push notification was actually sent for an `ERROR:`/`WARNING:`/`FIX:` line it picked up. | Exclusivo de `uhmalert.sh` -- confirma que se envió una notificación push por una línea `ERROR:`/`WARNING:`/`FIX:` detectada. |
+| `FIX:` | A prior problem (`ERROR:`/`WARNING:`) is now confirmed resolved -- e.g. a service `uhmwatch.sh` restarted came back healthy. | Un problema previo (`ERROR:`/`WARNING:`) ya se confirmó resuelto -- ej. un servicio que `uhmwatch.sh` reinició volvió a estar sano. |
+| `STATUS` (no prefix) | Level-less lines: each script's own `"<name> start..."`/`"<name> done"` boundary markers, and the compact `field=value\|field=value` counters -- grouped under this generic label only by the Webmin viewer (`uhmmon.sh`), not written as `STATUS:` in the log itself. | Líneas sin nivel: las marcas de inicio/cierre `"<nombre> start..."`/`"<nombre> done"` de cada script, y los contadores compactos `campo=valor\|campo=valor` -- agrupadas bajo esta etiqueta genérica solo por el visor de Webmin (`uhmmon.sh`), no se escriben como `STATUS:` en el log real. |
+
+> `uhmalert.sh` sends push notifications only for `ERROR:`/`WARNING:`/`FIX:` lines.
+>
+> `uhmalert.sh` envía notificaciones push solo para líneas `ERROR:`/`WARNING:`/`FIX:`.
+
 ```text
 --------------------------------------------------------------------------------
-2026-07-01 06:47:35 INFO: New client 02:00:00:aa:bb:10 ip=192.168.0.231
-2026-07-01 06:47:35 INFO: hostname=no_name_fde07d34be -> grace
-2026-07-01 06:47:35 INFO: added 1 new client(s)
-2026-07-01 06:47:35 INFO: add to uhm-grace
+2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10, ip=192.168.0.231 host=no_name_fde07d34be -> grace
+2026-07-01 06:47:35 INFO: added 1 new client(s) to uhm-grace
 2026-07-01 06:47:35 INFO: uhm-grace.txt changed
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
 2026-07-01 06:47:35 uhmreload start...
@@ -2069,8 +2095,8 @@ No client connected, no voucher redeemed, no grace entry expired? The log betwee
 </table>
 
 ```text
-2026-07-27 20:45:28 WARNING: backing off to safety-net cadence (3600s) -- will not retry every cycle
-2026-07-27 20:45:29 ALERT: sent -- WARNING: backing off to safety-net cadence (3600s) -- will not retry every cycle
+2026-07-27 20:45:28 WARNING: /etc/uhm/core/uhmreload.sh failed (code 1), backing off
+2026-07-27 20:45:29 ALERT: sent -- WARNING: /etc/uhm/core/uhmreload.sh failed (code 1), backing off
 ```
 
 | Field | Type | Description | Descripción |
@@ -2084,10 +2110,10 @@ No client connected, no voucher redeemed, no grace entry expired? The log betwee
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmleases output</b> — Written to <code>/var/log/uhm.log</code> (unified log). Only real state changes on <code>uhm-grace.txt</code> are logged: a MAC added on first contact, one expired to <code>blockdhcp.txt</code> after <code>BLOCKDHCP_GRACE_SECONDS</code>, or one removed by <code>clean_grace_list()</code> when found in another ACL list. Entries that are simply preserved during their grace period produce no output — nothing to log means nothing changed.
+      <b>uhmleases output</b> — Written to <code>/var/log/uhm.log</code> (unified log). Only real state changes on <code>uhm-grace.txt</code> are logged: a MAC added on first contact, one expired to <code>blockdhcp.txt</code> after <code>BLOCKDHCP_GRACE_SECONDS</code>, or one removed by <code>check_duplicate()</code> when found in another ACL list. Entries that are simply preserved during their grace period produce no output — nothing to log means nothing changed.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>Salida de uhmleases</b> — Se escribe en <code>/var/log/uhm.log</code> (log unificado). Solo se registran cambios reales de estado sobre <code>uhm-grace.txt</code>: una MAC agregada al primer contacto, una expirada a <code>blockdhcp.txt</code> tras <code>BLOCKDHCP_GRACE_SECONDS</code>, o una removida por <code>clean_grace_list()</code> al encontrarse en otra lista ACL. Las entradas que simplemente se preservan durante su período de gracia no producen ninguna salida — nada que registrar significa que nada cambió.
+      <b>Salida de uhmleases</b> — Se escribe en <code>/var/log/uhm.log</code> (log unificado). Solo se registran cambios reales de estado sobre <code>uhm-grace.txt</code>: una MAC agregada al primer contacto, una expirada a <code>blockdhcp.txt</code> tras <code>BLOCKDHCP_GRACE_SECONDS</code>, o una removida por <code>check_duplicate()</code> al encontrarse en otra lista ACL. Las entradas que simplemente se preservan durante su período de gracia no producen ninguna salida — nada que registrar significa que nada cambió.
     </td>
   </tr>
 </table>
@@ -2143,7 +2169,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 | **Voucher hostname length cap** | `process_sessions()` (`uhmd.sh`) checks whether `guestN-<voucher_code>` would exceed 63 chars (the limit `uhmleases.sh::_normalize_acl_file()` enforces on `uhm-auth.txt`) before writing it. `voucher_code` comes from UniFi's API with no length guarantee from our side -- no known UniFi version has ever been observed returning one long enough to trigger this (real codes are short and numeric), but nothing rules it out for good. If it ever happened without this guard, the oversized line would abort normalization for the *entire* `uhm-auth.txt` file, not just that one client. With the guard, the voucher code is simply omitted from that one hostname (kept as plain `guestN`) and a `WARNING` is logged -- everything else proceeds normally. | `process_sessions()` (`uhmd.sh`) revisa si `guestN-<voucher_code>` superaría los 63 caracteres (el límite que `uhmleases.sh::_normalize_acl_file()` exige en `uhm-auth.txt`) antes de escribirlo. `voucher_code` viene de la API de UniFi sin garantía de longitud de nuestro lado -- no se ha observado ninguna versión de UniFi que devuelva uno lo bastante largo como para disparar esto (los códigos reales son cortos y numéricos), pero nada lo descarta para siempre. Si pasara sin esta guarda, la línea de más de 63 caracteres abortaría la normalización de *todo* `uhm-auth.txt`, no solo la de ese cliente. Con la guarda, el código simplemente se omite de ese hostname puntual (queda como `guestN` plano) y se registra un `WARNING` -- todo lo demás sigue normal. |
 | **`is_managed_mac()` live check** | Read fresh from disk on every call inside `process_sessions`/`kick_newly_authorized`/`process_new_leases` (`uhmd.sh`) -- guards against a stale or externally-granted UniFi guest session ever promoting a `mac-*.txt` device into `uhm-auth.txt`. In normal operation this never fires (managed devices don't go through the voucher flow at all); it only matters the day a residual session, a manual UniFi authorization, or a voucher redeemed before the device was added to `mac-*.txt` would otherwise slip through. | Se lee en vivo del disco en cada llamada dentro de `process_sessions`/`kick_newly_authorized`/`process_new_leases` (`uhmd.sh`) -- protege contra que una sesión de invitado de UniFi residual o concedida por fuera alguna vez promueva a un dispositivo de `mac-*.txt` a `uhm-auth.txt`. En operación normal nunca se activa (los dispositivos gestionados ni pasan por el flujo de voucher); solo importa el día que una sesión residual, una autorización manual en UniFi, o un voucher canjeado antes de agregar el dispositivo a `mac-*.txt` se colarían si no estuviera. |
 | **`uhmwatch.sh` reload-in-progress check** | `_uhm_reload_in_progress()` probes `uhmd`'s cycle lock (non-blocking) before `check_pydhcpd()` declares the service OFFLINE. `uhmleases.sh` legitimately stops/reconfigures/starts `pydhcpd` for a few seconds on every real reload -- almost every cron tick (every minute) lands outside that window and never touches this guard's fallback path. It only matters the rare time a tick lands squarely inside it, where declaring OFFLINE and restarting would collide with `uhmleases.sh`'s own pending restart and abort that reload. | `_uhm_reload_in_progress()` prueba (sin bloquear) el lock de ciclo de `uhmd` antes de que `check_pydhcpd()` declare el servicio OFFLINE. `uhmleases.sh` legítimamente detiene/reconfigura/arranca `pydhcpd` por unos segundos en cada reload real -- casi todas las corridas de cron (cada minuto) caen fuera de esa ventana y nunca tocan el camino de fallback de esta guarda. Solo importa la rara vez que una corrida cae justo dentro, donde declarar OFFLINE y reiniciar chocaría con el restart que `uhmleases.sh` ya tenía pendiente y abortaría ese reload. |
-| **`mac-*.txt` IP range conflict check** | `check_acl_conflicts()` (`uhmleases.sh`) validates, on every reload, that no admin-picked `mac-*.txt` IP falls inside `UHM_INI_RANGE`-`UHM_END_RANGE` or the block-pool range. Never fires as long as `mac-*.txt` IPs are chosen outside both ranges (the documented, expected setup); it only matters the day a typo or a copy-pasted IP lands inside one, where it aborts the reload with a specific `ERROR:` instead of silently corrupting DHCP behavior for both the conflicting device and whoever else was assigned that same range. | `check_acl_conflicts()` (`uhmleases.sh`) valida, en cada reload, que ninguna IP de `mac-*.txt` elegida por el admin caiga dentro de `UHM_INI_RANGE`-`UHM_END_RANGE` ni del rango del pool de bloqueo. Nunca se activa mientras las IPs de `mac-*.txt` se elijan fuera de ambos rangos (la configuración esperada y documentada); solo importa el día que un typo o una IP copiada y pegada caiga dentro de uno, donde aborta el reload con un `ERROR:` puntual en vez de corromper en silencio el comportamiento DHCP tanto del dispositivo en conflicto como de quien más tuviera asignado ese mismo rango. |
+| **`mac-*.txt` IP range conflict check** | `check_mac_ip_ranges()` (`uhmleases.sh`) validates, on every reload, that no admin-picked `mac-*.txt` IP falls inside `UHM_INI_RANGE`-`UHM_END_RANGE` or the block-pool range. Never fires as long as `mac-*.txt` IPs are chosen outside both ranges (the documented, expected setup); it only matters the day a typo or a copy-pasted IP lands inside one, where it aborts the reload with a specific `ERROR:` instead of silently corrupting DHCP behavior for both the conflicting device and whoever else was assigned that same range. | `check_mac_ip_ranges()` (`uhmleases.sh`) valida, en cada reload, que ninguna IP de `mac-*.txt` elegida por el admin caiga dentro de `UHM_INI_RANGE`-`UHM_END_RANGE` ni del rango del pool de bloqueo. Nunca se activa mientras las IPs de `mac-*.txt` se elijan fuera de ambos rangos (la configuración esperada y documentada); solo importa el día que un typo o una IP copiada y pegada caiga dentro de uno, donde aborta el reload con un `ERROR:` puntual en vez de corromper en silencio el comportamiento DHCP tanto del dispositivo en conflicto como de quien más tuviera asignado ese mismo rango. |
 | **ACL file-swap count checks** | `clean_expired_macs()` (`uhmd.sh`) and `drain_lease_queue()` (`uhmleases.sh`) both count entries before and after rewriting a file, and refuse to commit the swap (keep the original, log an `ERROR`) if the counts don't reconcile with what was actually expired/removed. Never fires when the rewrite logic behaves as expected (the normal case, every cycle); it only matters the day a parsing edge case would otherwise silently drop entries during a file rewrite. | `clean_expired_macs()` (`uhmd.sh`) y `drain_lease_queue()` (`uhmleases.sh`) cuentan entradas antes y después de reescribir un archivo, y se niegan a confirmar el cambio (conservan el original, registran un `ERROR`) si los conteos no cuadran con lo que realmente se expiró/removió. Nunca se activa cuando la lógica de reescritura se comporta como se espera (el caso normal, en cada ciclo); solo importa el día que un caso límite de parseo, de no estar esto, descartaría entradas en silencio al reescribir un archivo. |
 
 ## LIMITATIONS
@@ -2181,7 +2207,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 
 | Limitation | Limitación | Description | Descripción |
 |------------|------------|-----|-----|
-| **`mac-*.txt` IP range is administrator-defined, not a config variable** | **El rango de IP de `mac-*.txt` es decisión del administrador, no una variable de configuración** | `uhm.env` only defines two IP ranges: `UHM_INI_RANGE`/`UHM_END_RANGE` for `uhm-auth.txt`, and `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK` for the pydhcp pool (`uhm-grace.txt`/`blockdhcp.txt`). `mac-*.txt` files (`mac-proxy.txt`, `mac-unlimited.txt`) don't exist by default — `uhmsetup.sh` only creates the `/etc/acl/acl_mac` directory; the administrator creates these files and picks their IPs manually, with no dedicated range enforced by `uhm.env` itself. `uhmleases.sh`'s `check_acl_conflicts()` validates this on every run: any `mac-*.txt` IP landing inside either reserved range aborts the reload with a specific `ERROR:` log line — see [uhmleases](#uhmleases) below for examples — but the safest practice is keeping every `mac-*.txt` IP outside both ranges from the start. | `uhm.env` solo define dos rangos de IP: `UHM_INI_RANGE`/`UHM_END_RANGE` para `uhm-auth.txt`, y `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK` para el pool de pydhcp (`uhm-grace.txt`/`blockdhcp.txt`). Los archivos `mac-*.txt` (`mac-proxy.txt`, `mac-unlimited.txt`) no existen por defecto — `uhmsetup.sh` solo crea el directorio `/etc/acl/acl_mac`; el administrador crea estos archivos y elige sus IPs manualmente, sin rango dedicado impuesto por `uhm.env`. `check_acl_conflicts()` en `uhmleases.sh` valida esto en cada corrida: cualquier IP de `mac-*.txt` que caiga dentro de alguno de los dos rangos reservados aborta el reload con una línea `ERROR:` puntual — ver [uhmleases](#uhmleases) más abajo para ejemplos — pero lo más seguro es mantener siempre las IPs de `mac-*.txt` fuera de ambos rangos desde el principio. |
+| **`mac-*.txt` IP range is administrator-defined, not a config variable** | **El rango de IP de `mac-*.txt` es decisión del administrador, no una variable de configuración** | `uhm.env` only defines two IP ranges: `UHM_INI_RANGE`/`UHM_END_RANGE` for `uhm-auth.txt`, and `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK` for the pydhcp pool (`uhm-grace.txt`/`blockdhcp.txt`). `mac-*.txt` files (`mac-proxy.txt`, `mac-unlimited.txt`) don't exist by default — `uhmsetup.sh` only creates the `/etc/acl/acl_mac` directory; the administrator creates these files and picks their IPs manually, with no dedicated range enforced by `uhm.env` itself. `uhmleases.sh`'s `check_mac_ip_ranges()` validates this on every run: any `mac-*.txt` IP landing inside either reserved range aborts the reload with a specific `ERROR:` log line — see [uhmleases](#uhmleases) below for examples — but the safest practice is keeping every `mac-*.txt` IP outside both ranges from the start. | `uhm.env` solo define dos rangos de IP: `UHM_INI_RANGE`/`UHM_END_RANGE` para `uhm-auth.txt`, y `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK` para el pool de pydhcp (`uhm-grace.txt`/`blockdhcp.txt`). Los archivos `mac-*.txt` (`mac-proxy.txt`, `mac-unlimited.txt`) no existen por defecto — `uhmsetup.sh` solo crea el directorio `/etc/acl/acl_mac`; el administrador crea estos archivos y elige sus IPs manualmente, sin rango dedicado impuesto por `uhm.env`. `check_mac_ip_ranges()` en `uhmleases.sh` valida esto en cada corrida: cualquier IP de `mac-*.txt` que caiga dentro de alguno de los dos rangos reservados aborta el reload con una línea `ERROR:` puntual — ver [uhmleases](#uhmleases) más abajo para ejemplos — pero lo más seguro es mantener siempre las IPs de `mac-*.txt` fuera de ambos rangos desde el principio. |
 | **Indefinite MAC rotation bypasses grace→block promotion** | **Rotación indefinida de MAC evade la promoción grace→block** | `uhm-grace.txt` classification is keyed exclusively by MAC address (see *MAC randomization* above). A client that presents a new MAC on each reconnection is treated as a brand-new client every time: it receives a fresh `BLOCKDHCP_GRACE_SECONDS` timer and never accumulates enough grace-period age to be promoted to `blockdhcp.txt`. `pydhcpd`'s own DHCP rate-limiting (keyed per-MAC) does not mitigate this — it throttles request volume from a single identity, not the number of distinct identities a client can present, so the pattern is unaffected by any per-MAC threshold. DHCP client-hostname (option 12) cannot serve as a secondary identity signal either: it is client-supplied, unauthenticated (trivially spoofable), and not always present in `pydhcpd.leases` to begin with. There is no way to correlate rotated MACs to the same physical device from `pydhcpd.leases` alone; that would require device fingerprinting at the AP/802.11 layer, outside the scope of a DHCP-lease-based tool. <br><br>**Impact is bounded by firewall scope, not eliminated**: the `macgrace` ipset only grants DNS resolution and captive-portal ports — the same access any new, first-time client already receives — so rotating a MAC indefinitely does not grant more network access than a single legitimate connection would, *provided* the `macgrace` DNS rule is restricted to the configured resolvers (`SERV_DNS`), as in the reference `uhmiptables_example.txt`. If that rule instead accepts DNS to any destination, grace-state clients gain an unrestricted DNS channel that can be used for DNS tunneling — combined with indefinite MAC rotation, this becomes a persistent internet bypass that never requires redeeming a voucher. The residual cost of MAC rotation even with the DNS rule restricted is operational, not a security bypass: `uhm-grace.txt`/`blockdhcp.txt` accumulate entries for MACs that are never reused, and each rotation consumes a DHCP pool lease. | La clasificación en `uhm-grace.txt` se basa exclusivamente en la dirección MAC (ver *Aleatorización de MAC* arriba). Un cliente que presenta una MAC nueva en cada reconexión es tratado como cliente completamente nuevo cada vez: recibe un temporizador `BLOCKDHCP_GRACE_SECONDS` fresco y nunca acumula suficiente antigüedad en gracia como para ser promovido a `blockdhcp.txt`. El propio rate-limiting DHCP de `pydhcpd` (por MAC) no mitiga esto — limita el volumen de solicitudes de una sola identidad, no la cantidad de identidades distintas que un cliente puede presentar, así que el patrón no se ve afectado por ningún umbral por-MAC. El hostname DHCP (opción 12) tampoco puede servir como señal secundaria de identidad: lo provee el cliente, no está autenticado (trivialmente falsificable), y ni siquiera está siempre presente en `pydhcpd.leases`. No hay forma de correlacionar MACs rotadas con el mismo dispositivo físico solo desde `pydhcpd.leases`; eso requeriría fingerprinting de dispositivo a nivel de AP/802.11, fuera del alcance de una herramienta basada en leases DHCP. <br><br>**El impacto está acotado por el alcance del firewall, no eliminado**: el ipset `macgrace` solo otorga resolución DNS y los puertos del portal cautivo — el mismo acceso que ya recibe cualquier cliente nuevo de primera vez — así que rotar la MAC indefinidamente no otorga más acceso de red del que ya tendría una sola conexión legítima, *siempre que* la regla DNS de `macgrace` esté restringida a los resolvers configurados (`SERV_DNS`), como en el `uhmiptables_example.txt` de referencia. Si esa regla en cambio acepta DNS a cualquier destino, los clientes en estado grace ganan un canal DNS sin restricción utilizable para DNS tunneling — combinado con rotación indefinida de MAC, esto se convierte en un bypass de internet persistente que nunca requiere canjear un voucher. El costo residual de la rotación de MAC incluso con la regla DNS restringida es operativo, no un bypass de seguridad: `uhm-grace.txt`/`blockdhcp.txt` acumulan entradas de MACs que nunca se reutilizan, y cada rotación consume un lease del pool DHCP. |
 
 ### Voucher Lifecycle (UniFi API)

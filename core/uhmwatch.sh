@@ -237,8 +237,7 @@ _load_conf() {
     _gdigit="${_perms: -2:1}"
     _odigit="${_perms: -1}"
     if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-        log "WARNING: uhm.env owner/perms unsafe ($_owner/$_perms)"
-        log "WARNING: must be root:600 -- using built-in defaults"
+        log "WARNING: uhm.env owner/perms unsafe ($_owner/$_perms) -- fallback"
         return 1
     fi
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -265,8 +264,7 @@ UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 _UH_UINT='^(0|[1-9][0-9]*)$'
 RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
 if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
-    log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid"
-    log "WARNING: ($RECOVERY_COOLDOWN_SECONDS) -- using default 600"
+    log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- fallback"
     RECOVERY_COOLDOWN_SECONDS=600
 fi
 # Same key uhmd.sh reads for its own startup-grace login retries -- reused
@@ -276,8 +274,7 @@ fi
 # alerted anyway for the exact same, already-expected condition.
 STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
 if ! [[ "$STARTUP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
-    log "WARNING: STARTUP_GRACE_SECONDS invalid"
-    log "WARNING: ($STARTUP_GRACE_SECONDS) -- using default 120"
+    log "WARNING: STARTUP_GRACE_SECONDS invalid -- fallback"
     STARTUP_GRACE_SECONDS=120
 fi
 
@@ -309,7 +306,7 @@ check_uhmd() {
             log "FIX: uhmd restarted"
             _clear_recovery_attempt "uhmd.service"
         else
-            log "ERROR: uhmd restart FAILED"
+            log "WARNING: uhmd restart FAILED"
         fi
     fi
 }
@@ -334,7 +331,7 @@ check_ualert() {
             log "FIX: uhmalert restarted"
             _clear_recovery_attempt "uhmalert.service"
         else
-            log "ERROR: uhmalert restart FAILED"
+            log "WARNING: uhmalert restart FAILED"
         fi
     fi
 }
@@ -365,7 +362,7 @@ check_pydhcpd() {
             log "FIX: pydhcpd restarted"
             _clear_recovery_attempt "pydhcpd.service"
         else
-            log "ERROR: pydhcpd restart FAILED"
+            log "WARNING: pydhcpd restart FAILED"
         fi
     fi
 }
@@ -432,7 +429,7 @@ check_uosserver() {
             log "FIX: uosserver started"
             _clear_recovery_attempt "uosserver.service"
         else
-            log "ERROR: uosserver start FAILED"
+            log "WARNING: uosserver start FAILED"
         fi
         return
     fi
@@ -446,8 +443,7 @@ check_uosserver() {
     # payload via curl stdin (not -d), so neither ever appears in this
     # process's argv (/proc/<pid>/cmdline).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set"
-        log "WARNING: skipping functional login check"
+        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':11443\b'; then
             log "WARNING: UOS BROKEN_PORTS"
@@ -465,7 +461,7 @@ check_uosserver() {
                 log "FIX: uosserver restarted"
                 _clear_recovery_attempt "uosserver.service"
             else
-                log "ERROR: uosserver restart FAILED"
+                log "WARNING: uosserver restart FAILED"
             fi
         else
             _clear_recovery_attempt "uosserver.service"
@@ -490,8 +486,7 @@ check_uosserver() {
         _uhmd_start=$(uhmd_started_at)
         _now=$(date +%s)
         if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
-            log "INFO: UniFi login attempt failed (HTTP $http_code)"
-            log "INFO: still within startup grace window"
+            log "INFO: UniFi login failed (HTTP $http_code), retry in grace"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
@@ -509,12 +504,11 @@ check_uosserver() {
             log "FIX: uosserver restarted (login failed)"
             _clear_recovery_attempt "uosserver.service"
         else
-            log "ERROR: uosserver restart FAILED"
+            log "WARNING: uosserver restart FAILED"
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before"
-        log "WARNING: restarting (check README)"
+        log "WARNING: stop uhmd+uhmwatch cron before restarting (check README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env - UOS itself is responding"
@@ -534,7 +528,7 @@ check_unifi_classic() {
             log "FIX: unifi started"
             _clear_recovery_attempt "unifi.service"
         else
-            log "ERROR: unifi.service start FAILED"
+            log "WARNING: unifi.service start FAILED"
         fi
         return
     fi
@@ -544,8 +538,7 @@ check_unifi_classic() {
     # embedded Mongo subprocess, see header) is actually healthy. Same login
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set"
-        log "WARNING: skipping functional login check"
+        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
             log "WARNING: UniFi (classic) BROKEN_PORTS"
@@ -563,7 +556,7 @@ check_unifi_classic() {
                 log "FIX: unifi restarted"
                 _clear_recovery_attempt "unifi.service"
             else
-                log "ERROR: unifi.service restart FAILED"
+                log "WARNING: unifi.service restart FAILED"
             fi
         else
             _clear_recovery_attempt "unifi.service"
@@ -588,8 +581,7 @@ check_unifi_classic() {
         _uhmd_start=$(uhmd_started_at)
         _now=$(date +%s)
         if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
-            log "INFO: UniFi login attempt failed (HTTP $http_code)"
-            log "INFO: still within startup grace window"
+            log "INFO: UniFi login failed (HTTP $http_code), retry in grace"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
@@ -607,12 +599,11 @@ check_unifi_classic() {
             log "FIX: unifi restarted (login failed)"
             _clear_recovery_attempt "unifi.service"
         else
-            log "ERROR: unifi.service restart FAILED"
+            log "WARNING: unifi.service restart FAILED"
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before"
-        log "WARNING: restarting (check README)"
+        log "WARNING: stop uhmd+uhmwatch cron before restarting (check README)"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env - unifi.service is responding"

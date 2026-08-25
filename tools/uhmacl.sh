@@ -47,7 +47,7 @@
 # Grace period | uhm-grace Y, leases Y (may be absent briefly
 # | due to short 60s pool lease and limited range)
 # ACL permanent | acl_mac Y, NOT in blockdhcp
-# Hotspot auth | uhm-auth Y, uhm-grace N (removed by clean_grace_list)
+# Hotspot auth | uhm-auth Y, uhm-grace N (removed by check_duplicate())
 #
 # EXIT CODES:
 # 0 - Normal exit
@@ -426,7 +426,7 @@ check_mac() {
 
     if [ $in_hotspot -eq 1 ] && [ $in_grace -eq 1 ]; then
         warn "In uhm-auth AND uhm-grace"
-        warn "  clean_grace_list should have removed it from uhm-grace"
+        warn "  check_duplicate() should have removed it from uhm-grace"
         warnings=$((warnings+1))
     fi
 
@@ -558,7 +558,7 @@ menu_consistency() {
         if [ $in_hotspot -eq 1 ] && [ $in_grace -eq 1 ]; then
             [ $w -eq 0 ] && printf "${BOLD}--- %s ---${NC}\n" "$mac"
             warn "In uhm-auth AND uhm-grace"
-            warn "  clean_grace_list should have removed it from uhm-grace"
+            warn "  check_duplicate() should have removed it from uhm-grace"
             w=$((w+1))
         fi
         [ $w -gt 0 ] && echo ""

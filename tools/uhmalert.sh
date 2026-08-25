@@ -269,7 +269,7 @@ fi
 # unparseable timestamp) must not kill the whole process.
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    log "ERROR: $CONFIG_FILE not found -- aborting"
+    log "ERROR: $CONFIG_FILE not found -- abort"
     exit 1
 fi
 _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null)
@@ -277,10 +277,7 @@ _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
 _gdigit="${_perms: -2:1}"
 _odigit="${_perms: -1}"
 if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: $CONFIG_FILE has unsafe owner/permissions"
-    log "ERROR: (owner=$_owner perms=$_perms)"
-    log "ERROR: must be owned by root with no group/other access"
-    log "ERROR: (600)"
+    log "ERROR: uhm.env unsafe owner/perms, must be root-owned 600"
     exit 1
 fi
 # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
@@ -308,20 +305,18 @@ load_env_file() {
 load_env_file "$CONFIG_FILE"
 
 if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
-    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE"
-    log "ERROR: aborting"
+    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE -- abort"
     exit 1
 fi
 
 FAIL_THRESHOLD="${UHM_API_FAIL_THRESHOLD:-3}"
 if ! [[ "$FAIL_THRESHOLD" =~ $_UH_UINT ]] || (( FAIL_THRESHOLD == 0 )); then
-    log "WARNING: UHM_API_FAIL_THRESHOLD invalid ($FAIL_THRESHOLD)"
-    log "WARNING: using default 3"
+    log "WARNING: UHM_API_FAIL_THRESHOLD invalid -- fallback"
     FAIL_THRESHOLD=3
 fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
 if ! [[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
-    log "WARNING: POLL_INTERVAL invalid ($POLL_INTERVAL) -- using default 20"
+    log "WARNING: POLL_INTERVAL invalid -- fallback"
     POLL_INTERVAL=20
 fi
 UHM_ALERT_QUIET_PERIOD="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
@@ -429,8 +424,7 @@ while true; do
         if (( is_connectivity == 0 )) && { [[ "$msg" == ERROR:* ]] || [[ "$msg" == WARNING:* ]] || [[ "$msg" == FIX:* ]]; }; then
             _now_epoch=$(date +%s)
             if [[ "$msg" == "$last_generic_msg" ]] && (( _now_epoch - last_generic_time < DEDUP_WINDOW )); then
-                log "INFO: suppressing repeated alert"
-                log "INFO: (same within ${DEDUP_WINDOW}s) -- ${msg:0:25}"
+                log "INFO: dup alert suppressed (${DEDUP_WINDOW}s): ${msg:0:25}"
                 continue
             fi
             last_generic_msg="$msg"
@@ -458,9 +452,7 @@ while true; do
         if (( streak == FAIL_THRESHOLD )) && (( alerted == 0 )); then
             uhmd_start=$(uhmd_started_at)
             if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UHM_ALERT_QUIET_PERIOD )); then
-                log "INFO: $streak consecutive failures within uhmd startup grace"
-                log "INFO: window (${UHM_ALERT_QUIET_PERIOD}s)"
-                log "INFO: suppressing alert"
+                log "INFO: $streak failures within startup grace, suppressed"
                 streak=0
             else
                 notify "uhm: $streak consecutive failed cycles reaching the controller (since $ts)"
@@ -470,8 +462,7 @@ while true; do
             fi
         fi
     elif (( _read_rc == 1 )); then
-        log "ERROR: tail process on log_file died (EOF on fd 3)"
-        log "ERROR: exiting for systemd to restart"
+        log "ERROR: uhmalert lost log monitoring (tail died) -- abort"
         exit 1
     else
         # read timed out: no new line for a full GAP_LIMIT window. Recovery
