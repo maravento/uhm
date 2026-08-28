@@ -7,11 +7,11 @@
 # https://github.com/maravento/uhm
 #
 # MODES:
-# sudo bash uhmsetup.sh Install (default; aborts if already
-# installed -- use --update or --remove)
-# sudo bash uhmsetup.sh --update Update scripts only (preserves config/ACLs)
-# sudo bash uhmsetup.sh --remove Uninstall
-# sudo bash uhmsetup.sh --help Usage
+# sudo bash uhmsetup.sh            Install (default; aborts if already
+#                                  installed -- use --update or --remove)
+# sudo bash uhmsetup.sh --update   Update scripts only (preserves config/ACLs)
+# sudo bash uhmsetup.sh --remove   Uninstall
+# sudo bash uhmsetup.sh --help     Usage
 #
 # Run from inside the cloned repo. The script expects to find:
 # ./core/uhmd.sh
@@ -21,7 +21,7 @@
 # ./core/uhmwatch.sh
 # ./tools/uhmunifi.sh
 # ./tools/uhmacl.sh
-# ./tools/uhmmon.sh
+# ./tools/uhmwebmin.sh
 # ./tools/uhmalert.sh
 # ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
 # ./tools/uhmiptables_example.txt (reference example only, never deployed)
@@ -49,31 +49,42 @@
 # DEPENDENCIES:
 # Hard dependencies (checked before anything else; aborts if any is missing --
 # none of these are auto-installed):
-# curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
-# mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
-# grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (xargs)
+#     curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
+#     mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
+#     grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (find),
+#     procps (sysctl, used by uhmiptables.sh)
 #
 # Hard dependency NOT an apt package (aborts if missing):
-# pydhcpd must be installed and running, with pydhcp.env
-# present and complete (network values pysetup.sh already collected --
-# uhmsetup.sh reads them from there instead of asking again).
-# pydhcp is not an apt package; install it from
-# https://github.com/maravento/pydhcp before running this script.
+#     pydhcpd must be installed and running, with pydhcp.env present and
+#     complete (network values pysetup.sh already collected -- uhmsetup.sh
+#     reads them from there instead of asking again). pydhcp is not an apt
+#     package; install it from https://github.com/maravento/pydhcp before
+#     running this script.
 #
 # Hard dependency NOT an apt package (aborts if missing/unreachable):
-# UniFi Network self-hosted or UniFi OS Server, installed and reachable on
-# this same host (classic on 8443, unifi-os on 11443). If neither is
-# installed yet, use unifisetup.sh to install it first:
-# https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh
+#     UniFi Network self-hosted or UniFi OS Server, installed and reachable
+#     on this same host (classic on 8443, unifi-os on 11443). If neither is
+#     installed yet, use unifisetup.sh to install it first:
+#     https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh
 #
 # CONFIG FILE (uhm.env):
-# Written as pydhcp.env copied verbatim, followed by uhm's own block. A key
-# already present in pydhcp.env -- pydhcp's own, or one added there by
-# another project -- is skipped instead of written a second time, and the
-# skip is reported on screen: these files are parsed key=value, so a
-# duplicated key would leave each reader holding whichever copy it saw last.
-# uhm therefore never redefines a value that already belongs to pydhcp; it
-# only adds its own (UniFi credentials, hotspot range, timers, paths).
+# Holds only uhm's own keys: UniFi credentials, guest SSID, hotspot range,
+# timers, paths, and WAN_IF. pydhcp's values are never copied here -- every
+# component reads pydhcp.env first and uhm.env after, so a change made in
+# pydhcp.env reaches uhm without a re-install. A key already present in
+# pydhcp.env is skipped instead of written a second time, and the skip is
+# reported on screen: these files are parsed key=value, so a duplicate would
+# let uhm.env shadow the value its owner maintains.
+#
+# LOG: uhmsetup.log, in the same directory this script is run from. Kept
+# separate from /var/log/uhm.log (the project's operational log, written by
+# uhmd.sh/uhmreload.sh/uhmleases.sh/uhmwatch.sh/uhmalert.sh) so install,
+# update and remove runs never mix with daily operation -- and so their
+# WARNING/ERROR lines never reach uhmalert.sh, which pushes a notification
+# for every one of them it finds in uhm.log. Appended across runs, so an
+# install can be compared against the updates that followed it. Not covered
+# by /etc/logrotate.d/uhm; empty it by hand when needed:
+# truncate -s 0 uhmsetup.log
 #
 ################################################################################
 
@@ -85,14 +96,14 @@ usage() {
 Usage: sudo bash $(basename "$0") [OPTION]
 
 Modes:
-  (none) Install uhm (default). Aborts if already installed --
-                 use --update or --remove instead. Also aborts if the
-                 detected UniFi Network version (package "unifi", classic
-                 or embedded in unifi-os) is below the minimum tested
-                 (>= 10.4.57).
-  --update Update scripts only (preserves config, ACLs, firewall).
-  --remove Uninstall uhm (interactive, with confirmations).
-  --help, -h Show this help.
+  (none)       Install uhm (default). Aborts if already installed --
+               use --update or --remove instead. Also aborts if the
+               detected UniFi Network version (package "unifi", classic
+               or embedded in unifi-os) is below the minimum tested
+               (>= 10.4.57).
+  --update     Update scripts only (preserves config, ACLs, firewall).
+  --remove     Uninstall uhm (interactive, with confirmations).
+  --help, -h   Show this help.
 
 Run from inside the cloned uhm repository. See the README for details.
 EOF
@@ -107,7 +118,7 @@ esac
 
 ## root check
 if [[ "$(id -u)" != "0" ]]; then
-    echo "ERROR: This script must be run as root"
+    echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
@@ -116,24 +127,26 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    echo "Script $(basename "$0") is already running"
+    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
 # --- Paths -------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOTSPOT_DIR="/etc/uhm"
 CORE_DIR="${HOTSPOT_DIR}/core"
 TOOLS_DIR="${HOTSPOT_DIR}/tools"
 ACL_DIR="${HOTSPOT_DIR}/acl"
 CONFIG_FILE="${HOTSPOT_DIR}/uhm.env"
 PYDHCP_ENV="/etc/pydhcp/pydhcp.env"
-LOG_FILE="/var/log/uhm.log"
+BKSTACK="/etc/pydhcp/tools/bkstack.sh"
+LOG_FILE="${SCRIPT_DIR}/uhmsetup.log"
+UHM_LOG_FILE="/var/log/uhm.log"
 LOGROTATE_FILE="/etc/logrotate.d/uhm"
 UHM_IPTABLES_DEST="${TOOLS_DIR}/uhmiptables.sh"
 SERVICE_DEST="/etc/systemd/system/uhmd.service"
 
 # --- Repo file expectations (relative to this script) ------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_CORE="${SCRIPT_DIR}/core"
 REPO_TOOLS="${SCRIPT_DIR}/tools"
 REPO_ACL="${SCRIPT_DIR}/acl"
@@ -141,11 +154,14 @@ REPO_UHMD="${REPO_CORE}/uhmd.sh"
 REPO_SERVICE="${REPO_CORE}/uhmd.service"
 
 # --- Required apt packages ----------------------------------------------------
-APT_DEPS=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils)
+# Project-wide list: this installer verifies every package the deployed
+# components need at runtime, not just the ones it invokes itself -- so a
+# missing package is reported here instead of failing later in uhmd,
+# uhmacl, uhmunifi or uhmiptables.
+APT_DEPS=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils procps)
 
 # --- Discovered runtime values (filled during install) -----------------------
 DHCP_BACKEND="" # "pydhcpd"
-LOCAL_USER=""
 
 # --- Output helpers ----------------------------------------------------------
 log() {
@@ -187,7 +203,7 @@ insert_after_last_delimiter() {
         printf '\n%s\n' "$content" >> "$file"
         return
     fi
-    tmp=$(mktemp)
+    tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -- abort"; }
     head -n "$last_line" "$file" > "$tmp"
     printf '\n%s\n' "$content" >> "$tmp"
     tail -n "+$((last_line + 1))" "$file" >> "$tmp"
@@ -230,48 +246,14 @@ check_distro() {
     fi
 }
 
-detect_local_user() {
-    local uid_min uid_max
-    local user uid best_uid=999999
-
-    uid_min=$(awk '/^UID_MIN/{print $2}' /etc/login.defs 2>/dev/null)
-    uid_max=$(awk '/^UID_MAX/{print $2}' /etc/login.defs 2>/dev/null)
-    uid_min=${uid_min:-1000}
-    uid_max=${uid_max:-60000}
-
-    LOCAL_USER=""
-    while IFS=: read -r user _ uid _ _ _ shell; do
-        [ "$user" = "root" ] && continue
-        [ -z "$uid" ] && continue
-        [ "$uid" -lt "$uid_min" ] && continue
-        [ "$uid" -gt "$uid_max" ] && continue
-
-        case "$shell" in
-            */false|*/nologin) continue ;;
-        esac
-
-        id -nG "$user" 2>/dev/null | grep -qw sudo || continue
-
-        if [ "$uid" -lt "$best_uid" ]; then
-            best_uid="$uid"
-            LOCAL_USER="$user"
-        fi
-    done </etc/passwd
-
-    if [[ -z "$LOCAL_USER" ]] || ! id "$LOCAL_USER" &>/dev/null; then
-        abort "Cannot determine a valid local user"
-    fi
-    info "Local user: $LOCAL_USER"
-}
-
 check_repo_files() {
-    [[ -r "$REPO_UHMD" ]] || abort "Missing $(basename "$REPO_UHMD"). Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -r "$REPO_SERVICE" ]] || abort "Missing $(basename "$REPO_SERVICE"). Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -r "${REPO_CORE}/uhmreload.sh" ]] || abort "Missing core/uhmreload.sh. Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -r "${REPO_CORE}/uhmleases.sh" ]] || abort "Missing core/uhmleases.sh. Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -r "${REPO_CORE}/uhmwatch.sh" ]] || abort "Missing core/uhmwatch.sh. Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -d "$REPO_TOOLS" ]] || abort "Missing tools/ directory. Run uhmsetup.sh from inside the cloned uhm repository."
-    [[ -d "$REPO_ACL" ]] || abort "Missing acl/ directory. Run uhmsetup.sh from inside the cloned uhm repository."
+    [[ -r "$REPO_UHMD" ]] || { err "missing $(basename "$REPO_UHMD")"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -r "$REPO_SERVICE" ]] || { err "missing $(basename "$REPO_SERVICE")"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -r "${REPO_CORE}/uhmreload.sh" ]] || { err "missing core/uhmreload.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -r "${REPO_CORE}/uhmleases.sh" ]] || { err "missing core/uhmleases.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -r "${REPO_CORE}/uhmwatch.sh" ]] || { err "missing core/uhmwatch.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -d "$REPO_TOOLS" ]] || { err "missing tools/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -d "$REPO_ACL" ]] || { err "missing acl/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     info "Repo files located"
 }
 
@@ -281,7 +263,7 @@ check_apt_deps() {
         dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
     done
     if (( ${#missing[@]} > 0 )); then
-        abort "Missing required package(s): ${missing[*]}. Install them first (e.g. apt-get install ${missing[*]}), then re-run."
+        { err "missing package(s): ${missing[*]}"; abort "install them with apt, then re-run -- abort"; }
     fi
     info "All apt dependencies present: ${APT_DEPS[*]}"
 }
@@ -296,45 +278,50 @@ detect_dhcp_backend() {
     else
         err "pydhcpd is not active."
         err "Install pydhcpd from https://github.com/maravento/pydhcp"
-        abort "Aborting: DHCP backend required."
+        abort "DHCP backend required -- abort"
     fi
 }
 
 # Reads pydhcp's own network values (server IP, mask, subnet, broadcast, DNS,
 # blockdhcp pool range) from PYDHCP_ENV instead of asking for them again --
-# pysetup.sh already collected and persisted them. Also validates that the
-# ACL path and leases-file keys are present, since PYDHCP_ENV is later copied
-# byte-for-byte into uhm.env's own config (see run_setup_wizard) and a
-# malformed/partial file must not be embedded silently.
+# pysetup.sh already collected and persisted them. Only the keys this
+# installer itself needs for the wizard are required here: the rest live in
+# pydhcp.env and each component reads them from there at runtime, warning
+# and falling back if one is missing.
 # Sets CFG_SERVER_IP, CFG_SERV_MASK, CFG_SERV_SUBNET, CFG_SERV_BROADCAST,
 # CFG_SERV_DNS, CFG_SERV_INI_RANGE_BLOCK, CFG_SERV_END_RANGE_BLOCK for
 # run_setup_wizard.
 load_pydhcp_env() {
     [ -f "$PYDHCP_ENV" ] \
-        || abort "$PYDHCP_ENV not found. Install/update pydhcp first (https://github.com/maravento/pydhcp)."
+        || { err "$PYDHCP_ENV not found"; abort "install pydhcp first, see its README -- abort"; }
 
     local missing=() key
-    for key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK INTERFACESv4 \
-               SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS \
-               ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_PROXY \
-               ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES \
-               CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME \
-               WPAD_ENABLED PING_CHECK_ENABLED; do
+    for key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
+               SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS; do
         grep -q "^${key}=" "$PYDHCP_ENV" || missing+=("$key")
     done
     if (( ${#missing[@]} > 0 )); then
         err "$PYDHCP_ENV is missing pydhcp's own keys: ${missing[*]}"
-        abort "Re-run pydhcp's pysetup.sh (or restore $PYDHCP_ENV from backup)."
+        abort "re-run pydhcp pysetup.sh, or restore the backup -- abort"
     fi
 
     # Load only these known keys instead of sourcing the whole file, so a
     # tampered pydhcp.env cannot execute code.
-    local line key2 value
+    local line key2 value raw_key2 raw_value
     while IFS= read -r line || [ -n "$line" ]; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key2="${line%%=*}"
         value="${line#*=}"
+        raw_key2="$key2" raw_value="$value"
+        key2="${key2#"${key2%%[![:space:]]*}"}"
+        key2="${key2%"${key2##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key2" != "$raw_key2" || "$value" != "$raw_value" ]]; then
+            log "WARNING: stray whitespace fixed -- alert"
+            log "WARNING: key $key2"
+        fi
         case "$key2" in
             SERVER_IP)            CFG_SERVER_IP="$value" ;;
             SERV_MASK)            CFG_SERV_MASK="$value" ;;
@@ -343,10 +330,6 @@ load_pydhcp_env() {
             SERV_DNS)             CFG_SERV_DNS="$value" ;;
             SERV_INI_RANGE_BLOCK) CFG_SERV_INI_RANGE_BLOCK="$value" ;;
             SERV_END_RANGE_BLOCK) CFG_SERV_END_RANGE_BLOCK="$value" ;;
-            # Not pydhcp's own -- may have been added by another project
-            # (e.g. gateproxy) that also writes to this file. Captured here
-            # only so run_setup_wizard can skip re-asking for it below.
-            WAN_IF)               CFG_EXISTING_WAN_IF="$value" ;;
         esac
     done < "$PYDHCP_ENV"
 
@@ -354,12 +337,12 @@ load_pydhcp_env() {
     for _v in CFG_SERVER_IP CFG_SERV_SUBNET CFG_SERV_BROADCAST \
               CFG_SERV_INI_RANGE_BLOCK CFG_SERV_END_RANGE_BLOCK; do
         [[ "${!_v:-}" =~ $_UH_IPV4 ]] \
-            || abort "$PYDHCP_ENV holds an invalid IPv4 address in ${_v#CFG_}: '${!_v:-}'. Fix it (or re-run pydhcp's pysetup.sh) and retry."
+            || { err "invalid IPv4 in ${_v#CFG_}: '${!_v:-}'"; abort "fix it in $PYDHCP_ENV and retry -- abort"; }
     done
     [[ "${CFG_SERV_MASK:-}" =~ $_UH_NETMASK ]] \
-        || abort "$PYDHCP_ENV holds an invalid netmask in SERV_MASK: '${CFG_SERV_MASK:-}'. Fix it (or re-run pydhcp's pysetup.sh) and retry."
+        || { err "invalid netmask in SERV_MASK: '${CFG_SERV_MASK:-}'"; abort "fix it in $PYDHCP_ENV and retry -- abort"; }
     [[ "${CFG_SERV_DNS:-}" =~ $_UH_DNS ]] \
-        || abort "$PYDHCP_ENV holds an invalid SERV_DNS list: '${CFG_SERV_DNS:-}'. Fix it (or re-run pydhcp's pysetup.sh) and retry."
+        || { err "invalid SERV_DNS list: '${CFG_SERV_DNS:-}'"; abort "fix it in $PYDHCP_ENV and retry -- abort"; }
 }
 
 # --- Interactive prompts ------------------------------------------------------
@@ -378,7 +361,8 @@ ask_interface() {
             printf -v "$var" '%s' "$answer"
             break
         fi
-        err "Interface '$answer' not found. Available: $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)"
+        err "interface '$answer' not found"
+        err "available: $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)"
     done
 }
 
@@ -504,7 +488,7 @@ fetch_unifi_ssids() {
 
     payload=$(UH_JQ_USER="$user" UH_JQ_PASS="$pass" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    cookie_jar=$(mktemp)
+    cookie_jar=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -- abort"; }
 
     curl -sk -c "$cookie_jar" -o /dev/null \
         -X POST "${url}${login_path}" \
@@ -531,18 +515,13 @@ run_setup_wizard() {
     echo "------------------------------------------------------"
 
     step "Network"
-    if [[ -n "${CFG_EXISTING_WAN_IF:-}" ]]; then
-        # Already defined in pydhcp.env -- by pydhcp itself or by another
-        # project sharing that file (e.g. gateproxy). Independent projects
-        # never re-ask for a value another one already recorded.
-        CFG_WAN_IF="$CFG_EXISTING_WAN_IF"
-        info "WAN_IF already set in $PYDHCP_ENV -- using '$CFG_WAN_IF'"
-    else
-        local ifaces
-        ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
-        echo "Available interfaces: $ifaces"
-        ask_interface "WAN interface" "eth0" CFG_WAN_IF
-    fi
+    # WAN_IF is uhm's own: a value another project may have written into
+    # pydhcp.env belongs to that project, not to the ecosystem, so uhm asks
+    # for its own and keeps it in uhm.env.
+    local ifaces
+    ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
+    echo "Available interfaces: $ifaces"
+    ask_interface "WAN interface" "eth0" CFG_WAN_IF
 
     step "pydhcp network configuration"
     info "Loaded from $PYDHCP_ENV"
@@ -560,7 +539,8 @@ run_setup_wizard() {
         ask_ip "Hotspot range start" "${_net_base}.160" CFG_INI_RANGE
         ask_ip "Hotspot range end" "${_net_base}.199" CFG_END_RANGE
         if ! ip_le "$CFG_INI_RANGE" "$CFG_END_RANGE"; then
-            err "Range start (${CFG_INI_RANGE}) must not be above range end (${CFG_END_RANGE})."
+            err "range start ${CFG_INI_RANGE} is above range end"
+            err "range end is ${CFG_END_RANGE}"
             continue
         fi
         if ! ip_in_network "$CFG_INI_RANGE" "$CFG_SERV_SUBNET" "$CFG_SERV_MASK" \
@@ -602,7 +582,7 @@ run_setup_wizard() {
         found_url="$DISCOVERED_URL"
         found_type="$DISCOVERED_TYPE"
     else
-        abort "No UniFi controller detected. Check the UniFi configuration (credentials, that it is running and reachable) and restart the installation. If UniFi Network self-hosted / UniFi OS Server is not installed yet, use unifisetup.sh to install it (check README)."
+        { err "no UniFi controller detected"; err "check credentials, and that it is running and reachable"; abort "if not installed, use unifisetup.sh first -- abort"; }
     fi
 
     step "Hotspot SSID"
@@ -622,9 +602,12 @@ run_setup_wizard() {
             [[ -n "$CFG_ESSID" ]] && break
             echo "Invalid selection -- enter the number of one of the SSIDs listed above."
         done
-        [[ -z "$CFG_ESSID" ]] && abort "No SSID selected -- install aborted."
+        if [[ -z "$CFG_ESSID" ]]; then
+            err "no SSID selected from the list"
+            abort "re-run and pick one of the SSIDs shown -- abort"
+        fi
     else
-        abort "No SSID detected on the UniFi controller. Check the UniFi configuration (guest SSID configured, credentials) and restart the installation."
+        { err "no SSID detected on the UniFi controller"; abort "configure a guest SSID, then retry -- abort"; }
     fi
 
     step "Dependency check"
@@ -643,12 +626,12 @@ run_setup_wizard() {
     esac
     if [[ -z "$detected_version" ]]; then
         if [[ "$found_type" == "unifi-os" ]] && ! command -v podman &>/dev/null; then
-            abort "Could not detect the installed UniFi version: 'podman' is not available on this host, and it is required to query the uosserver container. Install podman (or check the UniFi OS Server installation) and retry. unifisetup.sh installs UniFi OS Server together with podman (check README)."
+            { err "cannot detect UniFi version: 'podman' not available"; abort "install podman, or use unifisetup.sh -- abort"; }
         fi
-        abort "Could not detect the installed UniFi version (type: ${found_type}). uhm only supports versions tested to date -- install aborted."
+        { err "cannot detect UniFi version (type: ${found_type})"; err "uhm supports only the versions tested to date"; abort "check the UniFi installation, then re-run -- abort"; }
     fi
     if ! version_ge "$detected_version" "$min_version"; then
-        abort "Detected UniFi version ${detected_version} (${found_type}) is below the minimum tested version ${min_version}. uhm only supports ${min_version} and above for this type -- install aborted."
+        { err "UniFi ${detected_version} (${found_type}) is below ${min_version}"; abort "uhm needs ${min_version} or above -- abort"; }
     fi
     info "UniFi version ${detected_version} (${found_type}) meets minimum"
     info "  tested version (${min_version})"
@@ -697,31 +680,34 @@ run_setup_wizard() {
     step "Writing $CONFIG_FILE"
     (
         umask 077
-        local ESSID_Q USER_Q PASS_Q URL_Q RELOAD_SCRIPT_Q
+        local ESSID_Q USER_Q PASS_Q URL_Q RELOAD_SCRIPT_Q WAN_IF_Q
         ESSID_Q=$(dq_escape "$CFG_ESSID")
         USER_Q=$(dq_escape "$CFG_UNIFI_USER")
         PASS_Q=$(dq_escape "$CFG_UNIFI_PASS")
         RELOAD_SCRIPT_Q=$(dq_escape "$CFG_RELOAD_SCRIPT")
+        WAN_IF_Q=$(dq_escape "$CFG_WAN_IF")
         URL_Q=$(dq_escape "$found_url")
 
-        cat "$PYDHCP_ENV" > "$CONFIG_FILE"
+        # uhm.env holds only uhm's own keys. pydhcp's values (network,
+        # ACL paths, leases) stay in pydhcp.env and are read from there at
+        # runtime, so a change in that file reaches uhm without a re-install.
+        : > "$CONFIG_FILE"
 
-        # uhm.env is pydhcp.env verbatim plus the block below. Any key that
-        # file already defines -- pydhcp's own, or one added there by another
-        # project (gateproxy, for instance) -- is skipped instead of written
-        # a second time: these files are parsed key=value, so a duplicated key
-        # leaves each reader holding whichever copy it saw last.
+        # Any key pydhcp.env already defines -- pydhcp's own, or one added
+        # there by another project (gateproxy, for instance) -- is skipped
+        # instead of written here too: every component reads pydhcp.env
+        # first and uhm.env after, so a duplicate would let uhm.env shadow
+        # the value its owner maintains.
         local _uhm_block
-        _uhm_block=$(mktemp)
+        _uhm_block=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -- abort"; }
 
         cat > "$_uhm_block" <<EOF
 # =============================================================================
 # UHM
 # /etc/uhm/uhm.env
 # =============================================================================
-# -- Network (uhm's own) -------------------------------------------------
-WAN_IF="${CFG_WAN_IF}"
-LOCAL_USER="${LOCAL_USER}"
+# -- Network (uhm's own) ------------------------------------------------------
+WAN_IF="${WAN_IF_Q}"
 # -- UniFi keys ---------------------------------------------------------------
 # Guest SSID
 UHM_ESSID="${ESSID_Q}"
@@ -847,7 +833,7 @@ deploy_scripts() {
 
 deploy_uhmiptables() {
     if [[ -f "$UHM_IPTABLES_DEST" ]]; then
-        info "uhmiptables.sh already exists -- leaving untouched"
+        info "uhmiptables.sh already exists -- skip"
         return 0
     fi
     install -m 750 -o root -g root "${REPO_TOOLS}/uhmiptables.sh" "$UHM_IPTABLES_DEST"
@@ -864,18 +850,18 @@ install_logrotate() {
     # time, instead of leaving it to whichever of uhmd.sh/uhmreload.sh/
     # uhmleases.sh happens to create it first (tee -a defaults) or waiting for
     # logrotate's first cycle (create 640 root adm only applies on rotation).
-    if [[ ! -f "$LOG_FILE" ]]; then
-        touch "$LOG_FILE"
+    if [[ ! -f "$UHM_LOG_FILE" ]]; then
+        touch "$UHM_LOG_FILE"
     fi
-    chmod 640 "$LOG_FILE"
-    chown root:adm "$LOG_FILE" 2>/dev/null || chown root:root "$LOG_FILE"
+    chmod 640 "$UHM_LOG_FILE"
+    chown root:adm "$UHM_LOG_FILE" 2>/dev/null || chown root:root "$UHM_LOG_FILE"
 
     if [[ -f "$LOGROTATE_FILE" ]]; then
         info "logrotate config already present at $LOGROTATE_FILE"
     else
         [[ "$report_mode" == "warn" ]] && warn "$(basename "$LOGROTATE_FILE") missing -- creating it"
         cat > "$LOGROTATE_FILE" <<EOF
-${LOG_FILE} {
+${UHM_LOG_FILE} {
     daily
     rotate 7
     compress
@@ -926,9 +912,12 @@ install_systemd_service() {
     install -m 644 -o root -g root "$REPO_SERVICE" "$SERVICE_DEST"
     systemctl daemon-reload
     systemctl enable uhmd
-    systemctl restart uhmd \
-        && info "uhmd enabled and started" \
-        || warn "Could not start uhmd -- check: systemctl status uhmd"
+    if systemctl restart uhmd; then
+        info "uhmd enabled and started"
+    else
+        warn "Could not start uhmd -- alert"
+        warn "check it with: systemctl status uhmd"
+    fi
 }
 
 # --- Install mode ------------------------------------------------------------
@@ -943,7 +932,7 @@ do_install() {
   Use --update to upgrade (keeps config), or --remove to remove first."
     fi
 
-    trap '_install_ec=$?; trap - EXIT; (( _install_ec != 0 )) && { warn "Installation failed -- rolling back changes"; _perform_remove; }' EXIT
+    trap '_install_ec=$?; trap - EXIT; (( _install_ec != 0 )) && { warn "Installation failed, rolling back changes"; _perform_remove; }' EXIT
 
     step "Preflight"
     check_distro
@@ -976,11 +965,11 @@ do_install() {
     fi
     if dpkg -s webmin &>/dev/null; then
         if confirm "Install the Webmin log viewer module?" "n"; then
-            bash "${TOOLS_DIR}/uhmmon.sh" install
+            bash "${TOOLS_DIR}/uhmwebmin.sh" install
         fi
     else
-        info "Webmin not detected -- skipping Webmin module prompt"
-        info "  install Webmin first, run: bash tools/uhmmon.sh install"
+        info "Webmin not detected, module prompt -- skip"
+        info "  install Webmin first, run: bash tools/uhmwebmin.sh install"
     fi
 
     step "Cron"
@@ -995,10 +984,11 @@ do_install() {
     echo "uhm installed."
     echo ""
     echo "Next steps:"
-    echo "1. Optional: ${UHM_IPTABLES_DEST} is a minimal template (routing + NAT). For full"
-    echo "   enforcement, copy tools/uhmiptables_example.txt over it and adapt it."
+    echo "1. Optional: ${UHM_IPTABLES_DEST} is a minimal template"
+    echo "   (routing + NAT). For full enforcement, copy"
+    echo "   tools/uhmiptables_example.txt over it and adapt it."
     echo "2. Check service: systemctl status uhmd"
-    echo "3. Check logs: tail -f ${LOG_FILE}"
+    echo "3. Check logs: tail -f ${UHM_LOG_FILE}"
     echo "------------------------------------------------------"
     echo ""
 }
@@ -1019,29 +1009,14 @@ do_update() {
     # $TOOLS_DIR), so an update from an old install isn't mistaken for a
     # fresh one.
     if [[ ! -d "$HOTSPOT_DIR" ]] || { [[ ! -f "${CORE_DIR}/uhmd.sh" ]] && [[ ! -f "${HOTSPOT_DIR}/uhmd.sh" ]]; }; then
-        abort "uhm not installed. Run without --update first."
+        { err "uhm not installed"; abort "run without --update first -- abort"; }
     fi
 
     step "Backup"
-    local backup_dir
-    backup_dir="${HOTSPOT_DIR}/bak/$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp -p "${CORE_DIR}/"*.sh "$backup_dir/" 2>/dev/null || true
-    cp -p "${HOTSPOT_DIR}/uhmd.sh" "$backup_dir/" 2>/dev/null || true
-    cp -p "${TOOLS_DIR}/"*.sh "$backup_dir/" 2>/dev/null || true
-    info "Current scripts backed up to $backup_dir"
-
-    # Keep only the most recent BACKUP_RETENTION_COUNT runs -- backup_dir's
-    # own timestamp directory name sorts correctly (YYYYMMDD_HHMMSS).
-    local BACKUP_RETENTION_COUNT=5
-    local -a old_backups
-    mapfile -t old_backups < <(ls -1 "${HOTSPOT_DIR}/bak" 2>/dev/null | sort | head -n -"$BACKUP_RETENTION_COUNT")
-    if (( ${#old_backups[@]} > 0 )); then
-        local b
-        for b in "${old_backups[@]}"; do
-            rm -rf -- "${HOTSPOT_DIR}/bak/${b}"
-        done
-        info "Pruned ${#old_backups[@]} old backup(s), keeping the last ${BACKUP_RETENTION_COUNT}"
+    if [[ -x "$BKSTACK" ]]; then
+        "$BKSTACK" || warn "backup failed, continuing -- alert"
+    else
+        warn "$BKSTACK not found, no backup taken -- alert"
     fi
 
     step "Pause services"
@@ -1063,10 +1038,10 @@ do_update() {
     fi
 
     if (( _uhmd_was_active )); then
-        systemctl stop uhmd && info "uhmd stopped for update" || warn "Could not stop uhmd -- continuing anyway"
+        systemctl stop uhmd && info "uhmd stopped for update" || warn "Could not stop uhmd, continuing anyway"
     fi
     if (( _ualert_was_active )); then
-        systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert -- continuing anyway"
+        systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert, continuing anyway"
     fi
     if (( _uwatch_was_active )); then
         # Remove the active line outright (whichever path it used, current
@@ -1103,16 +1078,21 @@ do_update() {
     install -m 644 -o root -g root "$REPO_SERVICE" "$SERVICE_DEST"
     systemctl daemon-reload
     if (( _uhmd_was_active )); then
-        systemctl restart uhmd && info "uhmd restarted" || warn "Could not restart uhmd -- check: systemctl status uhmd"
+        if systemctl restart uhmd; then
+            info "uhmd restarted"
+        else
+            warn "Could not restart uhmd -- alert"
+            warn "check it with: systemctl status uhmd"
+        fi
     else
-        info "uhmd was not active before the update -- leaving it stopped"
+        info "uhmd was not active before the update, left stopped"
     fi
 
     step "Resume services"
     # Only restore what this update itself paused above -- never start
     # something the administrator had deliberately left stopped/disabled.
     if (( _ualert_was_active )); then
-        systemctl start uhmalert && info "uhmalert restarted" || warn "Could not restart uhmalert -- check: systemctl status uhmalert"
+        systemctl start uhmalert && info "uhmalert restarted" || { warn "Could not restart uhmalert -- alert"; warn "check it with: systemctl status uhmalert"; }
     fi
     if (( _uwatch_was_active )); then
         # Re-registers a clean entry at the current core/ path -- also
@@ -1125,7 +1105,7 @@ do_update() {
         # uhmwatch becoming mandatory. Install it now rather than leaving
         # an update-in-place without it.
         bash "${CORE_DIR}/uhmwatch.sh" install
-        info "uhmwatch installed (was missing -- now mandatory)"
+        info "uhmwatch installed (was missing, now mandatory)"
     fi
 
     step "Cron"
@@ -1149,7 +1129,6 @@ do_update() {
     echo "Stale @hourly uhmreload.sh cron entry removed if present"
     echo ""
 
-    echo "Backup: $backup_dir"
     echo "------------------------------------------------------"
     echo ""
 }
@@ -1167,16 +1146,12 @@ do_remove() {
     warn "  - cron entries pointing to ${HOTSPOT_DIR}/core/uhmreload.sh"
     warn "  - the uhmwatch cron entry"
     warn "  - uhmalert.service if installed"
-    warn "  - Webmin module (uhmmon) if installed"
+    warn "  - Webmin module (uhmwebmin) if installed"
     warn "  - ${LOGROTATE_FILE}"
-    warn "  - ${HOTSPOT_DIR} entirely: $CONFIG_FILE"
-    warn "  (credentials), ${ACL_DIR}/"
-    warn "    (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), $UHM_IPTABLES_DEST"
-    warn "    (YOUR firewall script"
-    warn "  back it up first if needed), ${HOTSPOT_DIR}/bak/"
-    warn "    (script backups from --update runs)"
-    warn "    and everything else in it"
-    warn "  - ${LOG_FILE}, rotated logs"
+    warn "  - ${HOTSPOT_DIR}, except ${HOTSPOT_DIR}/bak/"
+    warn "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
+    warn "    Run ${BKSTACK} first if you want a backup"
+    warn "  - ${UHM_LOG_FILE}, rotated logs"
     warn "  - uhmunifi.log and reload failure traces"
     warn "Package dependencies"
     warn "  (curl, jq, iptables, ipset, etc.) are NOT removed."
@@ -1240,13 +1215,16 @@ _perform_remove() {
         info "No uhmwatch cron entry found"
     fi
 
-    # uhmmon / Webmin module (optional component)
-    step "uhmmon (Webmin module)"
+    # uhmwebmin / Webmin module (optional component)
+    step "uhmwebmin (Webmin module)"
     if [[ -d /usr/share/webmin/uhm ]]; then
-        if [[ -f "${TOOLS_DIR}/uhmmon.sh" ]]; then
-            bash "${TOOLS_DIR}/uhmmon.sh" uninstall || warn "uhmmon.sh uninstall failed -- remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
+        if [[ -f "${TOOLS_DIR}/uhmwebmin.sh" ]]; then
+            bash "${TOOLS_DIR}/uhmwebmin.sh" uninstall || {
+                warn "uhmwebmin.sh uninstall failed -- alert"
+                warn "remove /usr/share/webmin/uhm and /etc/webmin/uhm by hand"
+            }
         else
-            warn "Webmin module found but ${TOOLS_DIR}/uhmmon.sh is missing"
+            warn "Webmin module found but ${TOOLS_DIR}/uhmwebmin.sh is missing"
             warn "  remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
         fi
     else
@@ -1265,7 +1243,10 @@ _perform_remove() {
     # /etc/uhm
     step "$HOTSPOT_DIR"
     if [[ -d "$HOTSPOT_DIR" ]]; then
-        rm -rf -- "$HOTSPOT_DIR"
+        # Everything under HOTSPOT_DIR goes, including uhm.env, the ACL
+        # lists and uhmiptables.sh: uninstalling means removing the project.
+        # Only bak/ survives; bkstack.sh is the way to keep a copy.
+        find "$HOTSPOT_DIR" -mindepth 1 -maxdepth 1 ! -name bak -exec rm -rf {} +
         info "Removed $HOTSPOT_DIR"
     else
         info "$HOTSPOT_DIR does not exist"
@@ -1277,8 +1258,8 @@ _perform_remove() {
     for f in /var/log/uhmunifi.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
         [[ -f "$f" ]] && extra_logs+=("$f")
     done
-    if compgen -G "${LOG_FILE}*" >/dev/null || [[ ${#extra_logs[@]} -gt 0 ]]; then
-        rm -f -- "${LOG_FILE}" "${LOG_FILE}".* "${extra_logs[@]+"${extra_logs[@]}"}"
+    if compgen -G "${UHM_LOG_FILE}*" >/dev/null || [[ ${#extra_logs[@]} -gt 0 ]]; then
+        rm -f -- "${UHM_LOG_FILE}" "${UHM_LOG_FILE}".* "${extra_logs[@]+"${extra_logs[@]}"}"
         info "Logs removed"
     else
         info "No log files found"
@@ -1302,7 +1283,6 @@ main() {
     log "uhmsetup start..."
     case "${1:-}" in
         ""|install)
-            detect_local_user
             check_apt_deps
             detect_dhcp_backend
             load_pydhcp_env
@@ -1311,7 +1291,6 @@ main() {
             exit 0
             ;;
         --update|update)
-            detect_local_user
             check_apt_deps
             detect_dhcp_backend
             do_update

@@ -7,7 +7,7 @@
 #
 # DESCRIPTION:
 # Mandatory -- installed automatically, not offered as a
-# yes/no prompt like uhmalert/uhmmon. Every unit it watches (uhmd,
+# yes/no prompt like uhmalert/uhmwebmin. Every unit it watches (uhmd,
 # pydhcpd, the UniFi backend) already has its own systemd Restart=
 # policy, but that alone gives up permanently once StartLimitBurst is
 # exhausted, with no further attempt and no alert -- see the
@@ -30,66 +30,67 @@
 # Checks performed, every run:
 # 1. uhmd.service -- always.
 # 2. uhmalert.service -- only if installed (optional component of uhm;
-# silently skipped if its unit file isn't present).
+#    silently skipped if its unit file isn't present).
 # 3. pydhcpd.service -- always. External dependency (separate project),
-# not part of uhm's own codebase, same reasoning as watching the UniFi
-# backend below: pydhcpd's own Restart=on-failure eventually exhausts
-# its StartLimitBurst and gives up silently (see pydhcp's own README),
-# with no alerting of its own -- uhmd cannot function without it, so it
-# gets the same treatment as uhmd.service itself. is-active only, no
-# functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
-# Skipped (not restarted) if uhmleases.sh currently holds CYCLE_LOCK --
-# it stops/reconfigures/starts pydhcpd itself as part of a normal reload
-# (~1-3s), and a cron tick landing in that window would otherwise "fix"
-# a service that isn't actually broken, colliding with uhmleases.sh's own
-# pending restart and aborting that reload.
+#    not part of uhm's own codebase, same reasoning as watching the UniFi
+#    backend below: pydhcpd's own Restart=on-failure eventually exhausts
+#    its StartLimitBurst and gives up silently (see pydhcp's own README),
+#    with no alerting of its own -- uhmd cannot function without it, so it
+#    gets the same treatment as uhmd.service itself. is-active only, no
+#    functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
+#    Skipped (not restarted) if uhmleases.sh currently holds CYCLE_LOCK --
+#    it stops/reconfigures/starts pydhcpd itself as part of a normal reload
+#    (~1-3s), and a cron tick landing in that window would otherwise "fix"
+#    a service that isn't actually broken, colliding with uhmleases.sh's own
+#    pending restart and aborting that reload.
 # 4. UniFi backend -- branches on UNIFI_TYPE from uhm.env. Both branches
-# first require systemctl is-active (start it if not), then run a
-# functional check: a real login against the API (same mechanism
-# uhmd.sh itself uses -- credentials via jq env, payload via curl
-# stdin, never in argv), using UNIFI_USERNAME/UNIFI_PASSWORD from
-# uhm.env. HTTP 200 = healthy. HTTP 000 or 5xx = unresponsive,
-# restarts the service -- except within STARTUP_GRACE_SECONDS of
-# uhmd.service's own start (same margin and same config key uhmd.sh
-# uses for its own login retries): logged as INFO instead of WARNING,
-# no restart attempted, since the controller is expected to still be
-# booting after a reboot. Any 4xx = credentials rejected but the service
-# itself is up and answering -- logged as a warning, no restart (a
-# restart wouldn't fix a wrong password in uhm.env anyway).
+#    first require systemctl is-active (start it if not), then run a
+#    functional check: a real login against the API (same mechanism
+#    uhmd.sh itself uses -- credentials via jq env, payload via curl
+#    stdin, never in argv), using UNIFI_USERNAME/UNIFI_PASSWORD from
+#    uhm.env. HTTP 200 = healthy. HTTP 000 or 5xx = unresponsive,
+#    restarts the service -- except within STARTUP_GRACE_SECONDS of
+#    uhmd.service's own start (same margin and same config key uhmd.sh
+#    uses for its own login retries): logged as INFO instead of WARNING,
+#    no restart attempted, since the controller is expected to still be
+#    booting after a reboot. Any 4xx = credentials rejected but the service
+#    itself is up and answering -- logged as a warning, no restart (a
+#    restart wouldn't fix a wrong password in uhm.env anyway).
 # If those credentials are not set in uhm.env, falls back to a
 # process/port-only check instead of skipping the check entirely.
 # - "unifi-os": uosserver.service. UOS Server is an all-in-one container
-# that bundles its own MongoDB internally -- no host-level mongod.service
-# is part of this architecture. A broken internal Mongo is exactly the
-# failure mode the login check catches that a plain process check
-# cannot. A standalone mongod.service found running alongside UOS
+#   that bundles its own MongoDB internally -- no host-level mongod.service
+#   is part of this architecture. A broken internal Mongo is exactly the
+#   failure mode the login check catches that a plain process check
+#   cannot. A standalone mongod.service found running alongside UOS
 # Server is very likely a leftover from a previous classic install and
 # is not monitored here.
 # - "classic": unifi.service. Ships with UNIFI_MONGODB_SERVICE_ENABLED=false
-# by default, so it manages its own embedded MongoDB subprocess
-# (127.0.0.1:27117) end-to-end, including its own shutdown logic -- the
-# mongodb-org-server package's own mongod.service unit is never started
-# and its data directory stays empty. Same all-in-one shape as unifi-os
-# above, so restarting unifi.service already covers a Mongo failure
-# too. Credentials-absent fallback checks ports 8443/8080 instead.
+#   by default, so it manages its own embedded MongoDB subprocess
+#   (127.0.0.1:27117) end-to-end, including its own shutdown logic -- the
+#   mongodb-org-server package's own mongod.service unit is never started
+#   and its data directory stays empty. Same all-in-one shape as unifi-os
+#   above, so restarting unifi.service already covers a Mongo failure
+#   too. Credentials-absent fallback checks ports 8443/8080 instead.
 #
 # Standalone -- never reads or modifies uhmd.sh, only manages services
 # via systemctl. Independent of the user's own system-wide service
 # watchdog (if any); this one only knows about uhm's own dependencies.
 #
 # USAGE:
-# sudo ./uhmwatch.sh install Deploy the script,
-# register cron entry (* * * * *)
-# sudo ./uhmwatch.sh uninstall Remove the cron entry
-# uhmwatch.sh Run the checks directly (what cron invokes)
-# uhmwatch.sh -h, --help Show this help
+# sudo ./uhmwatch.sh install     Deploy the script and register its cron
+#                                entry (* * * * *)
+# sudo ./uhmwatch.sh uninstall   Remove the cron entry
+# uhmwatch.sh                    Run the checks directly (what cron invokes)
+# uhmwatch.sh -h, --help         Show this help
 #
 # CONFIG: /etc/uhm/uhm.env (reads UNIFI_TYPE, UNIFI_CONTROLLER_URL,
-# UNIFI_USERNAME, UNIFI_PASSWORD, UNIFI_CERT_PIN,
-# RECOVERY_COOLDOWN_SECONDS, STARTUP_GRACE_SECONDS)
-# LOG: /var/log/uhm.log (shared with the rest of uhm). Silent on
-# a healthy run -- nothing is written unless a check finds a problem
-# or takes a fix action (WARNING/FIX/ERROR only).
+#         UNIFI_USERNAME, UNIFI_PASSWORD, UNIFI_CERT_PIN,
+#         RECOVERY_COOLDOWN_SECONDS, STARTUP_GRACE_SECONDS)
+#
+# LOG: /var/log/uhm.log (shared with the rest of uhm). Silent on a healthy
+#      run -- nothing is written unless a check finds a problem or takes a
+#      fix action.
 #
 ################################################################################
 
@@ -118,16 +119,31 @@ esac
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root"
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
+
+# log file perms (as installed by uhmsetup.sh)
+_log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
+case "$_log_stat" in
+    ""|"root adm 640"|"root root 640") ;;
+    *)
+        if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
+           chmod 640 "$log_file" 2>/dev/null; then
+            log "WARNING: uhm.log perms fixed -- alert"
+        else
+            log "WARNING: cannot fix uhm.log perms -- alert"
+        fi
+        ;;
+esac
+unset _log_stat
 
 # prevent overlapping runs
 SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "WARNING: script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
@@ -153,9 +169,9 @@ _uhm_reload_in_progress() {
 }
 
 # DEPENDENCIES
-for dep in curl jq mawk coreutils util-linux iproute2 cron grep sed systemd; do
+for dep in curl jq mawk coreutils util-linux cron grep sed systemd iproute2; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: missing dependency '$dep' -- abort"
         exit 1
     fi
 done
@@ -229,22 +245,33 @@ esac
 # sourced to prevent code execution.
 _UHM_CONF="/etc/uhm/uhm.env"
 _load_conf() {
-    local file="$1" line key value
-    [[ ! -f "$file" ]] && { log "WARNING: $file not found -- using defaults"; return 1; }
-    local _owner _perms _gdigit _odigit
+    local file="$1" line key value raw_key raw_value
+    [[ ! -f "$file" ]] && { log "WARNING: uhm.env not found -- fallback"; return 1; }
+    local _owner _perms
     _owner=$(stat -c '%U' "$file" 2>/dev/null)
     _perms=$(stat -c '%a' "$file" 2>/dev/null)
-    _gdigit="${_perms: -2:1}"
-    _odigit="${_perms: -1}"
-    if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-        log "WARNING: uhm.env owner/perms unsafe ($_owner/$_perms) -- fallback"
-        return 1
+    if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
+        if chown root:root "$file" 2>/dev/null && chmod 600 "$file" 2>/dev/null; then
+            log "WARNING: uhm.env perms fixed -- alert"
+        else
+            log "ERROR: cannot fix uhm.env perms -- abort"
+            return 1
+        fi
     fi
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        raw_key="$key" raw_value="$value"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+            log "WARNING: stray whitespace fixed -- alert"
+            log "WARNING: key $key"
+        fi
         if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
             value="${value:1:$((${#value}-2))}"
             value="${value//\\\"/\"}"
@@ -306,7 +333,7 @@ check_uhmd() {
             log "FIX: uhmd restarted"
             _clear_recovery_attempt "uhmd.service"
         else
-            log "WARNING: uhmd restart FAILED"
+            log "WARNING: uhmd restart FAILED -- alert"
         fi
     fi
 }
@@ -331,7 +358,7 @@ check_ualert() {
             log "FIX: uhmalert restarted"
             _clear_recovery_attempt "uhmalert.service"
         else
-            log "WARNING: uhmalert restart FAILED"
+            log "WARNING: uhmalert restart FAILED -- alert"
         fi
     fi
 }
@@ -362,7 +389,7 @@ check_pydhcpd() {
             log "FIX: pydhcpd restarted"
             _clear_recovery_attempt "pydhcpd.service"
         else
-            log "WARNING: pydhcpd restart FAILED"
+            log "WARNING: pydhcpd restart FAILED -- alert"
         fi
     fi
 }
@@ -429,7 +456,7 @@ check_uosserver() {
             log "FIX: uosserver started"
             _clear_recovery_attempt "uosserver.service"
         else
-            log "WARNING: uosserver start FAILED"
+            log "WARNING: uosserver start FAILED -- alert"
         fi
         return
     fi
@@ -443,12 +470,12 @@ check_uosserver() {
     # payload via curl stdin (not -d), so neither ever appears in this
     # process's argv (/proc/<pid>/cmdline).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
+        log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':11443\b'; then
             log "WARNING: UOS BROKEN_PORTS"
             if _recently_restarted "uosserver.service"; then
-                log "INFO: uosserver restarted recently -- skip (grace)"
+                log "INFO: uosserver restarted recently -- skip"
                 return
             fi
             if _recovery_on_cooldown "uosserver.service"; then
@@ -461,7 +488,7 @@ check_uosserver() {
                 log "FIX: uosserver restarted"
                 _clear_recovery_attempt "uosserver.service"
             else
-                log "WARNING: uosserver restart FAILED"
+                log "WARNING: uosserver restart FAILED -- alert"
             fi
         else
             _clear_recovery_attempt "uosserver.service"
@@ -486,12 +513,12 @@ check_uosserver() {
         _uhmd_start=$(uhmd_started_at)
         _now=$(date +%s)
         if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
-            log "INFO: UniFi login failed (HTTP $http_code), retry in grace"
+            log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "uosserver.service"; then
-            log "INFO: uosserver restarted recently -- skip (grace)"
+            log "INFO: uosserver restarted recently -- skip"
             return
         fi
         if _recovery_on_cooldown "uosserver.service"; then
@@ -504,14 +531,14 @@ check_uosserver() {
             log "FIX: uosserver restarted (login failed)"
             _clear_recovery_attempt "uosserver.service"
         else
-            log "WARNING: uosserver restart FAILED"
+            log "WARNING: uosserver restart FAILED -- alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before restarting (check README)"
+        log "WARNING: stop uhmd and uhmwatch cron -- alert"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
-        log "WARNING: check uhm.env - UOS itself is responding"
+        log "WARNING: check uhm.env, UOS is responding -- alert"
     fi
 }
 
@@ -528,7 +555,7 @@ check_unifi_classic() {
             log "FIX: unifi started"
             _clear_recovery_attempt "unifi.service"
         else
-            log "WARNING: unifi.service start FAILED"
+            log "WARNING: unifi.service start FAILED -- alert"
         fi
         return
     fi
@@ -538,12 +565,12 @@ check_unifi_classic() {
     # embedded Mongo subprocess, see header) is actually healthy. Same login
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
+        log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
             log "WARNING: UniFi (classic) BROKEN_PORTS"
             if _recently_restarted "unifi.service"; then
-                log "INFO: unifi restarted recently -- skip (grace)"
+                log "INFO: unifi restarted recently -- skip"
                 return
             fi
             if _recovery_on_cooldown "unifi.service"; then
@@ -556,7 +583,7 @@ check_unifi_classic() {
                 log "FIX: unifi restarted"
                 _clear_recovery_attempt "unifi.service"
             else
-                log "WARNING: unifi.service restart FAILED"
+                log "WARNING: unifi.service restart FAILED -- alert"
             fi
         else
             _clear_recovery_attempt "unifi.service"
@@ -581,12 +608,12 @@ check_unifi_classic() {
         _uhmd_start=$(uhmd_started_at)
         _now=$(date +%s)
         if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
-            log "INFO: UniFi login failed (HTTP $http_code), retry in grace"
+            log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
         if _recently_restarted "unifi.service"; then
-            log "INFO: unifi restarted recently -- skip (grace)"
+            log "INFO: unifi restarted recently -- skip"
             return
         fi
         if _recovery_on_cooldown "unifi.service"; then
@@ -599,14 +626,14 @@ check_unifi_classic() {
             log "FIX: unifi restarted (login failed)"
             _clear_recovery_attempt "unifi.service"
         else
-            log "WARNING: unifi.service restart FAILED"
+            log "WARNING: unifi.service restart FAILED -- alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd+uhmwatch cron before restarting (check README)"
+        log "WARNING: stop uhmd and uhmwatch cron -- alert"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
-        log "WARNING: check uhm.env - unifi.service is responding"
+        log "WARNING: check uhm.env, unifi.service is responding -- alert"
     fi
 }
 

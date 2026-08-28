@@ -3,38 +3,62 @@
 #
 ################################################################################
 #
-# uhmmon - module installation/uninstallation script for Webmin
+# uhmwebmin - module installation/uninstallation script for Webmin
 #
-# Description:
-# This script installs or uninstalls the UHM Log Viewer module
-# for Webmin. Provides real-time log monitoring for the uhmd daemon
-# with live polling, filtering, and full-log search.
+# DESCRIPTION:
+# This script installs or uninstalls the UHM Log Viewer module for Webmin.
+# Provides real-time log monitoring for the uhmd daemon with live polling,
+# filtering, and full-log search.
 #
-# Features:
+# FEATURES:
 # - Real-time log viewer with AJAX polling (no tail -f)
 # - Live/Pause toggle
 # - Full-log grep search
-# - Filter by level (INFO/WARNING/ERROR)
+# - Filter by level (INFO/WARNING/ERROR/FIX/ALERT/STATUS), one color each:
+#   INFO blue, WARNING amber, ERROR red, FIX green, ALERT purple,
+#   STATUS grey
 # - Text filter with highlighting
 # - Cycle stats dashboard (vouchers, authorized, grace, etc.)
 # - Service status indicator
 # - Multi-language support (English and Spanish)
 #
-# Usage:
-# sudo ./uhmmon.sh [OPTIONS]
+# USAGE:
+# sudo ./uhmwebmin.sh [OPTIONS]
 #
-# Options:
-# install Install the module
-# uninstall Uninstall the module
-# -h, --help Show help message
+# OPTIONS:
+# install      Install the module
+# uninstall    Uninstall the module
+# -h, --help   Show help message
+#
+# EXIT CODES:
+# 0 - Normal exit, or module installed/uninstalled successfully
+# 1 - Not root, already running, missing dependency, Webmin not
+#     installed, or invalid option
 #
 ################################################################################
 
 set -uo pipefail
 
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  install      Install the module"
+    echo "  uninstall    Uninstall the module"
+    echo "  -h, --help   Show this help message"
+    echo ""
+}
+
+case "${1:-}" in
+    -h|--help)
+        show_usage
+        exit 0
+        ;;
+esac
+
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root"
+    echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
@@ -43,14 +67,14 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    echo "Script $(basename "$0") is already running"
+    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
 # DEPENDENCIES
-for dep in coreutils util-linux ncurses-bin grep sed systemd; do
+for dep in coreutils util-linux ncurses-bin grep sed systemd mawk; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: Required dependency '$dep' is not installed." >&2
+        echo "ERROR: missing dependency '$dep' -- abort" >&2
         exit 1
     fi
 done
@@ -58,10 +82,49 @@ done
 # DEPENDENCIES (external repo)
 for dep in webmin; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: 'webmin' is not installed." >&2
+        echo "ERROR: 'webmin' is not installed -- abort" >&2
         exit 1
     fi
 done
+
+# LOCAL USER detection
+detect_local_user() {
+    local uid_min uid_max
+    local user uid best_user="" best_uid=999999
+
+    uid_min=$(awk '/^UID_MIN/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_max=$(awk '/^UID_MAX/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_min=${uid_min:-1000}
+    uid_max=${uid_max:-60000}
+
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [ "$user" = "root" ] && continue
+        [ -z "$uid" ] && continue
+        [ "$uid" -lt "$uid_min" ] && continue
+        [ "$uid" -gt "$uid_max" ] && continue
+
+        case "$shell" in
+            */false|*/nologin) continue ;;
+        esac
+
+        id -nG "$user" 2>/dev/null | grep -qw sudo || continue
+
+        if [ "$uid" -lt "$best_uid" ]; then
+            best_uid="$uid"
+            best_user="$user"
+        fi
+    done </etc/passwd
+
+    [ -n "$best_user" ] || return 1
+    echo "$best_user"
+}
+
+# The Webmin module is a read-only log viewer, so a missing local user is not
+# fatal: the module stays installed and usable by the Webmin root account.
+if ! local_user=$(detect_local_user); then
+    local_user=""
+    echo "WARNING: no local user with sudo found -- alert" >&2
+fi
 
 MODNAME="uhm"
 MODDIR="/usr/share/webmin/$MODNAME"
@@ -76,9 +139,13 @@ install_module() {
 
     echo "Creating module structure..."
 
-    mkdir -p "$MODDIR/images"
-    mkdir -p "$MODDIR/lang"
-    mkdir -p "$ETCDIR"
+    for _d in "$MODDIR/images" "$MODDIR/lang" "$ETCDIR"; do
+        if ! mkdir -p "$_d"; then
+            echo "ERROR: cannot create $_d -- abort" >&2
+            exit 1
+        fi
+    done
+    unset _d
 
     # ============================================================
     # 1. api.cgi (bash -- AJAX endpoint for log polling)
@@ -95,12 +162,10 @@ install_module() {
 
 set -uo pipefail
 
+# Fixed, not configurable from Webmin: every uhm component writes to this
+# path hardcoded, so a value changed here could only ever point the viewer
+# at a file nothing writes.
 LOG_FILE="/var/log/uhm.log"
-if [[ -f /etc/webmin/uhm/config ]]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        [[ "$line" == log_file=* ]] && LOG_FILE="${line#log_file=}"
-    done < /etc/webmin/uhm/config
-fi
 MAX_GREP=3000
 
 echo "Content-Type: application/json"
@@ -183,7 +248,7 @@ if [[ "$action" == "grep" ]]; then
         [[ "$line" == -* ]] && continue
 
         ts="" level="" msg=""
-        if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT):\ (.*) ]]; then
+        if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
             ts="${BASH_REMATCH[1]}"
             level="${BASH_REMATCH[2]}"
             msg="${BASH_REMATCH[3]}"
@@ -242,7 +307,7 @@ while IFS= read -r line; do
     [[ "$line" == -* ]] && continue
 
     ts="" level="" msg=""
-    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT):\ (.*) ]]; then
+    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
         ts="${BASH_REMATCH[1]}"
         level="${BASH_REMATCH[2]}"
         msg="${BASH_REMATCH[3]}"
@@ -428,15 +493,21 @@ print <<'HTMLBLOCK';
 /* -- Cell styles ---------------------------------------------- */
 .ct{color:var(--ts-color);font-size:11px;font-family:'Consolas','Liberation Mono',monospace}
 
-/* Level badges */
+/* Level badges -- one distinctive color per level:
+   lI INFO blue, lW WARNING amber, lE ERROR red,
+   lF FIX green, lA ALERT purple, lR STATUS grey */
 .cl{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.4px;min-width:60px;text-align:center}
 .cl.lI{background:#d1ecf1;color:#0c5460;border:1px solid #bee5eb}
 .cl.lW{background:#fff3cd;color:#856404;border:1px solid #ffeeba}
 .cl.lE{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb}
+.cl.lF{background:#d4edda;color:#155724;border:1px solid #c3e6cb}
+.cl.lA{background:#e2d9f3;color:#432874;border:1px solid #d3c6ec}
 .cl.lR{background:#e2e3e5;color:#383d41;border:1px solid #d6d8db}
 #uhmod.dark .cl.lI{background:#1a2a3a;color:#90caf9;border-color:#1565c0}
 #uhmod.dark .cl.lW{background:#3a2a00;color:#ffc107;border-color:#d29922}
 #uhmod.dark .cl.lE{background:#3a1a1a;color:#f85149;border-color:#6e1a1a}
+#uhmod.dark .cl.lF{background:#12261a;color:#56d364;border-color:#238636}
+#uhmod.dark .cl.lA{background:#2a1a3a;color:#bc8cff;border-color:#8957e5}
 #uhmod.dark .cl.lR{background:#1c2128;color:#8b949e;border-color:#30363d}
 
 .hl{background:var(--hl-bg);border-radius:2px;color:var(--hl-color)}
@@ -469,7 +540,7 @@ print <<'HTMLBLOCK';
     <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." onkeydown="if(event.key==='Enter')uhGS()">
     <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Search entire log file">Full log</button>
   </div>
-  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="STATUS">STATUS</option></select>
+  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="FIX">FIX</option><option value="STATUS">STATUS</option></select>
   <select id="uhLn" onchange="uhRL()"><option value="200">Last 200</option><option value="500" selected>Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
   <select id="uhIv" onchange="uhCI()"><option value="1000">1s</option><option value="3000">3s</option><option value="5000" selected>5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
   <button class="uh-btn" onclick="uhRL()" title="Reload log">Reload</button>
@@ -513,7 +584,7 @@ try{if(localStorage.getItem('uh_dm')==='1'){dm=true;document.getElementById('uhm
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function hl(t,q){if(!q)return esc(t);try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return esc(t).replace(r,'<span class="hl">$1</span>')}catch(e){return esc(t)}}
-function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|proxy|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
+function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
 function mf(r){var lv=document.getElementById('uhLv').value;if(lv&&r.level!==lv)return false;var q=(document.getElementById('uhQ').value||'').toLowerCase().trim();if(!grep&&q&&r._i.indexOf(q)===-1)return false;return true}
 
@@ -535,7 +606,7 @@ function rt(q,an){
   var sl=CUR.slice(0,RC);
   tb.innerHTML=sl.map(function(r,i){
     var c=i<an?'nr':'';
-    var lc=r.level==='INFO'?'lI':r.level==='WARNING'?'lW':r.level==='ERROR'?'lE':'lR';
+    var lc=r.level==='INFO'?'lI':r.level==='WARNING'?'lW':r.level==='ERROR'?'lE':r.level==='FIX'?'lF':r.level==='ALERT'?'lA':'lR';
     return '<tr class="'+c+'"><td class="ct">'+esc(r.ts)+'</td><td class="cl '+lc+'">'+esc(r.level)+'</td><td class="cm">'+cm(r.msg,q)+'</td></tr>'
   }).join('');
 }
@@ -654,9 +725,13 @@ EOF
     # ============================================================
     # 5. Icon (base64) -- UH (UniFi Hotspot) 48x48
     # ============================================================
-    base64 -d > "$MODDIR/images/icon.gif" 2>/dev/null << 'ICONEOF' || true
+    if ! base64 -d > "$MODDIR/images/icon.gif" << 'ICONEOF'
 R0lGODdhMAAwAIUAAP////v8/vv8/fj6/Ovw9+rv9uPq8+Hn8tfh78LR5rnK4rTH4LLF37DD3qO62aO52aG42IKhy32dyXiZx3eZx3SWxW6Sw22QwmOJvmCHvT5trzpqrTNlqjJkqi5hqCpepyBXox1UoRxToRpSoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwAAAAAMAAwAEAI+QBHCBxIsKDBgwgTKlzIsGFDDQAiPiB4ISIACgIhSix4IGIBhwQ1Apg4sGJEjCNEkhzYEcBHkDBjypxJs6bNmzgdqqRoEeVOgi1fxoxgEQKHDxMCRFQw8CdLjzmjSp1KtarVq1izLnQ6wuTFjBZXCgwqk6tXnxbTqhUK8oNFBgQlWMQAdiNQqDQzLDAwQACBBBNAhAzLEa/Ww4gTK17MuLHjx5AjS568lXDJnnVHFnZZ1rLAs5nFjiAb0yzmlJ7HGgZp+mRmtWnZOtxg0QFBCxYrhN4s22FLAyIGNrDYYfddzjJDMIAdEYGHpqlHr6ZMvbr169iza5cZEAA7
 ICONEOF
+    then
+        rm -f "$MODDIR/images/icon.gif"
+        echo "INFO: could not write module icon -- degraded" >&2
+    fi
 
     # ============================================================
     # 6. Library (required by Webmin config system)
@@ -674,19 +749,9 @@ EOF
     chmod 755 "$MODDIR/uhm-lib.pl"
 
     # ============================================================
-    # 7. config.info (one setting: log file path)
+    # 7. config (no settings: the log path is fixed in the viewer)
     # ============================================================
-    cat > "$MODDIR/config.info" <<'EOF'
-log_file=Log file path,0,/var/log/uhm.log
-EOF
-
-    cat > "$MODDIR/config.info.es" <<'EOF'
-log_file=Ruta del archivo de log,0,/var/log/uhm.log
-EOF
-
-    cat > "$ETCDIR/config" <<'EOF'
-log_file=/var/log/uhm.log
-EOF
+    : > "$ETCDIR/config"
 
     # ============================================================
     # 8. Permissions & registration
@@ -697,10 +762,21 @@ EOF
     chmod 755 "$MODDIR"/*.cgi "$MODDIR/uhm-lib.pl" 2>/dev/null || true
     chmod 644 "$MODDIR/images/"* 2>/dev/null || true
 
-    if [[ -f /etc/webmin/webmin.acl ]] && ! grep -q "$MODNAME" /etc/webmin/webmin.acl; then
-        sed -i.bak "s/\\(^root:.*\\)/\\1 $MODNAME/" /etc/webmin/webmin.acl
-        rm -f /etc/webmin/webmin.acl.bak
-        echo "Module added to webmin.acl"
+    if [[ -f /etc/webmin/webmin.acl ]]; then
+        for _acct in root "$local_user"; do
+            [ -z "$_acct" ] && continue
+            if ! grep -qE "^${_acct}:" /etc/webmin/webmin.acl; then
+                echo "WARNING: no ${_acct}: line in webmin.acl -- alert" >&2
+                echo "WARNING: grant access to the uhm module manually" >&2
+                continue
+            fi
+            grep -qE "^${_acct}:.*\\b${MODNAME}\\b" /etc/webmin/webmin.acl && continue
+            sed -i "s/\\(^${_acct}:.*\\)/\\1 ${MODNAME}/" /etc/webmin/webmin.acl
+            echo "Module added to webmin.acl for ${_acct}"
+        done
+        unset _acct
+    else
+        echo "WARNING: webmin.acl not found -- alert" >&2
     fi
 
     rm -f /var/webmin/module.infos.cache
@@ -764,26 +840,15 @@ show_menu() {
     echo "2) Uninstall module"
     echo "3) Exit"
     echo ""
-    echo -n "Select an option [1-3]: "
-}
-
-show_usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "install Install the module"
-    echo "uninstall Uninstall the module"
-    echo "-h, --help Show this help message"
-    echo ""
+    echo -n "Select an option [1-3] [3]: "
 }
 
 main() {
     if [ $# -gt 0 ]; then
         case "$1" in
             install) install_module; exit 0 ;;
-            uninstall) uninstall_module; exit $? ;;
-            -h|--help) show_usage; exit 0 ;;
-            *) echo "Error: Invalid option '$1'"; show_usage; exit 1 ;;
+            uninstall) uninstall_module || true; exit 0 ;;
+            *) echo "ERROR: invalid option '$1' -- abort" >&2; show_usage; exit 1 ;;
         esac
     fi
 
@@ -792,7 +857,7 @@ main() {
         read -r option
         case $option in
             1) install_module; echo ""; read -rp "Press Enter to continue..." _ ;;
-            2) uninstall_module; echo ""; read -rp "Press Enter to continue..." _ ;;
+            2) uninstall_module || true; echo ""; read -rp "Press Enter to continue..." _ ;;
             3|"") echo ""; exit 0 ;;
             *) echo "Invalid option."; sleep 2 ;;
         esac

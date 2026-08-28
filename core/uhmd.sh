@@ -171,24 +171,39 @@ log_raw() {
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root" >&2
-    log "ERROR: This script must be run as root"
+    echo "ERROR: This script must be run as root -- abort" >&2
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
+
+# log file perms (as installed by uhmsetup.sh)
+_log_stat=$(stat -c '%U %G %a' "$LOG_FILE" 2>/dev/null || true)
+case "$_log_stat" in
+    ""|"root adm 640"|"root root 640") ;;
+    *)
+        if { chown root:adm "$LOG_FILE" 2>/dev/null || chown root:root "$LOG_FILE" 2>/dev/null; } &&
+           chmod 640 "$LOG_FILE" 2>/dev/null; then
+            log "WARNING: uhm.log perms fixed -- alert"
+        else
+            log "WARNING: cannot fix uhm.log perms -- alert"
+        fi
+        ;;
+esac
+unset _log_stat
 
 # prevent overlapping runs
 SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "WARNING: script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
 # DEPENDENCIES
 for dep in curl jq mawk coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: missing dependency '$dep' -- abort"
         exit 1
     fi
 done
@@ -261,6 +276,7 @@ trap cleanup_temp EXIT
 # Every other path below (UHM_MACAUTH, BLOCK_DHCP, ACL_MAC_PATH,
 # UHM_QUEUE) is set inside load_config(), after uhm.env is
 # loaded, with the same fallback default shown here.
+PYDHCP_ENV="/etc/pydhcp/pydhcp.env"
 CONFIG_FILE="/etc/uhm/uhm.env"
 
 TOKEN_STATE_FILE="/run/uhmd_session"
@@ -315,12 +331,21 @@ _LAST_RELOAD_EPOCH=0
 # so a tampered or maliciously replaced config file cannot execute code --
 # same approach as uhmleases.sh's load_env_file().
 load_env_file() {
-    local file="$1" line key value
+    local file="$1" line key value raw_key raw_value
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        raw_key="$key" raw_value="$value"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+            log "WARNING: stray whitespace fixed -- alert"
+            log "WARNING: key $key"
+        fi
         if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
             value="${value:1:$((${#value}-2))}"
             value="${value//\\\"/\"}"
@@ -346,12 +371,23 @@ load_env_file() {
 
 # -- Config --------------------------------------------------------------------
 ensure_acl_lists() {
-    local f
+    local f _owner _perms
     for f in "$@"; do
         if [ ! -f "$f" ]; then
             touch "$f"
             chmod 600 "$f"
             chown root:root "$f"
+            continue
+        fi
+        _owner=$(stat -c '%U' "$f" 2>/dev/null)
+        _perms=$(stat -c '%a' "$f" 2>/dev/null)
+        if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
+            if chown root:root "$f" 2>/dev/null && chmod 600 "$f" 2>/dev/null; then
+                log "WARNING: $(basename "$f") perms fixed -- alert"
+            else
+                log "ERROR: cannot fix $(basename "$f") perms -- abort"
+                exit 1
+            fi
         fi
     done
 }
@@ -361,16 +397,26 @@ load_config() {
         echo "ERROR: $CONFIG_FILE not found" >&2
         exit 1
     fi
-    local _owner _perms _gdigit _odigit
+    local _owner _perms
     _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null)
     _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
-    _gdigit="${_perms: -2:1}"
-    _odigit="${_perms: -1}"
-    if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-        echo "ERROR: $CONFIG_FILE has unsafe owner/permissions (owner=$_owner perms=$_perms)" >&2
-        echo "ERROR: must be owned by root with no group/other access (600)" >&2
+    if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
+        if chown root:root "$CONFIG_FILE" 2>/dev/null && chmod 600 "$CONFIG_FILE" 2>/dev/null; then
+            log "WARNING: uhm.env perms fixed -- alert"
+        else
+            log "ERROR: cannot fix uhm.env perms -- abort"
+            exit 1
+        fi
+    fi
+    # pydhcp.env first: it owns the network, ACL and lease values, and is
+    # the single source of truth for them. uhm.env is read after, so uhm's
+    # own keys win if a name ever collides.
+    if [[ ! -r "$PYDHCP_ENV" ]]; then
+        log "ERROR: cannot read $PYDHCP_ENV -- abort"
+        log "ERROR: uhm reads pydhcp's network and ACL values from it"
         exit 1
     fi
+    load_env_file "$PYDHCP_ENV"
     load_env_file "$CONFIG_FILE"
 
     # uhm's own ACL files (UHM_MACAUTH, UHM_GRACE, UHM_QUEUE) and
@@ -403,64 +449,79 @@ load_config() {
     [[ -z "${UNIFI_SITE:-}" ]] && missing+=("UNIFI_SITE")
 
     if (( ${#missing[@]} > 0 )); then
-        log "ERROR: missing variables in $CONFIG_FILE:"
+        log "ERROR: missing variables in uhm.env:"
         local _m
         for _m in "${missing[@]}"; do
             log "ERROR: $_m"
         done
+        log "ERROR: restore uhm.env or re-run uhmsetup.sh -- abort"
         exit 1
     fi
 
     if ! [[ "$SERVER_IP" =~ $_UH_IPV4 ]]; then
-        log "ERROR: SERVER_IP is not valid IPv4 in $CONFIG_FILE"
+        log "ERROR: SERVER_IP is not valid IPv4 in uhm.env -- abort"
         exit 1
     fi
 
     if ! [[ "$SERV_SUBNET" =~ $_UH_IPV4 ]] || ! [[ "$SERV_MASK" =~ $_UH_NETMASK ]]; then
-        log "ERROR: SERV_SUBNET/SERV_MASK invalid in $CONFIG_FILE"
+        log "ERROR: SERV_SUBNET/SERV_MASK invalid in uhm.env -- abort"
         exit 1
     fi
     _SUBNET_INT=$(_ip_to_int "$SERV_SUBNET")
     _MASK_INT=$(_ip_to_int "$SERV_MASK")
 
     if [[ "${UNIFI_TYPE:-}" != "unifi-os" && "${UNIFI_TYPE:-}" != "classic" ]]; then
-        log "ERROR: UNIFI_TYPE must be 'unifi-os' or 'classic'"
+        log "ERROR: UNIFI_TYPE must be 'unifi-os' or 'classic' -- abort"
         exit 1
     fi
 
     # UNIFI_SITE is interpolated directly into API URLs (api_path()) -- reject
     # anything outside the character set UniFi itself uses for site names.
     if [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        log "ERROR: UNIFI_SITE contains invalid characters: $UNIFI_SITE"
+        log "ERROR: UNIFI_SITE has invalid characters -- abort"
         exit 1
     fi
 
     if ! [[ "$UHM_INI_RANGE" =~ $_UH_IPV4 ]] || ! [[ "$UHM_END_RANGE" =~ $_UH_IPV4 ]]; then
         log "ERROR: hotspot range must be two valid IPv4 addresses"
-        log "ERROR: UHM_INI_RANGE/UHM_END_RANGE in $CONFIG_FILE"
+        log "ERROR: UHM_INI_RANGE/UHM_END_RANGE in uhm.env -- abort"
         exit 1
     fi
 
     _HOTSPOT_INI_INT=$(_ip_to_int "$UHM_INI_RANGE")
     _HOTSPOT_END_INT=$(_ip_to_int "$UHM_END_RANGE")
     if (( _HOTSPOT_INI_INT > _HOTSPOT_END_INT )); then
-        log "ERROR: hotspot range reversed: UHM_INI_RANGE > UHM_END_RANGE"
+        log "ERROR: UHM_INI_RANGE is above UHM_END_RANGE -- abort"
         exit 1
     fi
 
     if ! _ip_in_lan "$UHM_INI_RANGE" || ! _ip_in_lan "$UHM_END_RANGE"; then
-        log "ERROR: hotspot range falls outside $SERV_SUBNET/$SERV_MASK"
+        log "ERROR: hotspot range falls outside the LAN subnet"
+        log "ERROR: subnet is $SERV_SUBNET/$SERV_MASK -- abort"
         exit 1
     fi
+}
+
+_ensure_executable() {
+    local f="$1" name="$2" mode="$3"
+    [[ -f "$f" ]] || return 1
+    local _owner _perms
+    _owner=$(stat -c '%U' "$f" 2>/dev/null)
+    _perms=$(stat -c '%a' "$f" 2>/dev/null)
+    if [[ "$_owner" != "root" || "$_perms" != "$mode" ]]; then
+        if chown root:root "$f" 2>/dev/null && chmod "$mode" "$f" 2>/dev/null; then
+            log "WARNING: $name perms fixed -- alert"
+        else
+            log "WARNING: cannot fix $name perms -- alert"
+        fi
+    fi
+    return 0
 }
 
 # -- Installation check --------------------------------------------------------
 verify_installation() {
     if [[ ! -f "${UHM_RELOAD:-}" ]]; then
-        log "ERROR: UHM_RELOAD not found: ${UHM_RELOAD:-unset}"
-        exit 1
-    elif [[ ! -x "$UHM_RELOAD" ]]; then
-        log "ERROR: UHM_RELOAD not executable: $UHM_RELOAD"
+        log "ERROR: UHM_RELOAD not found -- abort"
         exit 1
     fi
     # pydhcpd often boots alongside this host and may not be up yet -- give it
@@ -471,7 +532,7 @@ verify_installation() {
     until systemctl is-active --quiet pydhcpd 2>/dev/null; do
         _pydhcpd_elapsed=$(( $(date +%s) - _pydhcpd_start ))
         if (( _pydhcpd_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "ERROR: pydhcpd is not active after ${STARTUP_GRACE_SECONDS}s"
+            log "ERROR: pydhcpd down after ${STARTUP_GRACE_SECONDS}s -- abort"
             exit 1
         fi
         sleep 10
@@ -486,7 +547,7 @@ verify_installation() {
 # never create it, so a missing one means a broken/partial pydhcp install.
 init_acl_files() {
     if [ ! -f "$BLOCK_DHCP" ]; then
-        log "ERROR: missing ACL file $BLOCK_DHCP -- run pydhcp's pysetup.sh"
+        log "ERROR: $BLOCK_DHCP missing -- abort"
         exit 1
     fi
 }
@@ -556,7 +617,7 @@ unifi_login() {
         login_url="${UNIFI_CONTROLLER_URL}/api/login"
     fi
 
-    header_file=$(mktemp)
+    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
     # Pass username/password to jq via environment, not --arg, so the
     # plaintext password never appears in jq's own argv (readable by any
     # local user via /proc/<pid>/cmdline). Environment is only readable by
@@ -582,7 +643,7 @@ unifi_login() {
         if [[ "$quiet" == "quiet" ]]; then
             log "INFO: UniFi login failed (HTTP $http_code), retry in grace"
         else
-            log "WARNING: UniFi login failed (HTTP $http_code)"
+            log "INFO: UniFi login failed (HTTP $http_code) -- skip"
         fi
         rm -f "$header_file"
         return 1
@@ -596,7 +657,7 @@ unifi_login() {
         | tr -d '\r\n' || true)
 
     if [[ -z "$new_tok" ]]; then
-        log "WARNING: Login OK but ${cookie_name} cookie not found"
+        log "INFO: login OK but ${cookie_name} cookie not found -- skip"
         rm -f "$header_file"
         return 1
     fi
@@ -634,7 +695,7 @@ api_get() {
     _load_session
 
     local hdr
-    hdr=$(mktemp)
+    hdr=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
 
     local args=(-s -k -w "\n__CODE__:%{http_code}" -D "$hdr"
         -H "Cookie: $(_session_cookie_name)=${SESSION_TOKEN}")
@@ -648,9 +709,9 @@ api_get() {
     _update_session_from_headers "$hdr"
 
     if [[ "$code" == "401" ]]; then
-        log "INFO: Session expired -- re-authenticating"
+        log "INFO: session expired, re-authenticating"
         if ! unifi_login; then
-            log "WARNING: Re-authentication failed"
+            log "INFO: re-authentication failed -- skip"
             rm -f "$hdr"
             echo "{}"
             return 1
@@ -669,12 +730,12 @@ api_get() {
     rm -f "$hdr"
 
     if [[ -z "$code" ]]; then
-        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} timeout. No response"
+        log "INFO: API GET ${url##*/${UNIFI_SITE}/} timeout -- skip"
         echo "{}"
         return 0
     fi
     if [[ "$code" != "200" ]]; then
-        log "WARNING: API GET ${url##*/${UNIFI_SITE}/} -> HTTP $code"
+        log "INFO: API GET ${url##*/${UNIFI_SITE}/} -> HTTP $code -- skip"
         echo "{}"
         return 0
     fi
@@ -687,7 +748,7 @@ api_post() {
     _load_session
 
     local hdr
-    hdr=$(mktemp)
+    hdr=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
 
     local args=(-s -k -w "\n__CODE__:%{http_code}" -D "$hdr"
         -X POST
@@ -702,9 +763,9 @@ api_post() {
     _update_session_from_headers "$hdr"
 
     if [[ "$code" == "401" ]]; then
-        log "INFO: Session expired on POST -- re-authenticating"
+        log "INFO: session expired on POST, re-authenticating"
         if ! unifi_login; then
-            log "WARNING: Re-authentication failed on POST"
+            log "INFO: re-authentication failed on POST -- skip"
             rm -f "$hdr"
             echo "$code"
             return 1
@@ -733,7 +794,7 @@ load_all_vouchers() {
     rc=$(echo "$VOUCHER_CACHE" | jq -r '.meta.rc // empty' 2>/dev/null || true)
     if [[ "$rc" != "ok" ]]; then
         _VOUCHERS_OK=0
-        log "WARNING: Could not load vouchers (rc=${rc:-empty})"
+        log "INFO: Could not load vouchers (rc=${rc:-empty}) -- skip"
         VOUCHER_CACHE=""
         VOUCHER_COUNT=0
         return
@@ -786,7 +847,7 @@ queue_lease_removal() {
         log "INFO: Queued lease removal for $lc_mac"
         return 0
     fi
-    log "WARNING: failed to write $lc_mac to $UHM_QUEUE"
+    log "INFO: queue write failed for $lc_mac -- skip"
     return 1
 }
 
@@ -815,7 +876,7 @@ check_mac_lists_changed() {
 
     if [[ -n "$_MAC_LISTS_HASH_PREV" && "$cur_hash" != "$_MAC_LISTS_HASH_PREV" ]]; then
         _MAC_RELOAD_PENDING=1
-        log "INFO: mac-*.txt changed -- reload scheduled for next cycle"
+        log "INFO: mac-*.txt changed, reload next cycle"
     fi
     _MAC_LISTS_HASH_PREV="$cur_hash"
 }
@@ -909,7 +970,7 @@ authorize_managed_macs() {
         if [[ "$http_code" == "200" ]]; then
             log "INFO: Authorized managed MAC $mac in UniFi"
         else
-            log "WARNING: Failed to authorize MAC $mac (HTTP $http_code)"
+            log "INFO: $mac authorize failed (HTTP $http_code) -- skip"
         fi
     done <<< "$managed_macs"
 }
@@ -930,7 +991,7 @@ dedup_mac_lists() {
 
     if [[ -f "$BLOCK_DHCP" ]]; then
         local tmp_block
-        tmp_block=$(mktemp)
+        tmp_block=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
         TEMP_FILES_TO_CLEAN+=("${tmp_block}")
         while IFS= read -r line || [[ -n "$line" ]]; do
             [[ -z "$line" ]] && continue
@@ -953,7 +1014,7 @@ dedup_mac_lists() {
                     echo "a;${bmac};${bip};${bhostname};" >> "$tmp_block"
                     (( sanitized_block++ )) || true
                 else
-                    log "WARNING: malformed blockdhcp line, discard: $line"
+                    log "INFO: malformed blockdhcp line -- skip"
                     (( discarded_block++ )) || true
                 fi
             else
@@ -963,7 +1024,7 @@ dedup_mac_lists() {
         local after_lines
         after_lines=$(wc -l < "$tmp_block" 2>/dev/null || echo -1)
         if (( after_lines < 0 )); then
-            log "WARNING: failed to validate temp file, skip blockdhcp update"
+            log "INFO: blockdhcp update not applied -- skip"
             rm -f "$tmp_block"
         else
             mv "$tmp_block" "$BLOCK_DHCP" && chmod 600 "$BLOCK_DHCP"
@@ -985,11 +1046,12 @@ sort_acl_files() {
     local tmp
 
     if [[ -s "$UHM_MACAUTH" ]]; then
-        tmp=$(mktemp)
+        tmp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
         TEMP_FILES_TO_CLEAN+=("${tmp}")
         sort -t';' -k3,3V "$UHM_MACAUTH" | uniq > "$tmp"
         if [[ ! -s "$tmp" ]]; then
-            log "WARNING: sorted output is empty, $UHM_MACAUTH update -- skip"
+            log "INFO: sorted output is empty, update -- skip"
+            log "INFO: $UHM_MACAUTH"
             return
         fi
         mv "$tmp" "$UHM_MACAUTH" && chmod 600 "$UHM_MACAUTH"
@@ -1002,12 +1064,12 @@ add_mac_to_acl() {
     local mac="$1" ip="$2" hostname="$3" end_time="$4"
 
     if [[ ! "$mac" =~ $_UH_MAC ]]; then
-        log "WARNING: bad MAC '$mac' -- not added"
+        log "INFO: bad MAC '$mac' -- skip"
         return 1
     fi
 
     if [[ "$ip" == *';'* || "$hostname" == *';'* || "$end_time" == *';'* ]]; then
-        log "WARNING: ACL entry has ';' in field (mac=$mac) -- refused"
+        log "INFO: ';' in ACL field, mac=$mac -- skip"
         return 1
     fi
 
@@ -1020,7 +1082,7 @@ add_mac_to_acl() {
             local escaped_line
             escaped_line=$(printf '%s' "$new_line" | sed -e 's/[\&|/]/\\&/g')
             if ! sed -i "s|^a;${mac};.*|${escaped_line}|I" "$UHM_MACAUTH"; then
-                log "WARNING: end_time update failed for $mac"
+                log "INFO: end_time update failed for $mac -- skip"
                 return 1
             fi
             log "INFO: updated end_time for $mac"
@@ -1032,7 +1094,8 @@ add_mac_to_acl() {
         local exp_human
         exp_human=$(date -d "@$end_time" 2>/dev/null || echo "$end_time")
         log "INFO: Authorized $mac"
-        log "INFO: ip=$ip hostname=$hostname"
+        log "INFO: ip=$ip"
+        log "INFO: hostname=${hostname:0:30}"
         log "INFO: expires=$exp_human"
     fi
 }
@@ -1043,7 +1106,7 @@ expire_from_hotspot() {
     # client via pydhcpd.leases and the client re-enters uhm-grace.txt with a
     # fresh grace timer, same as any other unclassified MAC.
     if ! queue_lease_removal "$mac"; then
-        log "WARNING: expire $mac failed, will retry lease removal"
+        log "INFO: $mac expire failed, will retry -- skip"
         return 1
     fi
     log "INFO: expired $mac, released from uhm-auth.txt"
@@ -1056,7 +1119,7 @@ expire_from_hotspot() {
 clean_expired_macs() {
     local now tmp
     now=$(date +%s)
-    tmp=$(mktemp)
+    tmp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
     TEMP_FILES_TO_CLEAN+=("${tmp}")
 
     local before_count=0
@@ -1071,6 +1134,12 @@ clean_expired_macs() {
         # lifecycle, not whether the admin happened to comment the line.
         # Active and commented entries are both checked here; only a line
         # that doesn't even look like an ACL entry passes through untouched.
+        # An unreadable END_TIME_EPOCH is released like an expired one: with
+        # no known expiry the entry cannot be sustained, and keeping it would
+        # hold a hotspot IP forever whenever the client never reassociates
+        # (the revoke step only ever sees MACs stat/sta currently reports).
+        # It repairs itself: a client whose voucher is still valid is promoted
+        # again next cycle by process_sessions, with an end_time from UniFi.
         if [[ "$line" != "a;"* && "$line" != "#a;"* ]]; then
             echo "$line" >> "$tmp"
             continue
@@ -1079,17 +1148,20 @@ clean_expired_macs() {
         end_time=$(echo "$line" | awk -F';' '{print $5}')
         mac=$(echo "$line" | awk -F';' '{print $2}')
         if [[ -z "$end_time" ]] || ! [[ "$end_time" =~ $_UH_UINT ]]; then
-            if [[ -n "$end_time" ]]; then
-                log "WARNING: malformed end_time"
-                log "WARNING: $mac ($end_time) -- keeping entry"
+            log "WARNING: malformed end_time in uhm-auth.txt"
+            log "WARNING: $mac released, no expiry -- alert"
+            if ! expire_from_hotspot "$mac"; then
+                log "INFO: keeping $mac, will retry -- skip"
+                echo "$line" >> "$tmp"
+            else
+                (( moved++ )) || true
             fi
-            echo "$line" >> "$tmp"
         elif (( now <= end_time )); then
             echo "$line" >> "$tmp"
         else
             log "INFO: Expired $mac at $(date -d "@$end_time" 2>/dev/null || echo "$end_time")"
             if ! expire_from_hotspot "$mac"; then
-                log "WARNING: keeping $mac, will retry"
+                log "INFO: keeping $mac, will retry -- skip"
                 echo "$line" >> "$tmp"
             else
                 (( moved++ )) || true
@@ -1100,7 +1172,7 @@ clean_expired_macs() {
     local after_count
     after_count=$(grep -c '^#\{0,1\}a;' "$tmp" 2>/dev/null); after_count=$(( ${after_count:-0} + 0 ))
     if (( before_count - after_count != moved )); then
-        log "WARNING: count mismatch ($before_count/$after_count/$moved), skip"
+        log "INFO: count mismatch ($before_count/$after_count/$moved) -- skip"
         rm -f "$tmp"
         return
     fi
@@ -1153,7 +1225,7 @@ process_new_leases() {
             [[ -z "$host" ]] && host="no_name_$(head -c100 /dev/urandom | sha1sum | head -c10)"
 
             if [[ -n "$ip" ]] && ! [[ "$ip" =~ $_UH_IPV4 ]]; then
-                log "WARNING: skipping lease, invalid IP: $ip"
+                log "INFO: invalid lease IP $ip -- skip"
                 ip=""
             fi
 
@@ -1164,12 +1236,13 @@ process_new_leases() {
                && ! grep -qi "^a;${mac};" "$BLOCK_DHCP" 2>/dev/null \
                && ! grep -qi "^a;${mac};" "$UHM_GRACE" 2>/dev/null; then
                 echo "a;${mac};${ip};${host};$(date +%s);" >> "$UHM_GRACE"
-                log "INFO: new client $mac, ip=$ip host=${host:0:30} -> grace"
+                log "INFO: new client $mac -> grace"
+                log "INFO: ip=$ip host=${host:0:30}"
                 (( added++ )) || true
             elif [[ -n "$mac" && -n "$ip" ]] && ! _ip_in_lan "$ip"; then
-                log "WARNING: new lease outside the LAN subnet"
-                log "WARNING: ip=$ip mac=$mac"
-                log "WARNING: subnet is $SERV_SUBNET/$SERV_MASK -- skipping"
+                log "INFO: new lease outside the LAN subnet"
+                log "INFO: ip=$ip mac=$mac"
+                log "INFO: subnet is $SERV_SUBNET/$SERV_MASK -- skip"
             fi
             current_lease=""
             lease_content=""
@@ -1200,7 +1273,7 @@ process_sessions() {
     endpoint=$(api_path "stat/guest")
     sessions_data=$(api_get "$endpoint")
     rc=$(echo "$sessions_data" | jq -r '.meta.rc // empty' 2>/dev/null || true)
-    [[ "$rc" != "ok" ]] && { _GUEST_OK=0; log "INFO: stat/guest unavailable -- skipping sessions"; return; }
+    [[ "$rc" != "ok" ]] && { _GUEST_OK=0; log "INFO: sessions step, stat/guest unavailable -- skip"; return; }
     _GUEST_OK=1
 
     # Single-pass voucher lookup: build an end_time -> voucher_code map once
@@ -1215,15 +1288,15 @@ process_sessions() {
         ' 2>/dev/null || true)
     fi
 
-    while IFS=$'\t' read -r mac end_time api_voucher_code api_authorized_by; do
+    while IFS='|' read -r mac end_time api_authorized_by api_voucher_code; do
         [[ -z "$mac" || "$mac" == "null" ]] && continue
         if ! [[ "$mac" =~ $_UH_MAC ]]; then
-            log "WARNING: malformed MAC from API"
+            log "INFO: malformed MAC from API"
             continue
         fi
         [[ -z "$end_time" || "$end_time" == "null" ]] && continue
         if ! [[ "$end_time" =~ $_UH_UINT ]]; then
-            log "WARNING: malformed line $mac -- skip"
+            log "INFO: malformed line $mac -- skip"
             continue
         fi
         (( end_time <= now )) && continue
@@ -1265,9 +1338,10 @@ process_sessions() {
             # authorized -- only the expiration time is updated.
             # assign_ip_and_hostname() is never called here since no new
             # IP is needed.
-            log "INFO: renewal for $mac, end_time $existing_end->$end_time"
+            log "INFO: renewal for $mac"
+            log "INFO: end_time $existing_end -> $end_time"
             log "INFO: keeping ip=$existing_ip for $mac"
-            log "INFO: hostname=$existing_hostname"
+            log "INFO: hostname=${existing_hostname:0:30}"
             if add_mac_to_acl "$mac" "$existing_ip" "$existing_hostname" "$end_time"; then
                 (( added++ )) || true
             fi
@@ -1281,7 +1355,7 @@ process_sessions() {
         local assigned_ip="" assigned_hostname=""
         local iph
         if ! iph=$(assign_ip_and_hostname); then
-            log "WARNING: range exhausted for $mac, will retry next cycle"
+            log "INFO: range exhausted for $mac -- skip"
             continue
         fi
         assigned_ip=$(echo "$iph" | cut -d';' -f1)
@@ -1310,7 +1384,7 @@ process_sessions() {
             if (( ${#assigned_hostname} + 1 + ${#voucher_code} <= 63 )); then
                 assigned_hostname="${assigned_hostname}-${voucher_code}"
             else
-                log "WARNING: voucher code too long for hostname, $mac -- no code"
+                log "INFO: voucher code too long, hostname without it -- degraded"
             fi
         fi
 
@@ -1327,8 +1401,8 @@ process_sessions() {
         .data[]
         | select(.mac != null and .mac != "")
         | select(.end != null)
-        | [(.mac | ascii_downcase), (.end | tostring), (.voucher_code // ""), (.authorized_by // "")]
-        | join("\t")
+        | [(.mac | ascii_downcase), (.end | tostring), (.authorized_by // ""), (.voucher_code // "")]
+        | join("|")
     ' 2>/dev/null || true)
 
     SESSIONS_AUTHORIZED=$added
@@ -1341,7 +1415,7 @@ revoke_unauthorized() {
     local sta_data="$1"
     local rc
     rc=$(echo "$sta_data" | jq -r '.meta.rc // empty' 2>/dev/null || true)
-    [[ "$rc" != "ok" ]] && { log "INFO: stat/sta unavailable -- skipping revoke"; return; }
+    [[ "$rc" != "ok" ]] && { log "INFO: revoke step, stat/sta unavailable -- skip"; return; }
 
     # Single-pass lookup: build a mac -> authorized map once instead of one
     # `jq` call per line of UHM_MACAUTH below. First match wins per MAC.
@@ -1386,7 +1460,7 @@ revoke_unauthorized() {
     for mac in "${macs_to_revoke[@]+"${macs_to_revoke[@]}"}"; do
         [[ -z "$mac" ]] && continue
         if [[ ! "$mac" =~ $_UH_MAC ]]; then
-            log "WARNING: bad MAC '$mac' -- skip"
+            log "WARNING: bad MAC '$mac' -- alert"
             continue
         fi
         log "INFO: Revoking $mac"
@@ -1395,7 +1469,7 @@ revoke_unauthorized() {
         if sed -i "/^a;${mac};/Id" "$UHM_MACAUTH" 2>/dev/null; then
             (( revoked++ )) || true
         else
-            log "WARNING: sed failed to remove $mac from $UHM_MACAUTH, retry"
+            log "INFO: remove failed for $mac -- skip"
         fi
     done
 
@@ -1446,7 +1520,7 @@ check_and_reload_if_changed() {
         [[ "$cur_block" != "$_ACL_SNAPSHOT_BLOCK" ]] && log "INFO: blockdhcp.txt changed"
         [[ "$cur_queue" != "$_ACL_SNAPSHOT_QUEUE" ]] && log "INFO: lease removal queue changed"
         [[ "$cur_grace" != "$_ACL_SNAPSHOT_GRACE" ]] && log "INFO: uhm-grace.txt changed"
-        (( mac_reload_triggered )) && log "INFO: mac-*.txt change from previous cycle -- reloading now"
+        (( mac_reload_triggered )) && log "INFO: mac-*.txt changed, reloading now"
     else
         log "INFO: ${RELOAD_SAFETY_INTERVAL_SECONDS}s since last reload"
         log "INFO: forcing safety-net reload"
@@ -1455,12 +1529,12 @@ check_and_reload_if_changed() {
     _MAC_RELOAD_PENDING=0
 
     _RELOAD_OK=0
-    if [[ -n "${UHM_RELOAD:-}" && -x "$UHM_RELOAD" ]]; then
+    if _ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
         log "INFO: invoking $UHM_RELOAD"
         # Release the mechanism lock before delegating: uhmleases.sh acquires
         # it itself, with its own descriptor, and cannot do so while this
         # daemon still holds it. Reacquired below for the rest of the cycle.
-        flock -u 201 2>/dev/null || log "WARNING: failed to release cycle lock (fd 201)"
+        flock -u 201 2>/dev/null || log "INFO: failed to release cycle lock -- skip"
         if "$UHM_RELOAD" >/dev/null 2>>"$LOG_FILE"; then
             _RELOAD_OK=1
             _LAST_RELOAD_EPOCH=$now
@@ -1475,9 +1549,9 @@ check_and_reload_if_changed() {
             # safety-net cadence. ACL-change-triggered reloads are unaffected:
             # they fire on the next real diff, not on this timer.
             _LAST_RELOAD_EPOCH=$now
-            log "WARNING: $UHM_RELOAD failed (code $rc), backing off"
+            log "WARNING: uhmreload.sh failed (code $rc), backing off -- alert"
         fi
-        flock -n 201 || log "WARNING: cycle lock not reacquired after reload"
+        flock -n 201 || log "INFO: cycle lock not reacquired after reload -- skip"
     else
         # Same reasoning as the failure branch above: update the epoch here
         # too, so a misconfigured UHM_RELOAD (missing or not
@@ -1486,11 +1560,11 @@ check_and_reload_if_changed() {
         # every single cycle.
         _LAST_RELOAD_EPOCH=$now
         if (( acl_changed == 1 )); then
-            log "WARNING: ACLs changed but UHM_RELOAD is not set or not executable"
+            log "WARNING: ACLs changed but UHM_RELOAD not found"
         else
-            log "WARNING: safety-net reload due but UHM_RELOAD is not set or not executable"
+            log "WARNING: safety-net reload due but UHM_RELOAD not found"
         fi
-        log "WARNING: backing off to safety-net cadence, will not retry"
+        log "WARNING: backing off, will not retry -- alert"
     fi
     return 0
 }
@@ -1516,7 +1590,8 @@ kick_newly_authorized() {
         # skip above -- this one firing at all means something upstream let a
         # managed MAC slip through, which is itself worth surfacing.
         if is_managed_mac "$mac"; then
-            log "WARNING: $mac in mac-*.txt reached authorized list, no kick"
+            log "WARNING: $mac is in mac-*.txt -- skip"
+            log "WARNING: not kicked, it is a managed device"
             log "WARNING: $mac bypassed guard -- alert"
             continue
         fi
@@ -1525,7 +1600,7 @@ kick_newly_authorized() {
                 .data[] | select((.mac | ascii_downcase) == $mac) | "yes"
             ' 2>/dev/null | head -1 || true)
             if [[ "$on_sta" != "yes" ]]; then
-                log "INFO: skipping $mac, not connected, no kick needed"
+                log "INFO: $mac not connected, no kick -- skip"
                 continue
             fi
         else
@@ -1536,9 +1611,9 @@ kick_newly_authorized() {
         kick_url=$(api_path "cmd/stamgr")
         http_code=$(api_post "$kick_url" "{\"cmd\":\"kick-sta\",\"mac\":\"${mac}\"}")
         if [[ "$http_code" == "200" ]]; then
-            log "INFO: kicked $mac, forcing reassociation with new fixed IP"
+            log "INFO: kicked $mac, forcing reassociation"
         else
-            log "WARNING: failed to kick $mac (HTTP $http_code)"
+            log "INFO: failed to kick $mac (HTTP $http_code) -- skip"
         fi
     done
 }
@@ -1548,7 +1623,7 @@ run_cycle() {
     rm -f "$_CYCLE_MARK_FILE" 2>/dev/null || true
 
     if ! flock -n 201; then
-        log "WARNING: cycle lock held unexpectedly -- skipping this cycle"
+        log "INFO: cycle lock held unexpectedly -- skip"
         return
     fi
 
@@ -1623,7 +1698,7 @@ run_cycle() {
     done
     TEMP_FILES_TO_CLEAN=()
 
-    flock -u 201 2>/dev/null || log "WARNING: failed to release cycle lock (fd 201)"
+    flock -u 201 2>/dev/null || log "INFO: failed to release cycle lock -- skip"
 }
 
 # -- Main daemon loop ----------------------------------------------------------
@@ -1636,22 +1711,25 @@ main() {
     fi
     STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
     if ! [[ "$STARTUP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
-        log "WARNING: STARTUP_GRACE_SECONDS invalid (default 120)"
+        log "WARNING: STARTUP_GRACE_SECONDS invalid -- fallback"
         STARTUP_GRACE_SECONDS=120
     fi
     UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
     if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
+        log "WARNING: UHM_LEASES_TIMEOUT_SECONDS invalid -- fallback"
         UHM_LEASES_TIMEOUT_SECONDS=120
     fi
     UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
     if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
+        log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS invalid -- fallback"
         UHM_IPTABLES_TIMEOUT_SECONDS=60
     fi
     local _reload_floor=$(( 3 * (UHM_LEASES_TIMEOUT_SECONDS + UHM_IPTABLES_TIMEOUT_SECONDS) ))
     (( _reload_floor < 600 )) && _reload_floor=600
     RELOAD_SAFETY_INTERVAL_SECONDS="${RELOAD_SAFETY_INTERVAL_SECONDS:-3600}"
     if ! [[ "$RELOAD_SAFETY_INTERVAL_SECONDS" =~ $_UH_UINT ]] || (( RELOAD_SAFETY_INTERVAL_SECONDS < _reload_floor )); then
-        log "ERROR: RELOAD_SAFETY_INTERVAL_SECONDS too low (min $_reload_floor)"
+        log "ERROR: RELOAD_SAFETY_INTERVAL_SECONDS too low"
+        log "ERROR: minimum is $_reload_floor seconds -- abort"
         exit 1
     fi
     if [[ -z "${AUTHORIZED_LEASE_TIME:-}" ]]; then
@@ -1675,7 +1753,7 @@ main() {
     until unifi_login "quiet"; do
         _login_elapsed=$(( $(date +%s) - _login_start ))
         if (( _login_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "ERROR: Could not log in to UniFi after ${STARTUP_GRACE_SECONDS}s -- exiting"
+            log "ERROR: no UniFi login in ${STARTUP_GRACE_SECONDS}s -- abort"
             exit 1
         fi
         sleep 10
@@ -1696,7 +1774,7 @@ main() {
     while (( _VOUCHERS_OK == 0 )); do
         _voucher_elapsed=$(( $(date +%s) - _voucher_start ))
         if (( _voucher_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "WARNING: no vouchers loaded at startup -- continuing"
+            log "INFO: no vouchers at startup, names without code -- degraded"
             break
         fi
         sleep 10
@@ -1708,22 +1786,22 @@ main() {
     # (used inside run_cycle) would then never trigger a reload, leaving the
     # firewall empty until the next ACL change or the safety-net interval.
     # Force one reload here, on every daemon start, regardless of ACL state.
-    if [[ -n "${UHM_RELOAD:-}" && -x "$UHM_RELOAD" ]]; then
-        log "INFO: Startup -- invoking uhmreload (ACLs + firewall)"
+    if _ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
+        log "INFO: startup, invoking uhmreload"
         if "$UHM_RELOAD" >/dev/null 2>>"$LOG_FILE"; then
             _LAST_RELOAD_EPOCH=$(date +%s)
         else
             log "WARNING: startup reload failed"
-            log "WARNING: firewall may be incomplete until next ACL change"
+            log "WARNING: firewall may be incomplete -- alert"
             _LAST_RELOAD_EPOCH=$(date +%s)
         fi
     else
-        log "WARNING: UHM_RELOAD not set or not executable"
-        log "WARNING: firewall not rebuilt at startup"
+        log "WARNING: UHM_RELOAD not found"
+        log "WARNING: firewall not rebuilt at startup -- alert"
     fi
 
     while true; do
-        run_cycle || log "WARNING: cycle ended with error -- continuing"
+        run_cycle || log "WARNING: cycle ended with error -- alert"
         sleep "$POLL_INTERVAL"
     done
 }

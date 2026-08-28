@@ -50,7 +50,7 @@ log() {
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root"
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
 
@@ -59,14 +59,14 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "WARNING: script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
 # DEPENDENCIES
-for dep in iptables ipset arptables ebtables kmod procps util-linux ulogd2 mawk coreutils; do
+for dep in iptables ipset arptables ebtables kmod procps util-linux ulogd2 mawk coreutils grep; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: missing dependency '$dep' -- abort"
         exit 1
     fi
 done
@@ -87,13 +87,16 @@ log "uhmiptables start..."
 
 # VARIABLES ##
 
-# Load all configuration from uhm.env (network, paths, interfaces).
-# Safe key=value parsing - file is never sourced to prevent code execution.
+# Two files, one per owner: pydhcp.env holds pydhcp's network and ACL
+# values, uhm.env holds uhm's own. pydhcp.env is read first and uhm.env
+# after, so uhm's keys win if a name ever collides.
+# Safe key=value parsing - files are never sourced to prevent code execution.
+_PYDHCP_CONF="/etc/pydhcp/pydhcp.env"
 _UHM_CONF="/etc/uhm/uhm.env"
 
 _load_conf() {
     local file="$1" key value line
-    [[ ! -f "$file" ]] && { log "WARNING: $file not found -- using defaults"; return 1; }
+    [[ ! -f "$file" ]] && { log "WARNING: $file not found -- fallback"; return 1; }
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
@@ -105,13 +108,19 @@ _load_conf() {
             WAN_IF|INTERFACESv4|\
             SERVER_IP|SERV_SUBNET|SERV_MASK|SERV_DNS|\
             ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
-            ACL_MAC_PROXY|ACL_MAC_UNLIMITED|UHM_GRACE)
+            ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_GRACE|WPAD_PORT)
                 printf -v "$key" '%s' "$value"
                 ;;
         esac
     done < "$file"
 }
 
+if [ ! -r "$_PYDHCP_CONF" ]; then
+    log "ERROR: cannot read $_PYDHCP_CONF -- abort"
+    log "ERROR: uhm reads pydhcp's network and ACL values from it"
+    exit 1
+fi
+_load_conf "$_PYDHCP_CONF" || true
 _load_conf "$_UHM_CONF" || true
 
 wan="${WAN_IF:-eth0}"
@@ -120,6 +129,10 @@ localnet="${SERV_SUBNET:-192.168.0.0}"
 serverip="${SERVER_IP:-192.168.0.10}"
 SERV_DNS="${SERV_DNS:-$serverip}"
 # squid proxy port
+# wpad/pac port (DHCP option 252 target), from pydhcp.env
+wpad_port="${WPAD_PORT:-18100}"
+[[ "$wpad_port" =~ $_UH_UINT ]] && (( wpad_port >= 1 && wpad_port <= 65535 )) \
+    || { log "ERROR: WPAD_PORT is not a valid port -- abort"; exit 1; }
 squid_port=3128
 # squid intercept port (NAT-redirected HTTP, not exposed to explicit proxy clients)
 squid_intercept_port=3129
@@ -127,7 +140,7 @@ _uh_mask="${SERV_MASK:-255.255.255.0}"
 if [[ " $_UH_PREFIX " =~ [[:space:]]${_uh_mask//./\\.}:([0-9]+)[[:space:]] ]]; then
     netmask="${BASH_REMATCH[1]}"
 else
-    log "ERROR: SERV_MASK is not a valid netmask: '$_uh_mask'"
+    log "ERROR: SERV_MASK is not a valid netmask -- abort"
     exit 1
 fi
 
@@ -138,25 +151,25 @@ hotspot_path="${UHM_PATH:-/etc/uhm}"
 UHM_GRACE="${UHM_GRACE:-${hotspot_path}/acl/uhm-grace.txt}"
 
 # ACL/config files used by this script (existence verified below)
-mac_proxy_file="${ACL_MAC_PROXY:-$acl_mac_path/mac-proxy.txt}"
+mac_limited_file="${ACL_MAC_LIMITED:-$acl_mac_path/mac-limited.txt}"
 mac_unlimited_file="${ACL_MAC_UNLIMITED:-$acl_mac_path/mac-unlimited.txt}"
 dhcp_conf="/etc/pydhcp/pydhcpd.conf"
 path_ips="$acl_ipt_path/dhcp_ip.txt"
 path_macs="$acl_ipt_path/dhcp_mac.txt"
 
-for f in "$mac_proxy_file" "$mac_unlimited_file" "$dhcp_conf"; do
+for f in "$mac_limited_file" "$mac_unlimited_file" "$dhcp_conf"; do
     if [ ! -f "$f" ]; then
         log "ERROR: required file not found:"
-        log "ERROR: $f"
+        log "ERROR: $f -- abort"
         exit 1
     fi
 done
 if [ ! -d "$acl_mac_path" ] || [ -z "$(ls -A "$acl_mac_path" 2>/dev/null)" ]; then
-    log "ERROR: acl_mac_path missing or empty: $acl_mac_path"
+    log "ERROR: acl_mac_path missing or empty -- abort"
     exit 1
 fi
 if [ ! -d "$acl_ipt_path" ]; then
-    log "ERROR: acl_ipt_path missing: $acl_ipt_path"
+    log "ERROR: acl_ipt_path missing -- abort"
     exit 1
 fi
 
@@ -276,6 +289,14 @@ sysctl -w net.ipv4.tcp_tw_reuse=1 >/dev/null 2>&1 || true
 ## ROUTING & FORWARDING
 # Enable packet forwarding (required for NAT/routing)
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+# Not a tuning value like the rest: without forwarding this host stops
+# routing, and LAN clients get a lease that reaches nothing. Verified by
+# its resulting state, not by sysctl's exit code, so a value already set
+# by another means is accepted.
+if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
+    log "ERROR: IPv4 forwarding is off, LAN cannot route -- abort"
+    exit 1
+fi
 
 ## ARP OPTIMIZATION
 # Enable ARP filtering (prevents incorrect replies when multiple interfaces exist)
@@ -375,7 +396,7 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 # 10000 TCP - Webmin
 # 11084 TCP - UniFi/Podman (pasta userspace network)
 # 11443 TCP - UniFi OS self-hosted GUI (pasta userspace network)
-# 18100 TCP - PAC proxy
+# WPAD_PORT TCP - PAC proxy (default 18100)
 # 18080 TCP - Internal HTTP
 # 18081 TCP - Warning page (bandata)
 # 18082 TCP - Internal HTTP alternate
@@ -383,7 +404,7 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 # 44322 TCP - PCP pmproxy
 # 44323 TCP - PCP pmproxy HTTPS
 iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 25,80,$squid_port,$squid_intercept_port,4330,5005,5636,5671,6789,8443,8444,9543,10000,11084,11443 -j DROP
-iptables -A INPUT -i "$wan" -p tcp -m multiport --dports 18100,18080,18081,18082,44321,44322,44323 -j DROP
+iptables -A INPUT -i "$wan" -p tcp -m multiport --dports $wpad_port,18080,18081,18082,44321,44322,44323 -j DROP
 iptables -A INPUT -i "$wan" -p udp --dport 5353 -j DROP
 # DHCP
 iptables -t mangle -A PREROUTING -i "$lan" -p udp --dport 67 -j ACCEPT
@@ -584,7 +605,7 @@ iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set macunlimited src -
 # Unlimited devices never use the proxy -- block PAC access so DHCP option 252
 # (WPAD, if enabled) has no effect on them, since pydhcpd is ACL-agnostic and
 # sends it to every client regardless of classification.
-iptables -A INPUT -i "$lan" -p tcp -m multiport --dports $squid_port,18100 -m set --match-set macunlimited src -j DROP
+iptables -A INPUT -i "$lan" -p tcp -m multiport --dports $squid_port,$wpad_port -m set --match-set macunlimited src -j DROP
 for chain in INPUT FORWARD; do
     iptables -A "$chain" -i "$lan" -m set --match-set macunlimited src -j ACCEPT
 done
@@ -680,21 +701,21 @@ iptables -A FORWARD -i "$lan" -o "$wan" -p icmp -j DROP
 
 ### MAC RULES ###
 
-# MACPROXY (PAC 18100 - DHCP option 252, HTTP 80 -> Squid intercept port)
-if ! ipset list macproxy &>/dev/null; then
-    ipset create macproxy hash:mac -exist
+# MACLIMITED (PAC on WPAD_PORT - DHCP option 252, HTTP 80 -> Squid intercept port)
+if ! ipset list maclimited &>/dev/null; then
+    ipset create maclimited hash:mac -exist
 else
-    ipset flush macproxy
+    ipset flush maclimited
 fi
-for mac in $(awk -F";" '$1 == "a" && $2 != "" {print $2}' "$mac_proxy_file" 2>/dev/null); do
-    [[ "$mac" =~ $_UH_MAC ]] && ipset add macproxy "$mac" -exist
+for mac in $(awk -F";" '$1 == "a" && $2 != "" {print $2}' "$mac_limited_file" 2>/dev/null); do
+    [[ "$mac" =~ $_UH_MAC ]] && ipset add maclimited "$mac" -exist
 done
-iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set macproxy src -p tcp -m multiport --dports 18100,80,$squid_port -j ACCEPT
-iptables -t nat -A PREROUTING -i "$lan" -p tcp --dport 80 -m set --match-set macproxy src -j REDIRECT --to-port "$squid_intercept_port"
-iptables -A INPUT -i "$lan" -p tcp --dport "$squid_intercept_port" -m set --match-set macproxy src -m conntrack --ctstate DNAT -j ACCEPT
-iptables -A INPUT -i "$lan" -p tcp -m multiport --dports 18100,$squid_port -m set --match-set macproxy src -j ACCEPT
+iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set maclimited src -p tcp -m multiport --dports $wpad_port,80,$squid_port -j ACCEPT
+iptables -t nat -A PREROUTING -i "$lan" -p tcp --dport 80 -m set --match-set maclimited src -j REDIRECT --to-port "$squid_intercept_port"
+iptables -A INPUT -i "$lan" -p tcp --dport "$squid_intercept_port" -m set --match-set maclimited src -m conntrack --ctstate DNAT -j ACCEPT
+iptables -A INPUT -i "$lan" -p tcp -m multiport --dports $wpad_port,$squid_port -m set --match-set maclimited src -j ACCEPT
 
-# MACHOTSPOT (PAC 18100 - DHCP option 252, HTTP 80 -> Squid intercept port)
+# MACHOTSPOT (PAC on WPAD_PORT - DHCP option 252, HTTP 80 -> Squid intercept port)
 if ! ipset list machotspot &>/dev/null; then
     ipset create machotspot hash:mac -exist
 else
@@ -708,12 +729,12 @@ else
     log "WARNING: $hotspot_path/acl/uhm-auth.txt not found"
     log "WARNING: skipping machotspot"
 fi
-# UNIFI PORTAL ACCESS + PAC (18100)
-iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set machotspot src -p tcp -m multiport --dports "$cpd_tcp,18100,80,$squid_port" -j ACCEPT
+# UNIFI PORTAL ACCESS + PAC (WPAD_PORT)
+iptables -t mangle -A PREROUTING -i "$lan" -m set --match-set machotspot src -p tcp -m multiport --dports "$cpd_tcp,$wpad_port,80,$squid_port" -j ACCEPT
 # NAT
 iptables -t nat -A PREROUTING -i "$lan" -p tcp --dport 80 -m set --match-set machotspot src -j REDIRECT --to-port "$squid_intercept_port"
 iptables -A INPUT -i "$lan" -p tcp --dport "$squid_intercept_port" -m set --match-set machotspot src -m conntrack --ctstate DNAT -j ACCEPT
-iptables -A INPUT -i "$lan" -p tcp -m multiport --dports "$cpd_tcp,18100,$squid_port" -m set --match-set machotspot src -j ACCEPT
+iptables -A INPUT -i "$lan" -p tcp -m multiport --dports "$cpd_tcp,$wpad_port,$squid_port" -m set --match-set machotspot src -j ACCEPT
 
 # Diagnostic only: warn about classified MACs with no static reservation in
 # pydhcpd.conf -- MACCHECK drops their traffic regardless of classification.
@@ -725,7 +746,7 @@ for _cf in "$acl_mac_path"/mac-*.txt; do
         _cmac_lc="${_cmac,,}"
         if ! grep -qxF "$_cmac_lc" <<< "$mac2ip_macs"; then
             log "WARNING: $_cmac ($(basename "$_cf")) has no static reservation"
-            log "WARNING: MACCHECK drops it until pyleases.sh runs or it's added manually"
+            log "WARNING: MACCHECK drops it until added or reloaded -- alert"
         fi
     done < "$_cf"
 done

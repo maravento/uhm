@@ -18,57 +18,58 @@
 #
 # REPORTS SUBMENU
 # [1] Connection status - login + fetch summary for stat/sta, stat/guest
-# and stat/voucher (rc and entry count for each)
+#     and stat/voucher (rc and entry count for each)
 # [2] Authorized - uhm-auth.txt enriched with voucher code and status.
-# Voucher code is extracted from the hostname field
-# (format: guest{n}-{code}) and verified against stat/voucher.
-# STATUS values: MULTI (USED_MULTIPLE), VALID (VALID_ONE),
-# CONSUMED (quota exhausted, auto-purged by UniFi),
-# NO-VOUCHER(origin) (no code in the hostname and UniFi
-# reports the session as authorized_by != voucher, i.e.
-# an authorization granted outside the voucher flow).
-# ON column: YES if client is currently connected to the AP.
+#     Voucher code is extracted from the hostname field
+#     (format: guest{n}-{code}) and verified against stat/voucher.
+#     STATUS values: MULTI (USED_MULTIPLE), VALID (VALID_ONE),
+#     CONSUMED (quota exhausted, auto-purged by UniFi),
+#     NO-VOUCHER(origin) (no code in the hostname and UniFi
+#     reports the session as authorized_by != voucher, i.e.
+#     an authorization granted outside the voucher flow).
+#     ON column: YES if client is currently connected to the AP.
 # [3] Vouchers - full voucher list from stat/voucher with usage stats
 # [4] Guest sessions - every active session UniFi reports in stat/guest,
-# split into three mutually exclusive categories by where the MAC
-# lives, not by authorized_by -- so a genuine anomaly is never
-# buried under the routine mac-*.txt noise:
-# - SYSADMIN MANAGED: MAC is in mac-*.txt. Authorized via authorize-guest
-# by design (see authorize_managed_macs in uhmd.sh), no voucher
-# involved. Never touched by any action below.
-# - VOUCHER AUTHORIZED: not managed, MAC has a line in uhm-auth.txt
-# (has a voucher on record).
-# - UNKNOWN (warning): not managed, not in uhm-auth.txt -- everything
-# else. The one to verify and, if illegitimate, delete.
-# Every row is also self-labeled in the ORIGIN column, independent of
-# which section it's under: "(managed)" in SYSADMIN MANAGED, "(!)" in
-# VOUCHER AUTHORIZED/UNKNOWN for an unknown record -- so a row read in
-# isolation (e.g. copied out for a manual command) is never ambiguous.
+#     split into three mutually exclusive categories by where the MAC
+#     lives, not by authorized_by -- so a genuine anomaly is never
+#     buried under the routine mac-*.txt noise:
+#       - SYSADMIN MANAGED: MAC is in mac-*.txt. Authorized via
+#         authorize-guest by design (see authorize_managed_macs in
+#         uhmd.sh), no voucher involved. Never touched by any action.
+#       - VOUCHER AUTHORIZED: not managed, MAC has a line in
+#         uhm-auth.txt (has a voucher on record).
+#       - UNKNOWN (warning): not managed, not in uhm-auth.txt --
+#         everything else. The one to verify and, if illegitimate,
+#         delete.
+#     Every row is also self-labeled in the ORIGIN column, independent
+#     of which section it's under: "(managed)" in SYSADMIN MANAGED,
+#     "(!)" in VOUCHER AUTHORIZED/UNKNOWN for an unknown record -- so a
+#     row read in isolation (e.g. copied out for a manual command) is
+#     never ambiguous.
 # [5] Unauthorized - clients connected to the hotspot ESSID that stat/sta
-# reports as NOT authorized
+#     reports as NOT authorized
 #
 # ACTIONS SUBMENU -- none of these ever touch a mac-*.txt MAC (see
 # is_managed_mac() below); only the VOUCHER AUTHORIZED/UNKNOWN
 # categories above are ever eligible.
 # [1] Delete unused vouchers - delete vouchers never activated (used=0)
-# [2] Forget clients no voucher - forget guests who connected to the portal
-# but never submitted a voucher code. Excludes clients currently
-# connected to the hotspot ESSID (stat/sta), even if they never
-# used a voucher -- only disconnected/stale ones are listed
+# [2] Forget clients no voucher - forget guests who connected to the
+#     portal but never submitted a voucher code. Excludes clients
+#     currently connected to the hotspot ESSID (stat/sta), even if they
+#     never used a voucher -- only disconnected/stale ones are listed
 # [3] Delete expired vouchers - delete vouchers past their end_time and
-# forget all associated client history
+#     forget all associated client history
 # [4] Revoke by voucher code - surgical invalidation of a single voucher:
-# delete from stat/voucher if still present,
-# unauthorize active sessions, forget all
-# associated MACs from stat/guest and stat/sta
-# Workaround for UniFi bug: stat/guest does not
-# distinguish manually deleted vouchers from
-# quota-exhausted ones (community.ui.com/31faff3e)
-# [5] Forget sessions marked (!) - unauthorize + forget every active session
-# whose authorized_by is not "voucher" and is not a mac-*.txt
-# device (see report [4]'s UNKNOWN category)
+#     delete from stat/voucher if still present, unauthorize active
+#     sessions, forget all associated MACs from stat/guest and stat/sta.
+#     Workaround for UniFi bug: stat/guest does not distinguish manually
+#     deleted vouchers from quota-exhausted ones
+#     (community.ui.com/31faff3e)
+# [5] Forget sessions marked (!) - unauthorize + forget every active
+#     session whose authorized_by is not "voucher" and is not a
+#     mac-*.txt device (see report [4]'s UNKNOWN category)
 # [6] Purge everything - DELETE all vouchers and client history
-# (DESTRUCTIVE -- requires typing YES)
+#     (DESTRUCTIVE -- requires typing YES)
 #
 # AUTH
 # Authenticates against UniFi OS (/api/auth/login) by default, or classic
@@ -76,16 +77,23 @@
 # Requires UHM_ESSID, UNIFI_CONTROLLER_URL, UNIFI_USERNAME,
 # UNIFI_PASSWORD in uhm.env
 #
-# DEPENDENCIES : curl, jq, bsdextrautils, mawk, coreutils, util-linux, grep, sed
-# CONFIG : /etc/uhm/uhm.env
-# LOG : /var/log/uhmunifi.log
+# EXIT CODES:
+# 0 - Normal exit
+# 1 - Not root, already running, missing dependency, unwritable log,
+#     unreadable or incomplete configuration, unreadable or malformed
+#     data file, failed login, or failed UniFi query
+#
+# DEPENDENCIES : curl, jq, bsdextrautils, mawk, coreutils, util-linux,
+#                grep, sed
+# CONFIG       : /etc/uhm/uhm.env
+# LOG          : /var/log/uhmunifi.log
 #
 # NOTE on logging:
 # - Manual/interactive script, not a daemon: the log file is truncated
-# at the start of every run, so it always reflects only the
-# latest session. It records the login/fetch summary and every action
-# taken; report tables (options 1-5) are terminal-only, on demand.
-# No rotation is needed or installed for this file.
+#   at the start of every run, so it always reflects only the latest
+#   session. It records the login/fetch summary and every action taken;
+#   report tables (options 1-5) are terminal-only, on demand.
+#   No rotation is needed or installed for this file.
 #
 ################################################################################
 
@@ -93,7 +101,6 @@ set -uo pipefail
 
 # logging
 log_file="/var/log/uhmunifi.log"
-: > "$log_file" 2>/dev/null || true
 log() {
     local msg="$1"
     echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$log_file" 2>/dev/null || true
@@ -108,23 +115,45 @@ log_only() {
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root"
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
+
+if ! : > "$log_file" 2>/dev/null; then
+    echo "ERROR: cannot write $log_file -- abort" >&2
+    exit 1
+fi
+
+# log file perms: this log carries client MAC addresses, hostnames and
+# voucher codes, so it gets the same 640 root:adm as the shared uhm.log
+# instead of whatever the umask leaves behind.
+_log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
+case "$_log_stat" in
+    "root adm 640"|"root root 640") ;;
+    *)
+        if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
+           chmod 640 "$log_file" 2>/dev/null; then
+            log "WARNING: uhmunifi.log perms fixed -- alert"
+        else
+            log "WARNING: cannot fix uhmunifi.log perms -- alert"
+        fi
+        ;;
+esac
+unset _log_stat
 
 # prevent overlapping runs
 SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "WARNING: script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
 # DEPENDENCIES
 for dep in curl jq bsdextrautils mawk coreutils util-linux grep sed; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: missing dependency '$dep' -- abort"
         exit 1
     fi
 done
@@ -132,27 +161,36 @@ done
 # Start
 log "uhmunifi start..."
 
+PYDHCP_CONFIG="/etc/pydhcp/pydhcp.env"
 CONFIG="/etc/uhm/uhm.env"
 if [ ! -f "$CONFIG" ]; then
-    log "ERROR: Config file not found: $CONFIG"
+    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
     exit 1
 fi
 _owner=$(stat -c '%U' "$CONFIG" 2>/dev/null)
 _perms=$(stat -c '%a' "$CONFIG" 2>/dev/null)
-_gdigit="${_perms: -2:1}"
-_odigit="${_perms: -1}"
-if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: uhm.env unsafe owner/perms, must be root-owned 600"
+if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
+    log "ERROR: uhm.env must be root:root 600 -- abort"
     exit 1
 fi
 
 load_config() {
-    local file="$1" line key value
+    local file="$1" line key value raw_key raw_value
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        raw_key="$key" raw_value="$value"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+            log "ERROR: stray whitespace in a config key"
+            log "ERROR: key $key -- abort"
+            exit 1
+        fi
         value="${value%\"}"
         value="${value#\"}"
         value="${value//\\\"/\"}"
@@ -166,18 +204,27 @@ load_config() {
         esac
     done < "$file"
 }
-load_config "$CONFIG"
-
-if [ -z "${UNIFI_CONTROLLER_URL:-}" ] || [ -z "${UNIFI_USERNAME:-}" ] || [ -z "${UNIFI_PASSWORD:-}" ] || [ -z "${UHM_ESSID:-}" ]; then
-    log "ERROR: uhm.env is missing a required UniFi config variable"
-    log "ERROR: check UNIFI_CONTROLLER_URL/USERNAME/PASSWORD, UHM_ESSID"
+# pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
+# own keys win if a name ever collides.
+if [ ! -r "$PYDHCP_CONFIG" ]; then
+    log "ERROR: cannot read $PYDHCP_CONFIG -- abort"
+    log "ERROR: uhm reads ACL_MAC_PATH from it"
     exit 1
 fi
+load_config "$PYDHCP_CONFIG"
+load_config "$CONFIG"
+
+for _k in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UHM_ESSID \
+          UHM_MACAUTH ACL_MAC_PATH; do
+    if [ -z "${!_k:-}" ]; then
+        log "ERROR: $_k not set in uhm.env -- abort"
+        exit 1
+    fi
+done
+unset _k
 
 SITE="${UNIFI_SITE:-default}"
 TYPE="${UNIFI_TYPE:-unifi-os}"
-UHM_MACAUTH="${UHM_MACAUTH:-/etc/uhm/acl/uhm-auth.txt}"
-ACL_MAC_PATH="${ACL_MAC_PATH:-/etc/acl/acl_mac}"
 
 # True if $1 (lowercase MAC) is listed in ANY mac-*.txt, active or
 # commented -- same definition as is_managed_mac() in uhmd.sh. A managed
@@ -189,7 +236,7 @@ is_managed_mac() {
     local files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
     for f in "${files[@]}"; do
-        grep -qiE "^#?a;${m};" "$f" 2>/dev/null && return 0
+        grep -qiE "^#?a;${m};" "$f" && return 0
     done
     return 1
 }
@@ -223,7 +270,9 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$token" ]; then
-            log "ERROR: Authentication failed -- check credentials in $CONFIG"
+            log "ERROR: UniFi login failed -- abort"
+            log "ERROR: check credentials and URL in uhm.env"
+            log "ERROR: controller may be unavailable, try again later"
             exit 1
         fi
         SESSION_COOKIE="TOKEN=${token}"
@@ -246,7 +295,9 @@ do_login() {
     fi
 
     if [ -z "$SESSION_COOKIE" ]; then
-        log "ERROR: Authentication failed -- check credentials in $CONFIG"
+        log "ERROR: UniFi login failed -- abort"
+        log "ERROR: check credentials and URL in uhm.env"
+        log "ERROR: controller may be unavailable, try again later"
         exit 1
     fi
 }
@@ -323,15 +374,45 @@ STA_RC=$(echo "$STA" | jq -r '.meta.rc // "error"' 2>/dev/null)
 GUEST_RC=$(echo "$GUEST" | jq -r '.meta.rc // "error"' 2>/dev/null)
 VCH_RC=$(echo "$VOUCHER" | jq -r '.meta.rc // "error"' 2>/dev/null)
 
-# do_login's own "exit 1" on failed re-authentication only kills the
-# subshell of the api_get/api_post call that triggered it (command
-# substitution), so it never aborts this script by itself. If all three
-# calls came back empty, authentication almost certainly failed -- stop
-# here instead of entering a menu with no usable data.
-if [[ "$STA_RC" == "error" && "$GUEST_RC" == "error" && "$VCH_RC" == "error" ]]; then
-    log "ERROR: no data from API -- check credentials in $CONFIG"
+# Startup availability check: every endpoint this script works with must
+# answer before the menu is drawn, so an action can never fail halfway
+# through because the controller went away. do_login's own "exit 1" on
+# failed re-authentication only kills the subshell of the api_get/api_post
+# call that triggered it (command substitution), so it never aborts this
+# script by itself -- this loop is what stops it, from the main body.
+for _pair in "stat/sta:$STA_RC" "stat/guest:$GUEST_RC" "stat/voucher:$VCH_RC"; do
+    if [[ "${_pair#*:}" != "ok" ]]; then
+        log "ERROR: ${_pair%%:*} query failed -- abort"
+        log "ERROR: controller may be unavailable, try again later"
+        exit 1
+    fi
+done
+unset _pair
+
+shopt -s nullglob
+_uhm_mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
+shopt -u nullglob
+if (( ${#_uhm_mac_lists[@]} == 0 )); then
+    log "ERROR: no mac-*.txt in $ACL_MAC_PATH -- abort"
     exit 1
 fi
+for _f in "$UHM_MACAUTH" "${_uhm_mac_lists[@]}"; do
+    grep -qE '' "$_f"
+    if (( $? > 1 )); then
+        log "ERROR: cannot read $_f -- abort"
+        exit 1
+    fi
+done
+unset _uhm_mac_lists _f
+
+while IFS=';' read -r _s _m _rest; do
+    [ "$_s" != "a" ] && continue
+    if [ -z "$_m" ]; then
+        log "ERROR: malformed line in $UHM_MACAUTH -- abort"
+        exit 1
+    fi
+done < "$UHM_MACAUTH"
+unset _s _m _rest
 
 STA_COUNT=$(echo "$STA" | jq '.data|length' 2>/dev/null)
 GUEST_COUNT=$(echo "$GUEST" | jq '.data|length' 2>/dev/null)
@@ -345,32 +426,28 @@ press_enter() {
     read -rp " Press ENTER to continue..." _
 }
 
-# -- Report [2]: Authorized clients (uhm-auth.txt + stat/guest + stat/sta) ---
+# -- Report [2]: Authorized clients (uhm-auth.txt + stat/guest + stat/sta) -----
 # VOUCHER RESOLUTION STRATEGY:
 # 1. Extract voucher code from hostname field in uhm-auth.txt
-# (format: guest{n}-{voucher_code}, e.g. guest3-7708162928)
-# This is always available even when the client is disconnected,
-# because uhmd.sh writes it at authorization time.
+#    (format: guest{n}-{voucher_code}, e.g. guest3-7708162928)
+#    This is always available even when the client is disconnected,
+#    because uhmd.sh writes it at authorization time.
 # 2. Verify the code exists in stat/voucher (API) and enrich with status.
-# If found: show as CODE(STATUS) e.g. 7708162928(USED_MULTIPLE)
-# If not found in stat/voucher: quota exhausted and auto-purged by UniFi, show as CODE(CONSUMED)
+#    If found: show as CODE(STATUS) e.g. 7708162928(USED_MULTIPLE)
+#    If not found in stat/voucher: quota exhausted and auto-purged by
+#    UniFi, show as CODE(CONSUMED)
 # 3. Fallback: if hostname has no voucher code, query stat/guest by MAC.
-# This covers clients still connected whose session is in stat/guest.
+#    This covers clients still connected whose session is in stat/guest.
 # 4. If neither source yields a code: show N/A, and check authorized_by
-# in that MAC's stat/guest session. Anything other than "voucher"
-# (typically "api", a cmd/stamgr authorize-guest) means the entry never
-# came from the voucher flow at all, and is reported as
-# NO-VOUCHER(origin) instead of a plain N/A status.
+#    in that MAC's stat/guest session. Anything other than "voucher"
+#    (typically "api", a cmd/stamgr authorize-guest) means the entry
+#    never came from the voucher flow at all, and is reported as
+#    NO-VOUCHER(origin) instead of a plain N/A status.
 print_authorized() {
     echo ""
     echo "============================================================================"
     echo "AUTHORIZED -- uhm-auth.txt"
     echo "============================================================================"
-
-    if [ ! -f "$UHM_MACAUTH" ]; then
-        printf " File not found: %s\n" "$UHM_MACAUTH"
-        return
-    fi
 
     local sta_map
     sta_map=$(echo "$STA" | jq -r --arg essid "$UHM_ESSID" '
@@ -383,7 +460,6 @@ print_authorized() {
         printf "MAC|IP|CODE|STATUS|EXPIRES|ON\n"
         while IFS=';' read -r status mac ip hostname end_time _; do
             [ "$status" != "a" ] && continue
-            [ -z "$mac" ] && continue
 
             expires="N/A"
             [ -n "$end_time" ] && expires=$(date -d "@$end_time" '+%m-%d %H:%M' 2>/dev/null || echo "$end_time")
@@ -484,7 +560,7 @@ print_guest_sessions() {
         if is_managed_mac "$gmac"; then
             managed_rows+="$gmac|${gorigin}(managed)|$gcode|$gend|$gon
 "
-        elif grep -qiE "^#?a;${gmac};" "$UHM_MACAUTH" 2>/dev/null; then
+        elif grep -qiE "^#?a;${gmac};" "$UHM_MACAUTH"; then
             [ "$gorigin" != "voucher" ] && gorigin="${gorigin}(!)"
             authorized_rows+="$gmac|$gorigin|$gcode|$gend|$gon
 "
@@ -623,11 +699,11 @@ interactive_forget_no_voucher() {
     echo "============================================================================"
 
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -713,15 +789,15 @@ interactive_delete_expired() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
 
@@ -770,7 +846,7 @@ interactive_delete_expired() {
         if [ "$rc" = "ok" ]; then
             log "INFO: Deleted voucher: $code"
         else
-            log "WARNING: failed to delete voucher $code, its clients -- skip"
+            log "WARNING: failed to delete voucher $code, its clients -- alert"
             continue
         fi
 
@@ -808,7 +884,7 @@ interactive_delete_expired() {
     log "INFO: Done."
 }
 
-# -- Action [4]: revoke voucher by code (workaround for UniFi bug) ------------
+# -- Action [4]: revoke voucher by code (workaround for UniFi bug) -------------
 interactive_revoke_by_code() {
     echo ""
     echo "============================================================================"
@@ -816,15 +892,15 @@ interactive_revoke_by_code() {
     echo "============================================================================"
 
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -974,11 +1050,11 @@ interactive_forget_flagged() {
     echo "============================================================================"
 
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
 
@@ -1038,18 +1114,18 @@ interactive_forget_flagged() {
     log "INFO: Done."
 }
 
-# -- Action [6]: purge all vouchers and client history ------------------------
+# -- Action [6]: purge all vouchers and client history -------------------------
 interactive_purge_all() {
     if [[ "$VCH_RC" != "ok" ]]; then
-        log "WARNING: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$VCH_RC) -- skip"
         return
     fi
     if [[ "$STA_RC" != "ok" ]]; then
-        log "WARNING: stat/sta data unavailable (rc=$STA_RC) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$STA_RC) -- skip"
         return
     fi
     if [[ "$GUEST_RC" != "ok" ]]; then
-        log "WARNING: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$GUEST_RC) -- skip"
         return
     fi
 
@@ -1140,7 +1216,7 @@ print_connection_status() {
     echo ""
 }
 
-# -- Submenu: Reports ------------------------------------------------------------
+# -- Submenu: Reports ----------------------------------------------------------
 reports_menu() {
     while true; do
         echo ""
@@ -1168,7 +1244,7 @@ reports_menu() {
     done
 }
 
-# -- Submenu: Actions -------------------------------------------------------------
+# -- Submenu: Actions ----------------------------------------------------------
 actions_menu() {
     while true; do
         echo ""
@@ -1198,7 +1274,7 @@ actions_menu() {
     done
 }
 
-# -- Main menu ------------------------------------------------------------------
+# -- Main menu -----------------------------------------------------------------
 main_menu() {
     while true; do
         echo ""

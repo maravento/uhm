@@ -10,37 +10,36 @@
 # notification via ntfy.sh on three kinds of events:
 #
 # 1. Connectivity loss to the UniFi controller -- anchors on the
-# "Could not load vouchers" line, which uhmd.sh's
-# load_all_vouchers() logs exactly once per cycle when the controller
-# is unreachable. Successful cycles are silent, so consecutive
-# failures are identified by comparing timestamps: a gap larger than
-# GAP_LIMIT = POLL_INTERVAL + 3*API_MAX_TIME + MARGIN (default
-# 20 + 3*30 + 10 = 120s) between two failure lines means cycles
-# succeeded silently in between, and the streak resets. The 3*API_MAX_TIME
-# term covers the worst case of a failed cycle still making up to three
-# 30s-capped API calls (vouchers, guest, sta) before it ends. Alerts once
-# UHM_API_FAIL_THRESHOLD consecutive cycles fail, and again once recovered
-# (same GAP_LIMIT is the read timeout used to detect recovery -- see
-# watch loop below).
-# Suppressed while uhmd.service has been active for less than
-# UHM_ALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi OS can
-# take a while to come back up after a reboot, and uhmalert itself
-# starts at boot too, so the very first cycles would otherwise alert
-# on a known, expected startup window. A real outage later still
-# alerts at the normal threshold, unaffected.
+#    "Could not load vouchers" line, which uhmd.sh's load_all_vouchers()
+#    logs exactly once per cycle when the controller is unreachable.
+#    Successful cycles are silent, so consecutive failures are identified
+#    by comparing timestamps: a gap larger than GAP_LIMIT = POLL_INTERVAL
+#    + 3*API_MAX_TIME + MARGIN (default 20 + 3*30 + 10 = 120s) between two
+#    failure lines means cycles succeeded silently in between, and the
+#    streak resets. The 3*API_MAX_TIME term covers the worst case of a
+#    failed cycle still making up to three 30s-capped API calls (vouchers,
+#    guest, sta) before it ends. Alerts once UHM_API_FAIL_THRESHOLD
+#    consecutive cycles fail, and again once recovered (same GAP_LIMIT is
+#    the read timeout used to detect recovery -- see watch loop below).
+#    Suppressed while uhmd.service has been active for less than
+#    UHM_ALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi
+#    OS can take a while to come back up after a reboot, and uhmalert
+#    itself starts at boot too, so the very first cycles would otherwise
+#    alert on a known, expected startup window. A real outage later still
+#    alerts at the normal threshold, unaffected.
 #
 # 2. Any other ERROR or WARNING line -- the log already classifies every
-# line's severity ("TIMESTAMP LEVEL: message"), shared by
-# uhmd.sh and the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain.
-# Fires immediately, no streak -- one occurrence is already worth
-# knowing about. Excludes lines already covered by #1 (so
-# connectivity still waits for the threshold, not the first failure)
-# and "cycle lock held unexpectedly" (expected/already handled, see
-# uhmd.sh run_cycle() -- not a bug).
+#    line's severity ("TIMESTAMP LEVEL: message"), shared by uhmd.sh and
+#    the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain. Fires
+#    immediately, no streak -- one occurrence is already worth knowing
+#    about. Excludes lines already covered by #1 (so connectivity still
+#    waits for the threshold, not the first failure) and "cycle lock held
+#    unexpectedly" (expected/already handled, see uhmd.sh run_cycle() --
+#    not a bug).
 #
 # 3. Any FIX: line -- written only by uhmwatch.sh when it successfully
-# recovers a service. Fires immediately, same as #2, and closes out
-# the WARNING alert that reported the problem in the first place.
+#    recovers a service. Fires immediately, same as #2, and closes out
+#    the WARNING alert that reported the problem in the first place.
 #
 # Standalone -- never reads or modifies uhmd.sh, only tails its log
 # file. Runs as its own systemd service (uhmalert.service), independent of
@@ -49,14 +48,14 @@
 #
 # DEPENDENCIES:
 # - bash, curl, mawk, grep, sed, util-linux (flock), GNU coreutils
-# (date -d, tail -F) -- standard on Ubuntu/Debian
+#   (date -d, tail -F) -- standard on Ubuntu/Debian
 # - systemd (systemctl) -- only needed for `install`/`uninstall`
 # - uhmd.sh already installed and running (this reads its log; it
-# does not start or manage the daemon itself)
+#   does not start or manage the daemon itself)
 # - An ntfy.sh account is not required. Install the free "ntfy" app
-# (Android/iOS) and subscribe to a topic name of your choice -- treat
-# the topic name as a shared secret, since anyone who knows it can
-# publish to it. https://ntfy.sh
+#   (Android/iOS) and subscribe to a topic name of your choice -- treat
+#   the topic name as a shared secret, since anyone who knows it can
+#   publish to it. https://ntfy.sh
 #
 # CONFIGURATION:
 # `install` appends UHM_NTFY_TOPIC (auto-generated, unpredictable),
@@ -107,14 +106,29 @@ esac
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root"
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
+
+# log file perms (as installed by uhmsetup.sh)
+_log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
+case "$_log_stat" in
+    ""|"root adm 640"|"root root 640") ;;
+    *)
+        if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
+           chmod 640 "$log_file" 2>/dev/null; then
+            log "WARNING: uhm.log perms fixed -- alert"
+        else
+            log "WARNING: cannot fix uhm.log perms -- alert"
+        fi
+        ;;
+esac
+unset _log_stat
 
 # DEPENDENCIES
 for dep in curl mawk coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: missing dependency '$dep' -- abort"
         exit 1
     fi
 done
@@ -138,7 +152,7 @@ insert_after_last_delimiter() {
         printf '\n%s\n' "$content" >> "$file"
         return
     fi
-    tmp=$(mktemp)
+    tmp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
     head -n "$last_line" "$file" > "$tmp"
     printf '\n%s\n' "$content" >> "$tmp"
     tail -n "+$((last_line + 1))" "$file" >> "$tmp"
@@ -154,7 +168,8 @@ install_module() {
     echo ""
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "ERROR: $CONFIG_FILE not found -- install/configure uhmd.sh first"
+        echo "ERROR: $CONFIG_FILE not found" >&2
+        echo "ERROR: install and configure uhm first -- abort" >&2
         exit 1
     fi
 
@@ -260,7 +275,7 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "WARNING: script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
@@ -274,22 +289,33 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 fi
 _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null)
 _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
-_gdigit="${_perms: -2:1}"
-_odigit="${_perms: -1}"
-if [[ "$_owner" != "root" ]] || [[ "$_gdigit" != "0" ]] || [[ "$_odigit" != "0" ]]; then
-    log "ERROR: uhm.env unsafe owner/perms, must be root-owned 600"
-    exit 1
+if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
+    if chown root:root "$CONFIG_FILE" 2>/dev/null && chmod 600 "$CONFIG_FILE" 2>/dev/null; then
+        log "WARNING: uhm.env perms fixed -- alert"
+    else
+        log "ERROR: cannot fix uhm.env perms -- abort"
+        exit 1
+    fi
 fi
 # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
 # maliciously replaced config file cannot execute code -- same approach as
 # uhmleases.sh's load_env_file().
 load_env_file() {
-    local file="$1" line key value
+    local file="$1" line key value raw_key raw_value
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        raw_key="$key" raw_value="$value"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+            log "WARNING: stray whitespace fixed -- alert"
+            log "WARNING: key $key"
+        fi
         if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
             value="${value:1:$((${#value}-2))}"
         fi
@@ -320,7 +346,7 @@ if ! [[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
     POLL_INTERVAL=20
 fi
 UHM_ALERT_QUIET_PERIOD="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
-[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid ($UHM_ALERT_QUIET_PERIOD)"; log "WARNING: using default 120"; UHM_ALERT_QUIET_PERIOD=120; }
+[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid -- fallback"; UHM_ALERT_QUIET_PERIOD=120; }
 MARGIN=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
             # falsely look like a gap with a silent recovery in between
 API_MAX_TIME=30 # matches curl --max-time in uhmd.sh's api_get calls
@@ -374,12 +400,14 @@ while true; do
         if (( _now_epoch - last_ts_epoch >= GAP_LIMIT )); then
             if systemctl is-active --quiet uhmd; then
                 notify "uhm: recovered -- no new failures in the last ${GAP_LIMIT}s"
-                log "ALERT: recovery notice sent"
+                log "ALERT: recovery notice (no new failures) -- sent"
+                streak=0
+                alerted=0
             else
-                log "INFO: uhmd is not active -- suppressing recovery notice"
+                log "INFO: uhmd not active, no recovery notice -- skip"
+                streak=0
+                last_ts_epoch=0
             fi
-            streak=0
-            alerted=0
         fi
     fi
     _read_rc=0
@@ -400,7 +428,7 @@ while true; do
         if [[ "$msg" == "INFO: UniFi backend ready (voucher/guest/sta OK)" ]]; then
             if (( alerted == 1 )); then
                 notify "uhm: recovered -- backend answering again"
-                log "ALERT: recovery notice sent (backend ready)"
+                log "ALERT: recovery notice (backend ready) -- sent"
                 streak=0
                 alerted=0
             fi
@@ -414,7 +442,6 @@ while true; do
         is_connectivity=0
         [[ "$msg" == *"Could not load vouchers"* ]] && is_connectivity=1
         [[ "$msg" == *"API GET"* ]] && is_connectivity=1
-        [[ "$msg" == *"no response (timeout or network error)"* ]] && is_connectivity=1
 
         # Generic catch-all: any other ERROR/WARNING line, from
         # uhmd.sh or the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain
@@ -430,7 +457,7 @@ while true; do
             last_generic_msg="$msg"
             last_generic_time="$_now_epoch"
             notify "uhm: $msg"
-            log "ALERT: sent -- ${msg:0:45}"
+            log "ALERT: ${msg:0:45} -- sent"
             continue
         fi
 
@@ -456,7 +483,7 @@ while true; do
                 streak=0
             else
                 notify "uhm: $streak consecutive failed cycles reaching the controller (since $ts)"
-                log "ALERT: sent -- $streak consecutive cycle failures"
+                log "ALERT: $streak consecutive cycle failures -- sent"
                 log "ALERT: latest at $ts"
                 alerted=1
             fi
