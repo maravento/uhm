@@ -378,11 +378,11 @@ if [ -z "${ACL_PATH:-}" ]; then
 fi
 if [ -z "${ACL_MAC_PATH:-}" ]; then
     log "WARNING: no ACL_MAC_PATH in pydhcp.env -- fallback"
-    ACL_MAC_PATH="$ACL_PATH/acl_mac"
+    ACL_MAC_PATH="$ACL_PATH/mac"
 fi
 if [ -z "${ACL_DHCP_PATH:-}" ]; then
     log "WARNING: no ACL_DHCP_PATH in pydhcp.env -- fallback"
-    ACL_DHCP_PATH="$ACL_PATH/acl_dhcp"
+    ACL_DHCP_PATH="/etc/pydhcp/acl"
 fi
 UHM_PATH="${UHM_PATH:-/etc/uhm}"
 if [ -z "${ACL_MAC_LIMITED:-}" ]; then
@@ -400,9 +400,9 @@ if [ -z "${ACL_BLOCK_FILE:-}" ]; then
 fi
 if [ -z "${PYDHCPD_LEASES:-}" ]; then
     log "WARNING: no PYDHCPD_LEASES in pydhcp.env -- fallback"
-    PYDHCPD_LEASES="/etc/pydhcp/pydhcpd.leases"
+    PYDHCPD_LEASES="/etc/pydhcp/core/pydhcpd.leases"
 fi
-DHCPDv4_CONF="${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+DHCPDv4_CONF="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
 UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
 BLOCKDHCP_GRACE_SECONDS="${BLOCKDHCP_GRACE_SECONDS:-86400}"
 if ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $_UH_UINT ]]; then

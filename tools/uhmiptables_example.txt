@@ -105,7 +105,7 @@ _load_conf() {
         value="${value%\"}"
         value="${value#\"}"
         case "$key" in
-            WAN_IF|INTERFACESv4|\
+            INTERFACESv4|\
             SERVER_IP|SERV_SUBNET|SERV_MASK|SERV_DNS|\
             ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
             ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_GRACE|WPAD_PORT)
@@ -123,7 +123,9 @@ fi
 _load_conf "$_PYDHCP_CONF" || true
 _load_conf "$_UHM_CONF" || true
 
-wan="${WAN_IF:-eth0}"
+# wan is a placeholder: uhmsetup.sh replaces it with sed -i during the
+# setup wizard, after asking and listing available interfaces.
+wan="eth0"
 lan="${INTERFACESv4:-eth1}"
 localnet="${SERV_SUBNET:-192.168.0.0}"
 serverip="${SERVER_IP:-192.168.0.10}"
@@ -144,16 +146,16 @@ else
     exit 1
 fi
 
-acl_mac_path="${ACL_MAC_PATH:-/etc/acl/acl_mac}"
-acl_path="${acl_mac_path%/acl_mac}"
-acl_ipt_path="${acl_path}/acl_ipt"
+acl_mac_path="${ACL_MAC_PATH:-/etc/acl/mac}"
+acl_path="${acl_mac_path%/mac}"
+acl_ipt_path="${acl_path}/ipt"
 hotspot_path="${UHM_PATH:-/etc/uhm}"
 UHM_GRACE="${UHM_GRACE:-${hotspot_path}/acl/uhm-grace.txt}"
 
 # ACL/config files used by this script (existence verified below)
 mac_limited_file="${ACL_MAC_LIMITED:-$acl_mac_path/mac-limited.txt}"
 mac_unlimited_file="${ACL_MAC_UNLIMITED:-$acl_mac_path/mac-unlimited.txt}"
-dhcp_conf="/etc/pydhcp/pydhcpd.conf"
+dhcp_conf="/etc/pydhcp/core/pydhcpd.conf"
 path_ips="$acl_ipt_path/dhcp_ip.txt"
 path_macs="$acl_ipt_path/dhcp_mac.txt"
 

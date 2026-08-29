@@ -27,7 +27,7 @@
 # uhm-auth.txt      - Clients with an active voucher (hotspot authorized)
 # uhm-grace.txt     - Clients in the grace period (no voucher yet)
 # blockdhcp.txt     - Blocked MACs (grace expired without voucher)
-# acl_mac/*.txt     - Permanent ACL lists (limited, unlimited)
+# mac/*.txt     - Permanent ACL lists (limited, unlimited)
 # pydhcpd.leases    - DHCP lease file. A MAC is reported as present when it
 #                     appears in the file, which is not the same as holding a
 #                     valid lease: pydhcpd keeps an expired lease block on
@@ -48,10 +48,10 @@
 #
 # State            | Expected presence
 # -----------------+---------------------------------------------------
-# Blocked          | blockdhcp only. NOT in acl_mac, grace or leases
+# Blocked          | blockdhcp only. NOT in mac, grace or leases
 # Grace period     | uhm-grace Y, leases Y (may be absent briefly due to
 #                  | short 60s pool lease and limited range)
-# ACL permanent    | acl_mac Y, NOT in blockdhcp
+# ACL permanent    | mac Y, NOT in blockdhcp
 # Hotspot auth     | uhm-auth Y, uhm-grace N (removed by check_duplicate())
 #
 # EXIT CODES:
@@ -456,7 +456,7 @@ check_mac() {
     printf " %-18s" "blockdhcp.txt:"
     if found_in "$mac" "$BLOCK_DHCP"; then in_block=1; printf "$OK\n"; else printf "$NO\n"; fi
 
-    printf " %-18s" "acl_mac/*.txt:"
+    printf " %-18s" "mac/*.txt:"
     if found_in_acl_dir "$mac"; then
         in_acl=1; printf "$OK\n"
         grep -rliE "^a;${mac};" "$ACL_MAC_DIR"/ | sed 's/^/ /'
@@ -489,7 +489,7 @@ check_mac() {
 
     # Consistency checks
     if [ $in_block -eq 1 ]; then
-        [ $in_acl -eq 1 ] && warn "In blockdhcp AND acl_mac -- should be in one, not both"
+        [ $in_acl -eq 1 ] && warn "In blockdhcp AND mac -- should be in one, not both"
         [ $in_grace -eq 1 ] && warn "In blockdhcp AND uhm-grace -- contradictory state"
         [ $in_leases -eq 1 ] && warn "In blockdhcp AND leases -- lease should have been cleared"
     fi
@@ -587,7 +587,7 @@ menu_consistency() {
         (( $(wc -l < "$tmpfile") == _before )) && info "no active entries in $(basename "$f")"
     done
 
-    # From acl_mac dir
+    # From mac dir
     shopt -s nullglob
     for f in "$ACL_MAC_DIR"/*.txt; do
         _before=$(wc -l < "$tmpfile")
@@ -630,7 +630,7 @@ menu_consistency() {
         if [ $in_block -eq 1 ]; then
             if [ $in_acl -eq 1 ]; then
                 [ $w -eq 0 ] && printf "${BOLD}--- %s ---${NC}\n" "$mac"
-                warn "In blockdhcp AND acl_mac -- should be in one, not both"
+                warn "In blockdhcp AND mac -- should be in one, not both"
                 w=$((w+1))
             fi
             if [ $in_grace -eq 1 ]; then
@@ -695,7 +695,7 @@ menu_search() {
             | awk -F';' '$1=="a"{print tolower($2)}' >> "$tmpfile"
     done
 
-    # Search in acl_mac dir (lines containing query, extract MAC)
+    # Search in mac dir (lines containing query, extract MAC)
     shopt -s nullglob
     for f in "$ACL_MAC_DIR"/*.txt; do
         grep -hiF "$query" "$f" \

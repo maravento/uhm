@@ -15,7 +15,7 @@
 #
 # Run from inside the cloned repo. The script expects to find:
 # ./core/uhmd.sh
-# ./core/uhmd.service
+# ./service/uhmd.service
 # ./core/uhmreload.sh
 # ./core/uhmleases.sh
 # ./core/uhmwatch.sh
@@ -69,7 +69,9 @@
 #
 # CONFIG FILE (uhm.env):
 # Holds only uhm's own keys: UniFi credentials, guest SSID, hotspot range,
-# timers, paths, and WAN_IF. pydhcp's values are never copied here -- every
+# timers and paths. WAN interface is not a key here -- it is written as a
+# placeholder replacement directly into uhmiptables.sh (see Setup wizard),
+# the only script that uses it. pydhcp's values are never copied here -- every
 # component reads pydhcp.env first and uhm.env after, so a change made in
 # pydhcp.env reaches uhm without a re-install. A key already present in
 # pydhcp.env is skipped instead of written a second time, and the skip is
@@ -151,7 +153,7 @@ REPO_CORE="${SCRIPT_DIR}/core"
 REPO_TOOLS="${SCRIPT_DIR}/tools"
 REPO_ACL="${SCRIPT_DIR}/acl"
 REPO_UHMD="${REPO_CORE}/uhmd.sh"
-REPO_SERVICE="${REPO_CORE}/uhmd.service"
+REPO_SERVICE="${SCRIPT_DIR}/service/uhmd.service"
 
 # --- Required apt packages ----------------------------------------------------
 # Project-wide list: this installer verifies every package the deployed
@@ -515,13 +517,18 @@ run_setup_wizard() {
     echo "------------------------------------------------------"
 
     step "Network"
-    # WAN_IF is uhm's own: a value another project may have written into
-    # pydhcp.env belongs to that project, not to the ecosystem, so uhm asks
-    # for its own and keeps it in uhm.env.
+    # WAN interface is uhm's own: a value another project may have written
+    # into pydhcp.env belongs to that project, not to the ecosystem, so uhm
+    # asks for its own. The answer is not stored in uhm.env -- it replaces
+    # the "eth0" placeholder directly in uhmiptables.sh, the only script
+    # that uses it.
     local ifaces
     ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
     echo "Available interfaces: $ifaces"
     ask_interface "WAN interface" "eth0" CFG_WAN_IF
+    if [[ -f "$UHM_IPTABLES_DEST" ]]; then
+        sed -i "s:eth0:$CFG_WAN_IF:g" "$UHM_IPTABLES_DEST"
+    fi
 
     step "pydhcp network configuration"
     info "Loaded from $PYDHCP_ENV"
@@ -671,21 +678,20 @@ run_setup_wizard() {
     echo "automatically (corporate laptops, APs, printers, switches, etc.)."
     echo "They bypass entirely at the DHCP level (uhmleases.sh) -- the daemon"
     echo "itself never authorizes them in UniFi."
-    echo "Files are stored in /etc/acl/acl_mac/ and managed manually."
-    mkdir -p /etc/acl/acl_mac /etc/acl/acl_dhcp /etc/acl/acl_ipt
-    chmod 700 /etc/acl/acl_mac /etc/acl/acl_dhcp /etc/acl/acl_ipt
-    info "Directory /etc/acl/acl_mac created"
+    echo "Files are stored in /etc/acl/mac/ and managed manually."
+    mkdir -p /etc/acl/mac
+    chmod 700 /etc/acl/mac
+    info "Directory /etc/acl/mac created"
     info "  add your mac-*.txt files there"
 
     step "Writing $CONFIG_FILE"
     (
         umask 077
-        local ESSID_Q USER_Q PASS_Q URL_Q RELOAD_SCRIPT_Q WAN_IF_Q
+        local ESSID_Q USER_Q PASS_Q URL_Q RELOAD_SCRIPT_Q
         ESSID_Q=$(dq_escape "$CFG_ESSID")
         USER_Q=$(dq_escape "$CFG_UNIFI_USER")
         PASS_Q=$(dq_escape "$CFG_UNIFI_PASS")
         RELOAD_SCRIPT_Q=$(dq_escape "$CFG_RELOAD_SCRIPT")
-        WAN_IF_Q=$(dq_escape "$CFG_WAN_IF")
         URL_Q=$(dq_escape "$found_url")
 
         # uhm.env holds only uhm's own keys. pydhcp's values (network,
@@ -694,7 +700,7 @@ run_setup_wizard() {
         : > "$CONFIG_FILE"
 
         # Any key pydhcp.env already defines -- pydhcp's own, or one added
-        # there by another project (gateproxy, for instance) -- is skipped
+        # there by another project -- is skipped
         # instead of written here too: every component reads pydhcp.env
         # first and uhm.env after, so a duplicate would let uhm.env shadow
         # the value its owner maintains.
@@ -706,8 +712,6 @@ run_setup_wizard() {
 # UHM
 # /etc/uhm/uhm.env
 # =============================================================================
-# -- Network (uhm's own) ------------------------------------------------------
-WAN_IF="${WAN_IF_Q}"
 # -- UniFi keys ---------------------------------------------------------------
 # Guest SSID
 UHM_ESSID="${ESSID_Q}"

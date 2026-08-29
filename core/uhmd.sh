@@ -426,10 +426,10 @@ load_config() {
     # named once and never repeated per file.
     UHM_PATH="${UHM_PATH:-/etc/uhm}"
     ACL_PATH="${ACL_PATH:-/etc/acl}"
-    PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/pydhcpd.leases}"
+    PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/core/pydhcpd.leases}"
     UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
-    BLOCK_DHCP="${ACL_BLOCK_FILE:-$ACL_PATH/acl_dhcp/blockdhcp.txt}"
-    ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/acl_mac}"
+    BLOCK_DHCP="${ACL_BLOCK_FILE:-/etc/pydhcp/acl/blockdhcp.txt}"
+    ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/mac}"
     UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
     UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
 

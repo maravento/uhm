@@ -141,8 +141,8 @@ CONFIG_FILE="/etc/uhm/uhm.env"
 
 # Appends $2 (one or more lines) right after the file's LAST
 # "# ====...====" line, instead of a plain >> append -- so the new block
-# always lands right after whatever content (from any project sharing this
-# file: pydhcp, uhm, gateproxy, ...) is already there, never inside
+# always lands right after whatever content (from any script sharing this
+# file: uhmsetup.sh, uhmalert.sh, ...) is already there, never inside
 # whichever one of them happens to be last. Falls back to a plain append if
 # the file has no delimiter line at all (empty/malformed file).
 insert_after_last_delimiter() {
