@@ -38,7 +38,7 @@
 #    with no alerting of its own -- uhmd cannot function without it, so it
 #    gets the same treatment as uhmd.service itself. is-active only, no
 #    functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
-#    Skipped (not restarted) if uhmleases.sh currently holds CYCLE_LOCK --
+#    Skipped (not restarted) if uhmleases.sh currently holds cycle_lock --
 #    it stops/reconfigures/starts pydhcpd itself as part of a normal reload
 #    (~1-3s), and a cron tick landing in that window would otherwise "fix"
 #    a service that isn't actually broken, colliding with uhmleases.sh's own
@@ -96,16 +96,8 @@
 
 set -uo pipefail
 
-# PATH for cron
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-# logging
-log_file="/var/log/uhm.log"
-log() {
-    local msg="$1"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$log_file" 2>/dev/null || true
-}
-
+# USAGE
+# Answered before any check: --help must work without root
 usage() {
     awk 'NR==1{next} /^#{20,}$/{c++; if(c==2){exit}} {print}' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -117,15 +109,28 @@ case "${1:-}" in
         ;;
 esac
 
-## root check
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# path for cron
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# logging
+log_file="/var/log/uhm.log"
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+}
+
+# root check
 if [ "$(id -u)" != "0" ]; then
     log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
 
 # log file perms (as installed by uhmsetup.sh)
-_log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
-case "$_log_stat" in
+log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
+case "$log_stat" in
     ""|"root adm 640"|"root root 640") ;;
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
@@ -136,29 +141,29 @@ case "$_log_stat" in
         fi
         ;;
 esac
-unset _log_stat
+unset log_stat
 
 # prevent overlapping runs
-SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$SCRIPT_LOCK")
-exec 200>"$SCRIPT_LOCK"
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
 if ! flock -n 200; then
     log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
-# uhmd.sh/uhmleases.sh hold this same lock (CYCLE_LOCK in uhmd.sh) for the
+# uhmd.sh/uhmleases.sh hold this same lock (cycle_lock in uhmd.sh) for the
 # ~1-3s a reload actively stops/reconfigures/starts pydhcpd -- a real,
 # expected gap, not a failure. Without this check, a cron tick landing in
 # that narrow window sees pydhcpd not-yet-restarted, restarts it itself, and
 # collides with uhmleases.sh's own pending `systemctl start pydhcpd`,
 # aborting that reload (uhmleases.sh exits 1). fd 250 is used only for this
 # instantaneous non-blocking probe -- always released right after, opened
-# fresh on every call so it never competes with SCRIPT_LOCK (fd 200) above.
-_UHM_CYCLE_LOCK="/var/lock/uhmd-cycle.lock"
-_uhm_reload_in_progress() {
-    [[ -e "$_UHM_CYCLE_LOCK" ]] || return 1
-    exec 250>"$_UHM_CYCLE_LOCK" 2>/dev/null || return 1
+# fresh on every call so it never competes with script_lock (fd 200) above.
+uhm_cycle_lock="/var/lock/uhmd-cycle.lock"
+uhm_reload_in_progress() {
+    [[ -e "$uhm_cycle_lock" ]] || return 1
+    exec 250>"$uhm_cycle_lock" 2>/dev/null || return 1
     if flock -n 250; then
         flock -u 250
         exec 250>&-
@@ -168,19 +173,31 @@ _uhm_reload_in_progress() {
     return 0
 }
 
-# DEPENDENCIES
-for dep in curl jq mawk coreutils util-linux cron grep sed systemd iproute2; do
-    if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: missing dependency '$dep' -- abort"
+# dependencies
+for dep_pkg in curl jq mawk coreutils util-linux cron grep sed systemd iproute2; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
     fi
 done
 
-TARGET="/etc/uhm/core/uhmwatch.sh"
+# ------------------------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------------------------
+
+target_path="/etc/uhm/core/uhmwatch.sh"
 # Pre-restructure location -- uhmwatch.sh lived under tools/ before it
 # became mandatory. install_module() migrates a crontab entry still
 # pointing there instead of leaving it stale (see below).
-LEGACY_TARGET="/etc/uhm/tools/uhmwatch.sh"
+legacy_target_path="/etc/uhm/tools/uhmwatch.sh"
+
+# ------------------------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# INSTALL
+# ------------------------------------------------------------------------------
 
 install_module() {
     echo ""
@@ -189,28 +206,29 @@ install_module() {
     echo "==========================================="
     echo ""
 
-    SELF="$(readlink -f "$0")"
-    if [[ "$SELF" != "$TARGET" ]]; then
-        echo "Deploying script to $TARGET..."
-        mkdir -p "$(dirname "$TARGET")"
-        install -m 755 -o root -g root "$SELF" "$TARGET"
+    local self_path
+    self_path="$(readlink -f "$0")"
+    if [[ "$self_path" != "$target_path" ]]; then
+        echo "Deploying script to $target_path..."
+        mkdir -p "$(dirname "$target_path")"
+        install -m 755 -o root -g root "$self_path" "$target_path"
     fi
 
-    local cron_entry="* * * * * $TARGET"
-    local current
-    current=$(crontab -l 2>/dev/null || true)
-    if echo "$current" | grep -qF "$LEGACY_TARGET"; then
-        current=$(echo "$current" | grep -vF "$LEGACY_TARGET")
-        crontab - <<< "$current"
-        echo "Removed stale cron entry pointing to legacy path $LEGACY_TARGET"
+    local cron_entry="* * * * * $target_path"
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+    if echo "$current_crontab" | grep -qF "$legacy_target_path"; then
+        current_crontab=$(echo "$current_crontab" | grep -vF "$legacy_target_path")
+        crontab - <<< "$current_crontab"
+        echo "Removed stale cron entry pointing to legacy path $legacy_target_path"
     fi
-    if echo "$current" | grep -vE '^\s*#' | grep -qF "$TARGET"; then
+    if echo "$current_crontab" | grep -vE '^\s*#' | grep -qF "$target_path"; then
         echo "Cron entry already present -- leaving it untouched."
     else
-        { printf '%s\n%s\n' "$current" "$cron_entry"; } | crontab -
+        { printf '%s\n%s\n' "$current_crontab" "$cron_entry"; } | crontab -
         echo "Cron entry registered: $cron_entry"
     fi
-    rm -f "$LEGACY_TARGET"
+    rm -f "$legacy_target_path"
 
     echo ""
     echo "Installed. First run happens on the next minute mark."
@@ -218,15 +236,23 @@ install_module() {
     echo ""
 }
 
+# ------------------------------------------------------------------------------
+# UNINSTALL
+# ------------------------------------------------------------------------------
+
 uninstall_module() {
     echo "Removing uhmwatch cron entry..."
-    if crontab -l 2>/dev/null | grep -qF -e "$TARGET" -e "$LEGACY_TARGET"; then
-        crontab -l 2>/dev/null | grep -vF -e "$TARGET" -e "$LEGACY_TARGET" | crontab -
+    if crontab -l 2>/dev/null | grep -qF -e "$target_path" -e "$legacy_target_path"; then
+        crontab -l 2>/dev/null | grep -vF -e "$target_path" -e "$legacy_target_path" | crontab -
         echo "Cron entry removed. The uhmwatch.sh script was not deleted."
     else
-        echo "No cron entry found for $TARGET."
+        echo "No cron entry found for $target_path."
     fi
 }
+
+# ------------------------------------------------------------------------------
+# ACTIONS
+# ------------------------------------------------------------------------------
 
 case "${1:-}" in
     install)
@@ -239,58 +265,60 @@ case "${1:-}" in
         ;;
 esac
 
-# -- Checks (default action -- this is what cron runs) --------------------------
+# ------------------------------------------------------------------------------
+# CHECKS
+# ------------------------------------------------------------------------------
 
 # Load UNIFI_TYPE from uhm.env. Safe key=value parsing - file is never
 # sourced to prevent code execution.
-_UHM_CONF="/etc/uhm/uhm.env"
-_load_conf() {
-    local file="$1" line key value raw_key raw_value
-    [[ ! -f "$file" ]] && { log "WARNING: uhm.env not found -- fallback"; return 1; }
-    local _owner _perms
-    _owner=$(stat -c '%U' "$file" 2>/dev/null)
-    _perms=$(stat -c '%a' "$file" 2>/dev/null)
-    if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
-        if chown root:root "$file" 2>/dev/null && chmod 600 "$file" 2>/dev/null; then
+uhm_conf="/etc/uhm/uhm.env"
+load_conf() {
+    local conf_file="$1" env_line env_key env_value raw_key raw_value
+    [[ ! -f "$conf_file" ]] && { log "WARNING: uhm.env not found -- fallback"; return 1; }
+    local file_owner file_perms
+    file_owner=$(stat -c '%U' "$conf_file" 2>/dev/null)
+    file_perms=$(stat -c '%a' "$conf_file" 2>/dev/null)
+    if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
+        if chown root:root "$conf_file" 2>/dev/null && chmod 600 "$conf_file" 2>/dev/null; then
             log "WARNING: uhm.env perms fixed -- alert"
         else
             log "ERROR: cannot fix uhm.env perms -- abort"
             return 1
         fi
     fi
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        key="${line%%=*}"
-        value="${line#*=}"
-        raw_key="$key" raw_value="$value"
-        key="${key#"${key%%[![:space:]]*}"}"
-        key="${key%"${key##*[![:space:]]}"}"
-        value="${value#"${value%%[![:space:]]*}"}"
-        value="${value%"${value##*[![:space:]]}"}"
-        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        raw_key="$env_key" raw_value="$env_value"
+        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
+        env_key="${env_key%"${env_key##*[![:space:]]}"}"
+        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
+        env_value="${env_value%"${env_value##*[![:space:]]}"}"
+        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
             log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $key"
+            log "WARNING: key $env_key"
         fi
-        if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
-            value="${value:1:$((${#value}-2))}"
-            value="${value//\\\"/\"}"
-            value="${value//\\\$/\$}"
-            value="${value//\\\`/\`}"
-            value="${value//\\\\/\\}"
+        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
+            env_value="${env_value:1:$((${#env_value}-2))}"
+            env_value="${env_value//\\\"/\"}"
+            env_value="${env_value//\\\$/\$}"
+            env_value="${env_value//\\\`/\`}"
+            env_value="${env_value//\\\\/\\}"
         fi
-        case "$key" in
+        case "$env_key" in
             UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN|RECOVERY_COOLDOWN_SECONDS|STARTUP_GRACE_SECONDS)
-                printf -v "$key" '%s' "$value"
+                printf -v "$env_key" '%s' "$env_value"
                 ;;
         esac
-    done < "$file"
+    done < "$conf_file"
 }
-_load_conf "$_UHM_CONF"
+load_conf "$uhm_conf"
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-_UH_UINT='^(0|[1-9][0-9]*)$'
+UH_UINT='^(0|[1-9][0-9]*)$'
 RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
-if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $_UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
+if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
     log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- fallback"
     RECOVERY_COOLDOWN_SECONDS=600
 fi
@@ -300,7 +328,7 @@ fi
 # script's own functional login check (below) had no such exemption and
 # alerted anyway for the exact same, already-expected condition.
 STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
-if ! [[ "$STARTUP_GRACE_SECONDS" =~ $_UH_UINT ]]; then
+if ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
     log "WARNING: STARTUP_GRACE_SECONDS invalid -- fallback"
     STARTUP_GRACE_SECONDS=120
 fi
@@ -308,9 +336,9 @@ fi
 # Time since uhmd.service itself became active -- same reasoning and same
 # config key as uhmalert.sh's own uhmd_started_at().
 uhmd_started_at() {
-    local ts
-    ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
-    date -d "$ts" +%s 2>/dev/null || echo 0
+    local started_ts
+    started_ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
+    date -d "$started_ts" +%s 2>/dev/null || echo 0
 }
 if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
     UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
@@ -320,18 +348,18 @@ fi
 
 check_uhmd() {
     if systemctl is-active --quiet uhmd.service; then
-        _clear_recovery_attempt "uhmd.service"
+        clear_recovery_attempt "uhmd.service"
     else
         log "WARNING: uhmd OFFLINE"
-        if _recovery_on_cooldown "uhmd.service"; then
+        if recovery_on_cooldown "uhmd.service"; then
             log "INFO: uhmd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "uhmd.service"
+        mark_recovery_attempt "uhmd.service"
         systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
             log "FIX: uhmd restarted"
-            _clear_recovery_attempt "uhmd.service"
+            clear_recovery_attempt "uhmd.service"
         else
             log "WARNING: uhmd restart FAILED -- alert"
         fi
@@ -345,18 +373,18 @@ check_ualert() {
         return
     fi
     if systemctl is-active --quiet uhmalert.service; then
-        _clear_recovery_attempt "uhmalert.service"
+        clear_recovery_attempt "uhmalert.service"
     else
         log "WARNING: uhmalert OFFLINE"
-        if _recovery_on_cooldown "uhmalert.service"; then
+        if recovery_on_cooldown "uhmalert.service"; then
             log "INFO: uhmalert recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "uhmalert.service"
+        mark_recovery_attempt "uhmalert.service"
         systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
             log "FIX: uhmalert restarted"
-            _clear_recovery_attempt "uhmalert.service"
+            clear_recovery_attempt "uhmalert.service"
         else
             log "WARNING: uhmalert restart FAILED -- alert"
         fi
@@ -372,42 +400,42 @@ check_pydhcpd() {
     # check here (pydhcpd exposes no HTTP API to probe like UniFi does) --
     # is-active is the only signal available, same shape as check_uhmd above.
     if systemctl is-active --quiet pydhcpd.service; then
-        _clear_recovery_attempt "pydhcpd.service"
+        clear_recovery_attempt "pydhcpd.service"
     else
-        if _uhm_reload_in_progress; then
+        if uhm_reload_in_progress; then
             log "INFO: pydhcpd down mid-reload (uhmleases.sh) -- skip"
             return
         fi
         log "WARNING: pydhcpd OFFLINE"
-        if _recovery_on_cooldown "pydhcpd.service"; then
+        if recovery_on_cooldown "pydhcpd.service"; then
             log "INFO: pydhcpd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "pydhcpd.service"
+        mark_recovery_attempt "pydhcpd.service"
         systemctl reset-failed pydhcpd.service 2>/dev/null || true
         if systemctl restart pydhcpd.service; then
             log "FIX: pydhcpd restarted"
-            _clear_recovery_attempt "pydhcpd.service"
+            clear_recovery_attempt "pydhcpd.service"
         else
             log "WARNING: pydhcpd restart FAILED -- alert"
         fi
     fi
 }
 
-# Returns 0 (true) if <service> became active less than RESTART_GRACE_SECONDS
+# Returns 0 (true) if <service> became active less than restart_grace_seconds
 # ago -- gives it time to actually finish booting (UOS Server/UniFi Network
 # can take a couple of minutes) before the next cron tick (every min)
 # restarts it again mid-boot, which would otherwise never let it converge.
-RESTART_GRACE_SECONDS=180
-_recently_restarted() {
-    local svc="$1" active_since elapsed
-    active_since=$(systemctl show -p ActiveEnterTimestamp --value "$svc" 2>/dev/null)
+restart_grace_seconds=180
+recently_restarted() {
+    local service_name="$1" active_since elapsed_seconds
+    active_since=$(systemctl show -p ActiveEnterTimestamp --value "$service_name" 2>/dev/null)
     [[ -z "$active_since" ]] && return 1
-    elapsed=$(( $(date +%s) - $(date -d "$active_since" +%s 2>/dev/null || echo 0) ))
-    (( elapsed < RESTART_GRACE_SECONDS ))
+    elapsed_seconds=$(( $(date +%s) - $(date -d "$active_since" +%s 2>/dev/null || echo 0) ))
+    (( elapsed_seconds < restart_grace_seconds ))
 }
 
-# Recovery cooldown: distinct from _recently_restarted above, which only
+# Recovery cooldown: distinct from recently_restarted above, which only
 # tracks a *successful* start. This tracks the last recovery *attempt*
 # (reset-failed + restart) regardless of outcome, so a persistently broken
 # service (controller down, credentials wrong, etc.) isn't hammered with a
@@ -415,27 +443,27 @@ _recently_restarted() {
 # otherwise get reset-failed straight through by this watchdog, effectively
 # disabling systemd's own circuit breaker. State lives under /run (tmpfs),
 # so a reboot naturally clears any stale cooldowns.
-RECOVERY_STATE_DIR="/run/uhmwatch"
-_recovery_on_cooldown() {
-    local svc="$1"
-    local state_file="${RECOVERY_STATE_DIR}/${svc}.attempted_at" last now
+recovery_state_dir="/run/uhmwatch"
+recovery_on_cooldown() {
+    local service_name="$1"
+    local state_file="${recovery_state_dir}/${service_name}.attempted_at" last_attempt now_epoch
     [[ -f "$state_file" ]] || return 1
-    last=$(cat "$state_file" 2>/dev/null || echo 0)
-    now=$(date +%s)
-    (( (now - last) < RECOVERY_COOLDOWN_SECONDS ))
+    last_attempt=$(cat "$state_file" 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+    (( (now_epoch - last_attempt) < RECOVERY_COOLDOWN_SECONDS ))
 }
 
-_mark_recovery_attempt() {
-    mkdir -p "$RECOVERY_STATE_DIR"
-    date +%s > "${RECOVERY_STATE_DIR}/${1}.attempted_at"
+mark_recovery_attempt() {
+    mkdir -p "$recovery_state_dir"
+    date +%s > "${recovery_state_dir}/${1}.attempted_at"
 }
 
 # Called once a service is confirmed healthy again -- without this, the
 # cooldown from a resolved incident would still throttle a genuinely new,
 # unrelated failure that happens to occur within RECOVERY_COOLDOWN_SECONDS
 # of the earlier (already-fixed) one.
-_clear_recovery_attempt() {
-    rm -f "${RECOVERY_STATE_DIR}/${1}.attempted_at" 2>/dev/null || true
+clear_recovery_attempt() {
+    rm -f "${recovery_state_dir}/${1}.attempted_at" 2>/dev/null || true
 }
 
 check_uosserver() {
@@ -446,15 +474,15 @@ check_uosserver() {
     # unrelated host-level Mongo issue.
     if ! systemctl is-active --quiet uosserver.service; then
         log "WARNING: UOS OFFLINE"
-        if _recovery_on_cooldown "uosserver.service"; then
+        if recovery_on_cooldown "uosserver.service"; then
             log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "uosserver.service"
+        mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
             log "FIX: uosserver started"
-            _clear_recovery_attempt "uosserver.service"
+            clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver start FAILED -- alert"
         fi
@@ -474,62 +502,62 @@ check_uosserver() {
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':11443\b'; then
             log "WARNING: UOS BROKEN_PORTS"
-            if _recently_restarted "uosserver.service"; then
+            if recently_restarted "uosserver.service"; then
                 log "INFO: uosserver restarted recently -- skip"
                 return
             fi
-            if _recovery_on_cooldown "uosserver.service"; then
+            if recovery_on_cooldown "uosserver.service"; then
                 log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
                 return
             fi
-            _mark_recovery_attempt "uosserver.service"
+            mark_recovery_attempt "uosserver.service"
             systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
                 log "FIX: uosserver restarted"
-                _clear_recovery_attempt "uosserver.service"
+                clear_recovery_attempt "uosserver.service"
             else
                 log "WARNING: uosserver restart FAILED -- alert"
             fi
         else
-            _clear_recovery_attempt "uosserver.service"
+            clear_recovery_attempt "uosserver.service"
         fi
         return
     fi
 
-    local login_url payload http_code
+    local login_url login_payload http_code
     login_url="${UNIFI_CONTROLLER_URL}/api/auth/login"
-    payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
+    login_payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    local _tls_opts=(-k)
-    [[ -n "${UNIFI_CERT_PIN:-}" ]] && _tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
-    http_code=$(curl -s "${_tls_opts[@]}" -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    local tls_opts=(-k)
+    [[ -n "${UNIFI_CERT_PIN:-}" ]] && tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
+    http_code=$(curl -s "${tls_opts[@]}" -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
         -X POST "$login_url" -H "Content-Type: application/json" \
-        --data-binary @- <<< "$payload" 2>/dev/null || true)
+        --data-binary @- <<< "$login_payload" 2>/dev/null || true)
     http_code="${http_code:-000}"
     if [[ "$http_code" == "200" ]]; then
-        _clear_recovery_attempt "uosserver.service"
+        clear_recovery_attempt "uosserver.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
-        local _uhmd_start _now
-        _uhmd_start=$(uhmd_started_at)
-        _now=$(date +%s)
-        if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
+        local uhmd_start now_epoch
+        uhmd_start=$(uhmd_started_at)
+        now_epoch=$(date +%s)
+        if (( uhmd_start > 0 )) && (( now_epoch - uhmd_start < STARTUP_GRACE_SECONDS )); then
             log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
-        if _recently_restarted "uosserver.service"; then
+        if recently_restarted "uosserver.service"; then
             log "INFO: uosserver restarted recently -- skip"
             return
         fi
-        if _recovery_on_cooldown "uosserver.service"; then
+        if recovery_on_cooldown "uosserver.service"; then
             log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "uosserver.service"
+        mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
             log "FIX: uosserver restarted (login failed)"
-            _clear_recovery_attempt "uosserver.service"
+            clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver restart FAILED -- alert"
         fi
@@ -545,15 +573,15 @@ check_uosserver() {
 check_unifi_classic() {
     if ! systemctl is-active --quiet unifi.service; then
         log "WARNING: UniFi (classic) OFFLINE"
-        if _recovery_on_cooldown "unifi.service"; then
+        if recovery_on_cooldown "unifi.service"; then
             log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "unifi.service"
+        mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
             log "FIX: unifi started"
-            _clear_recovery_attempt "unifi.service"
+            clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service start FAILED -- alert"
         fi
@@ -569,62 +597,62 @@ check_unifi_classic() {
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
             log "WARNING: UniFi (classic) BROKEN_PORTS"
-            if _recently_restarted "unifi.service"; then
+            if recently_restarted "unifi.service"; then
                 log "INFO: unifi restarted recently -- skip"
                 return
             fi
-            if _recovery_on_cooldown "unifi.service"; then
+            if recovery_on_cooldown "unifi.service"; then
                 log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
                 return
             fi
-            _mark_recovery_attempt "unifi.service"
+            mark_recovery_attempt "unifi.service"
             systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
                 log "FIX: unifi restarted"
-                _clear_recovery_attempt "unifi.service"
+                clear_recovery_attempt "unifi.service"
             else
                 log "WARNING: unifi.service restart FAILED -- alert"
             fi
         else
-            _clear_recovery_attempt "unifi.service"
+            clear_recovery_attempt "unifi.service"
         fi
         return
     fi
 
-    local login_url payload http_code
+    local login_url login_payload http_code
     login_url="${UNIFI_CONTROLLER_URL}/api/login"
-    payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
+    login_payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    local _tls_opts=(-k)
-    [[ -n "${UNIFI_CERT_PIN:-}" ]] && _tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
-    http_code=$(curl -s "${_tls_opts[@]}" -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    local tls_opts=(-k)
+    [[ -n "${UNIFI_CERT_PIN:-}" ]] && tls_opts=(-k --pinnedpubkey "$UNIFI_CERT_PIN")
+    http_code=$(curl -s "${tls_opts[@]}" -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
         -X POST "$login_url" -H "Content-Type: application/json" \
-        --data-binary @- <<< "$payload" 2>/dev/null || true)
+        --data-binary @- <<< "$login_payload" 2>/dev/null || true)
     http_code="${http_code:-000}"
     if [[ "$http_code" == "200" ]]; then
-        _clear_recovery_attempt "unifi.service"
+        clear_recovery_attempt "unifi.service"
     elif [[ "$http_code" == "000" || "$http_code" =~ ^5 ]]; then
-        local _uhmd_start _now
-        _uhmd_start=$(uhmd_started_at)
-        _now=$(date +%s)
-        if (( _uhmd_start > 0 )) && (( _now - _uhmd_start < STARTUP_GRACE_SECONDS )); then
+        local uhmd_start now_epoch
+        uhmd_start=$(uhmd_started_at)
+        now_epoch=$(date +%s)
+        if (( uhmd_start > 0 )) && (( now_epoch - uhmd_start < STARTUP_GRACE_SECONDS )); then
             log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
         log "WARNING: UniFi login attempt failed (HTTP $http_code)"
-        if _recently_restarted "unifi.service"; then
+        if recently_restarted "unifi.service"; then
             log "INFO: unifi restarted recently -- skip"
             return
         fi
-        if _recovery_on_cooldown "unifi.service"; then
+        if recovery_on_cooldown "unifi.service"; then
             log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
         fi
-        _mark_recovery_attempt "unifi.service"
+        mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
             log "FIX: unifi restarted (login failed)"
-            _clear_recovery_attempt "unifi.service"
+            clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service restart FAILED -- alert"
         fi
@@ -636,6 +664,10 @@ check_unifi_classic() {
         log "WARNING: check uhm.env, unifi.service is responding -- alert"
     fi
 }
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
 
 check_uhmd
 check_ualert

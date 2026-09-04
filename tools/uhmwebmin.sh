@@ -39,6 +39,8 @@
 
 set -uo pipefail
 
+# USAGE
+# Answered before any check: --help must work without root
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -56,38 +58,42 @@ case "${1:-}" in
         ;;
 esac
 
-## root check
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# root check
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
 # prevent overlapping runs
-SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$SCRIPT_LOCK")
-exec 200>"$SCRIPT_LOCK"
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
 if ! flock -n 200; then
     echo "ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
-# DEPENDENCIES
-for dep in coreutils util-linux ncurses-bin grep sed systemd mawk; do
-    if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: missing dependency '$dep' -- abort" >&2
+# dependencies
+for dep_pkg in coreutils util-linux ncurses-bin grep sed systemd mawk; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        echo "ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
     fi
 done
 
-# DEPENDENCIES (external repo)
-for dep in webmin; do
-    if ! dpkg -s "$dep" &>/dev/null; then
+# dependencies (external repo)
+for dep_pkg in webmin; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
         echo "ERROR: 'webmin' is not installed -- abort" >&2
         exit 1
     fi
 done
 
-# LOCAL USER detection
+# local_user detection
 detect_local_user() {
     local uid_min uid_max
     local user uid best_user="" best_uid=999999
@@ -126,9 +132,17 @@ if ! local_user=$(detect_local_user); then
     echo "WARNING: no local user with sudo found -- alert" >&2
 fi
 
-MODNAME="uhm"
-MODDIR="/usr/share/webmin/$MODNAME"
-ETCDIR="/etc/webmin/$MODNAME"
+# ------------------------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------------------------
+
+module_name="uhm"
+module_dir="/usr/share/webmin/$module_name"
+module_conf_dir="/etc/webmin/$module_name"
+
+# ------------------------------------------------------------------------------
+# INSTALL
+# ------------------------------------------------------------------------------
 
 install_module() {
     echo ""
@@ -139,18 +153,16 @@ install_module() {
 
     echo "Creating module structure..."
 
-    for _d in "$MODDIR/images" "$MODDIR/lang" "$ETCDIR"; do
-        if ! mkdir -p "$_d"; then
-            echo "ERROR: cannot create $_d -- abort" >&2
+    for module_subdir in "$module_dir/images" "$module_dir/lang" "$module_conf_dir"; do
+        if ! mkdir -p "$module_subdir"; then
+            echo "ERROR: cannot create $module_subdir -- abort" >&2
             exit 1
         fi
     done
-    unset _d
+    unset module_subdir
 
-    # ============================================================
-    # 1. api.cgi (bash -- AJAX endpoint for log polling)
-    # ============================================================
-    cat > "$MODDIR/api.cgi" <<'APICGI'
+    # api.cgi -- AJAX endpoint for log polling, in bash
+    cat > "$module_dir/api.cgi" <<'APICGI'
 #!/bin/bash
 # api.cgi -- AJAX endpoint for uhmd log viewer
 # Reads /var/log/uhm.log via byte offset (never stalls like tail -f)
@@ -165,8 +177,8 @@ set -uo pipefail
 # Fixed, not configurable from Webmin: every uhm component writes to this
 # path hardcoded, so a value changed here could only ever point the viewer
 # at a file nothing writes.
-LOG_FILE="/var/log/uhm.log"
-MAX_GREP=3000
+log_file="/var/log/uhm.log"
+max_grep_lines=3000
 
 echo "Content-Type: application/json"
 echo "Cache-Control: no-store"
@@ -174,119 +186,119 @@ echo ""
 
 # Parse QUERY_STRING
 declare -A params
-IFS='&' read -ra pairs <<< "${QUERY_STRING:-}"
-for pair in "${pairs[@]}"; do
-    IFS='=' read -r key val <<< "$pair"
-    val="${val//+/ }"
-    val=$(printf '%b' "$(printf '%s' "$val" | sed -E 's/%([0-9A-Fa-f]{2})/\\x\1/g')" 2>/dev/null || printf '%s' "$val")
-    params["$key"]="$val"
+IFS='&' read -ra query_pairs <<< "${QUERY_STRING:-}"
+for query_pair in "${query_pairs[@]}"; do
+    IFS='=' read -r param_key param_value <<< "$query_pair"
+    param_value="${param_value//+/ }"
+    param_value=$(printf '%b' "$(printf '%s' "$param_value" | sed -E 's/%([0-9A-Fa-f]{2})/\\x\1/g')" 2>/dev/null || printf '%s' "$param_value")
+    params["$param_key"]="$param_value"
 done
 
-action="${params[action]:-tail}"
+api_action="${params[action]:-tail}"
 
 json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\t'/\\t}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\b'/\\b}"
-    s="${s//$'\f'/\\f}"
-    printf '%s' "$s"
+    local escaped_text="$1"
+    escaped_text="${escaped_text//\\/\\\\}"
+    escaped_text="${escaped_text//\"/\\\"}"
+    escaped_text="${escaped_text//$'\t'/\\t}"
+    escaped_text="${escaped_text//$'\n'/\\n}"
+    escaped_text="${escaped_text//$'\r'/\\r}"
+    escaped_text="${escaped_text//$'\b'/\\b}"
+    escaped_text="${escaped_text//$'\f'/\\f}"
+    printf '%s' "$escaped_text"
 }
 
 # -- Status ----------------------------------------------------
-if [[ "$action" == "status" ]]; then
-    active=0
-    pid=""
-    uptime=""
-    mem=""
-    cpu=""
+if [[ "$api_action" == "status" ]]; then
+    service_active=0
+    service_pid=""
+    service_uptime=""
+    service_mem=""
+    service_cpu=""
     status_out=$(systemctl status uhmd.service 2>&1 || true)
     if echo "$status_out" | grep -q 'Active: active (running)'; then
-        active=1
+        service_active=1
     fi
-    pid=$(echo "$status_out" | grep -oP 'Main PID:\s+\K\d+' || true)
-    uptime=$(echo "$status_out" | grep -oP 'Active:.*;\s+\K.+' | sed 's/\s*$//' || true)
-    mem=$(echo "$status_out" | grep -oP 'Memory:\s+\K[^\(]+' | sed 's/\s*$//' || true)
-    cpu=$(echo "$status_out" | grep -oP 'CPU:\s+\K.+' | sed 's/\s*$//' || true)
+    service_pid=$(echo "$status_out" | grep -oP 'Main PID:\s+\K\d+' || true)
+    service_uptime=$(echo "$status_out" | grep -oP 'Active:.*;\s+\K.+' | sed 's/\s*$//' || true)
+    service_mem=$(echo "$status_out" | grep -oP 'Memory:\s+\K[^\(]+' | sed 's/\s*$//' || true)
+    service_cpu=$(echo "$status_out" | grep -oP 'CPU:\s+\K.+' | sed 's/\s*$//' || true)
     printf '{"active":%d,"pid":"%s","uptime":"%s","mem":"%s","cpu":"%s"}' \
-        "$active" "$(json_escape "$pid")" "$(json_escape "$uptime")" \
-        "$(json_escape "$mem")" "$(json_escape "$cpu")"
+        "$service_active" "$(json_escape "$service_pid")" "$(json_escape "$service_uptime")" \
+        "$(json_escape "$service_mem")" "$(json_escape "$service_cpu")"
     exit 0
 fi
 
 # -- File checks -----------------------------------------------
-if [[ ! -f "$LOG_FILE" ]]; then
+if [[ ! -f "$log_file" ]]; then
     echo '{"error":"Log file not found","rows":[]}'
     exit 0
 fi
 
-file_size=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+file_size=$(stat -c%s "$log_file" 2>/dev/null || echo 0)
 
 # -- Grep ------------------------------------------------------
-if [[ "$action" == "grep" ]]; then
-    term="${params[q]:-}"
-    if [[ -z "$term" ]]; then
+if [[ "$api_action" == "grep" ]]; then
+    search_term="${params[q]:-}"
+    if [[ -z "$search_term" ]]; then
         echo '{"error":"Empty search term","rows":[]}'
         exit 0
     fi
     # Sanitize
-    if [[ ! "$term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
+    if [[ ! "$search_term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
         echo '{"error":"Invalid search term","rows":[]}'
         exit 0
     fi
 
-    output=$(timeout 20 grep -Fia -e "$term" -- "$LOG_FILE" 2>/dev/null | tail -n "$MAX_GREP" || true)
+    grep_output=$(timeout 20 grep -Fia -e "$search_term" -- "$log_file" 2>/dev/null | tail -n "$max_grep_lines" || true)
 
     printf '{"rows":['
-    first=1
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
+    first_row=1
+    while IFS= read -r log_line; do
+        [[ -z "$log_line" ]] && continue
         # Skip separator lines
-        [[ "$line" == -* ]] && continue
+        [[ "$log_line" == -* ]] && continue
 
-        ts="" level="" msg=""
-        if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
-            ts="${BASH_REMATCH[1]}"
-            level="${BASH_REMATCH[2]}"
-            msg="${BASH_REMATCH[3]}"
-        elif [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
-            ts="${BASH_REMATCH[1]}"
-            level="STATUS"
-            msg="${BASH_REMATCH[2]}"
+        row_ts="" row_level="" row_msg=""
+        if [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
+            row_ts="${BASH_REMATCH[1]}"
+            row_level="${BASH_REMATCH[2]}"
+            row_msg="${BASH_REMATCH[3]}"
+        elif [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
+            row_ts="${BASH_REMATCH[1]}"
+            row_level="STATUS"
+            row_msg="${BASH_REMATCH[2]}"
         else
             continue
         fi
 
-        [[ $first -eq 0 ]] && printf ','
-        first=0
+        [[ $first_row -eq 0 ]] && printf ','
+        first_row=0
         printf '{"ts":"%s","level":"%s","msg":"%s"}' \
-            "$(json_escape "$ts")" "$(json_escape "$level")" "$(json_escape "$msg")"
-    done <<< "$output"
+            "$(json_escape "$row_ts")" "$(json_escape "$row_level")" "$(json_escape "$row_msg")"
+    done <<< "$grep_output"
 
     printf '],"offset":%d,"grep":true}\n' "$file_size"
     exit 0
 fi
 
 # -- Tail (polling by byte offset) ----------------------------
-_UH_UINT='^(0|[1-9][0-9]*)$'
+UH_UINT='^(0|[1-9][0-9]*)$'
 
-pos="${params[pos]:-0}"
-lines="${params[lines]:-200}"
+byte_pos="${params[pos]:-0}"
+log_lines="${params[lines]:-200}"
 
 # Validate
-[[ "$pos" =~ $_UH_UINT ]] || pos=0
-[[ "$lines" =~ $_UH_UINT ]] || lines=200
-(( lines > 5000 )) && lines=5000
-(( lines < 50 )) && lines=50
+[[ "$byte_pos" =~ $UH_UINT ]] || byte_pos=0
+[[ "$log_lines" =~ $UH_UINT ]] || log_lines=200
+(( log_lines > 5000 )) && log_lines=5000
+(( log_lines < 50 )) && log_lines=50
 
 # First load or log rotated: read last N lines
 if (( pos == 0 )) || (( pos > file_size )); then
-    data=$(tail -n "$lines" "$LOG_FILE" 2>/dev/null || true)
-    pos=$file_size
-    rotated=true
+    log_data=$(tail -n "$log_lines" "$log_file" 2>/dev/null || true)
+    byte_pos=$file_size
+    log_rotated=true
 else
     # No new data
     if (( pos >= file_size )); then
@@ -295,45 +307,43 @@ else
     fi
     # Read from last position
     bytes_to_read=$(( file_size - pos ))
-    data=$(tail -c +"$(( pos + 1 ))" "$LOG_FILE" 2>/dev/null | head -c "$bytes_to_read" || true)
-    pos=$file_size
-    rotated=false
+    log_data=$(tail -c +"$(( pos + 1 ))" "$log_file" 2>/dev/null | head -c "$bytes_to_read" || true)
+    byte_pos=$file_size
+    log_rotated=false
 fi
 
 printf '{"rows":['
-first=1
-while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    [[ "$line" == -* ]] && continue
+first_row=1
+while IFS= read -r log_line; do
+    [[ -z "$log_line" ]] && continue
+    [[ "$log_line" == -* ]] && continue
 
-    ts="" level="" msg=""
-    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
-        ts="${BASH_REMATCH[1]}"
-        level="${BASH_REMATCH[2]}"
-        msg="${BASH_REMATCH[3]}"
-    elif [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
-        ts="${BASH_REMATCH[1]}"
-        level="STATUS"
-        msg="${BASH_REMATCH[2]}"
+    row_ts="" row_level="" row_msg=""
+    if [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
+        row_ts="${BASH_REMATCH[1]}"
+        row_level="${BASH_REMATCH[2]}"
+        row_msg="${BASH_REMATCH[3]}"
+    elif [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
+        row_ts="${BASH_REMATCH[1]}"
+        row_level="STATUS"
+        row_msg="${BASH_REMATCH[2]}"
     else
         continue
     fi
 
-    [[ $first -eq 0 ]] && printf ','
-    first=0
+    [[ $first_row -eq 0 ]] && printf ','
+    first_row=0
     printf '{"ts":"%s","level":"%s","msg":"%s"}' \
-        "$(json_escape "$ts")" "$(json_escape "$level")" "$(json_escape "$msg")"
-done <<< "$data"
+        "$(json_escape "$row_ts")" "$(json_escape "$row_level")" "$(json_escape "$row_msg")"
+done <<< "$log_data"
 
-printf '],"pos":%d,"rotated":%s}\n' "$pos" "$rotated"
+printf '],"pos":%d,"rotated":%s}\n' "$byte_pos" "$log_rotated"
 APICGI
 
-    chmod 755 "$MODDIR/api.cgi"
+    chmod 755 "$module_dir/api.cgi"
 
-    # ============================================================
-    # 2. index.cgi (Perl -- main page with Webmin header/footer)
-    # ============================================================
-    cat > "$MODDIR/index.cgi" <<'INDEXCGI'
+    # index.cgi -- main page with Webmin header/footer, in Perl
+    cat > "$module_dir/index.cgi" <<'INDEXCGI'
 #!/usr/bin/perl
 # UHM Log Viewer -- Main interface
 use strict;
@@ -584,7 +594,8 @@ try{if(localStorage.getItem('uh_dm')==='1'){dm=true;document.getElementById('uhm
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function hl(t,q){if(!q)return esc(t);try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return esc(t).replace(r,'<span class="hl">$1</span>')}catch(e){return esc(t)}}
-function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
+var UH_MAC_RE=/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi;
+function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
 function mf(r){var lv=document.getElementById('uhLv').value;if(lv&&r.level!==lv)return false;var q=(document.getElementById('uhQ').value||'').toLowerCase().trim();if(!grep&&q&&r._i.indexOf(q)===-1)return false;return true}
 
@@ -686,12 +697,10 @@ HTMLBLOCK
 &ui_print_footer("/", $text{'index'});
 INDEXCGI
 
-    chmod 755 "$MODDIR/index.cgi"
+    chmod 755 "$module_dir/index.cgi"
 
-    # ============================================================
-    # 3. module.info
-    # ============================================================
-    cat > "$MODDIR/module.info" <<'EOF'
+    # module.info
+    cat > "$module_dir/module.info" <<'EOF'
 desc=UHM Log Viewer
 longdesc=Real-time log viewer for the uhmd daemon
 category=net
@@ -700,7 +709,7 @@ version=1.0
 depends=webmin
 EOF
 
-    cat > "$MODDIR/module.info.es" <<'EOF'
+    cat > "$module_dir/module.info.es" <<'EOF'
 desc=Visor de Log del Hotspot UniFi
 longdesc=Visor de log en tiempo real para el demonio uhmd
 category=net
@@ -709,34 +718,28 @@ version=1.0
 depends=webmin
 EOF
 
-    # ============================================================
-    # 4. Language files
-    # ============================================================
-    cat > "$MODDIR/lang/en" <<'EOF'
+    # language files
+    cat > "$module_dir/lang/en" <<'EOF'
 index_title=UHM Log Viewer
 index=Webmin Index
 EOF
 
-    cat > "$MODDIR/lang/es" <<'EOF'
+    cat > "$module_dir/lang/es" <<'EOF'
 index_title=Visor de Log del Hotspot UniFi
 index=Indice de Webmin
 EOF
 
-    # ============================================================
-    # 5. Icon (base64) -- UH (UniFi Hotspot) 48x48
-    # ============================================================
-    if ! base64 -d > "$MODDIR/images/icon.gif" << 'ICONEOF'
+    # icon in base64 -- UH (UniFi Hotspot) 48x48
+    if ! base64 -d > "$module_dir/images/icon.gif" << 'ICONEOF'
 R0lGODdhMAAwAIUAAP////v8/vv8/fj6/Ovw9+rv9uPq8+Hn8tfh78LR5rnK4rTH4LLF37DD3qO62aO52aG42IKhy32dyXiZx3eZx3SWxW6Sw22QwmOJvmCHvT5trzpqrTNlqjJkqi5hqCpepyBXox1UoRxToRpSoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwAAAAAMAAwAEAI+QBHCBxIsKDBgwgTKlzIsGFDDQAiPiB4ISIACgIhSix4IGIBhwQ1Apg4sGJEjCNEkhzYEcBHkDBjypxJs6bNmzgdqqRoEeVOgi1fxoxgEQKHDxMCRFQw8CdLjzmjSp1KtarVq1izLnQ6wuTFjBZXCgwqk6tXnxbTqhUK8oNFBgQlWMQAdiNQqDQzLDAwQACBBBNAhAzLEa/Ww4gTK17MuLHjx5AjS568lXDJnnVHFnZZ1rLAs5nFjiAb0yzmlJ7HGgZp+mRmtWnZOtxg0QFBCxYrhN4s22FLAyIGNrDYYfddzjJDMIAdEYGHpqlHr6ZMvbr169iza5cZEAA7
 ICONEOF
     then
-        rm -f "$MODDIR/images/icon.gif"
+        rm -f "$module_dir/images/icon.gif"
         echo "INFO: could not write module icon -- degraded" >&2
     fi
 
-    # ============================================================
-    # 6. Library (required by Webmin config system)
-    # ============================================================
-    cat > "$MODDIR/uhm-lib.pl" <<'EOF'
+    # library required by the Webmin config system
+    cat > "$module_dir/uhm-lib.pl" <<'EOF'
 #!/usr/bin/perl
 # uhm-lib.pl
 
@@ -746,35 +749,30 @@ do '../ui-lib.pl';
 
 1;
 EOF
-    chmod 755 "$MODDIR/uhm-lib.pl"
+    chmod 755 "$module_dir/uhm-lib.pl"
 
-    # ============================================================
-    # 7. config (no settings: the log path is fixed in the viewer)
-    # ============================================================
-    : > "$ETCDIR/config"
+    # config -- no settings, the log path is fixed in the viewer
+    : > "$module_conf_dir/config"
 
-    # ============================================================
-    # 8. Permissions & registration
-    # ============================================================
-    chown -R root:root "$MODDIR" "$ETCDIR"
-    chmod -R 755 "$MODDIR"
-    chmod 644 "$MODDIR"/*.info* "$MODDIR/lang/"* 2>/dev/null || true
-    chmod 755 "$MODDIR"/*.cgi "$MODDIR/uhm-lib.pl" 2>/dev/null || true
-    chmod 644 "$MODDIR/images/"* 2>/dev/null || true
+    # permissions and registration
+    chown -R root:root "$module_dir" "$module_conf_dir"
+    chmod -R 755 "$module_dir"
+    chmod 644 "$module_dir"/*.info* "$module_dir/lang/"* 2>/dev/null || true
+    chmod 755 "$module_dir"/*.cgi "$module_dir/uhm-lib.pl" 2>/dev/null || true
+    chmod 644 "$module_dir/images/"* 2>/dev/null || true
 
     if [[ -f /etc/webmin/webmin.acl ]]; then
-        for _acct in root "$local_user"; do
-            [ -z "$_acct" ] && continue
-            if ! grep -qE "^${_acct}:" /etc/webmin/webmin.acl; then
-                echo "WARNING: no ${_acct}: line in webmin.acl -- alert" >&2
-                echo "WARNING: grant access to the uhm module manually" >&2
+        for webmin_account in root "$local_user"; do
+            [ -z "$webmin_account" ] && continue
+            if ! grep -qE "^${webmin_account}:" /etc/webmin/webmin.acl; then
+                echo "INFO: no ${webmin_account}: line in webmin.acl -- skip"
                 continue
             fi
-            grep -qE "^${_acct}:.*\\b${MODNAME}\\b" /etc/webmin/webmin.acl && continue
-            sed -i "s/\\(^${_acct}:.*\\)/\\1 ${MODNAME}/" /etc/webmin/webmin.acl
-            echo "Module added to webmin.acl for ${_acct}"
+            grep -qE "^${webmin_account}:.*\\b${module_name}\\b" /etc/webmin/webmin.acl && continue
+            sed -i "s/\\(^${webmin_account}:.*\\)/\\1 ${module_name}/" /etc/webmin/webmin.acl
+            echo "Module added to webmin.acl for ${webmin_account}"
         done
-        unset _acct
+        unset webmin_account
     else
         echo "WARNING: webmin.acl not found -- alert" >&2
     fi
@@ -789,13 +787,17 @@ EOF
     echo "UHM Log Viewer installed!"
     echo "=========================================="
     echo ""
-    echo "Module location: $MODDIR"
+    echo "Module location: $module_dir"
     echo "Category: Networking"
-    echo "URL: https://localhost:10000/$MODNAME/"
+    echo "URL: https://localhost:10000/$module_name/"
     echo ""
     echo "Please log out and log back into Webmin."
     echo ""
 }
+
+# ------------------------------------------------------------------------------
+# UNINSTALL
+# ------------------------------------------------------------------------------
 
 uninstall_module() {
     echo ""
@@ -804,17 +806,17 @@ uninstall_module() {
     echo "=========================================="
     echo ""
 
-    if [ ! -d "$MODDIR" ]; then
+    if [ ! -d "$module_dir" ]; then
         echo "Module is not installed."
         return 1
     fi
 
-    rm -rf "$MODDIR"
-    rm -rf "$ETCDIR"
+    rm -rf "$module_dir"
+    rm -rf "$module_conf_dir"
     echo "Module directories removed"
 
-    if [[ -f /etc/webmin/webmin.acl ]] && grep -q "$MODNAME" /etc/webmin/webmin.acl; then
-        sed -i.bak "s/[[:space:]]\+${MODNAME}\b//g" /etc/webmin/webmin.acl
+    if [[ -f /etc/webmin/webmin.acl ]] && grep -q "$module_name" /etc/webmin/webmin.acl; then
+        sed -i.bak "s/[[:space:]]\+${module_name}\b//g" /etc/webmin/webmin.acl
         rm -f /etc/webmin/webmin.acl.bak
         echo "Module removed from webmin.acl"
     fi
@@ -828,6 +830,10 @@ uninstall_module() {
     echo "=========================================="
     echo ""
 }
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
 
 show_menu() {
     clear
@@ -854,8 +860,8 @@ main() {
 
     while true; do
         show_menu
-        read -r option
-        case $option in
+        read -r menu_option
+        case $menu_option in
             1) install_module; echo ""; read -rp "Press Enter to continue..." _ ;;
             2) uninstall_module || true; echo ""; read -rp "Press Enter to continue..." _ ;;
             3|"") echo ""; exit 0 ;;

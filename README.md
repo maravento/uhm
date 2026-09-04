@@ -566,7 +566,7 @@ journalctl -u uhmd -f
         <li>Never renamed, moved or overwritten if already present: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> if it exists, and the logrotate config — they are the administrator's own live/customized data. If missing (e.g. a partial/broken install), the ACL files and the logrotate config are recreated empty with a WARNING and <code>uhmiptables.sh</code> is redeployed from the minimal template; existing ones are left exactly as they are. <code>uhm.env</code> is the one exception: <code>--update</code> never creates or checks it — a missing <code>uhm.env</code> is not detected or repaired by this mode, only by a fresh (non-<code>--update</code>) install</li>
         <li><b>Pauses services before replacing their scripts, resumes them after:</b> <code>uhmd.service</code> and <code>uhmalert.service</code> (if installed) are stopped — only if they were actually active — before any file is overwritten, and restarted once the update finishes; <code>uhmwatch</code>'s cron entry (not a systemd service) is removed for the same window and re-registered afterward. Nothing that was already stopped/disabled beforehand is started. <code>pydhcpd</code> is deliberately left alone — it's a separate project this update never touches, and stopping it would cut DHCP for the whole LAN, not just the hotspot</li>
         <li>Removes any stale <code>@hourly</code> uhmreload.sh cron entry (superseded by the daemon's own safety-net reload)</li>
-        <li>Creates a timestamped backup of current scripts before overwriting, at <code>/etc/uhm/bak/&lt;YYYYMMDD_HHMMSS&gt;/</code>; keeps the last 5 runs, pruning older ones automatically</li>
+        <li>Runs <code>bkstack.sh</code> before overwriting anything, which writes a full zip of <code>/etc/uhm</code>, <code>/etc/pydhcp</code> and <code>/etc/acl</code> to <code>/etc/bak/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip</code>; warns and continues if it is not installed</li>
       </ul>
      </td>
     <td style="width: 50%; vertical-align: top;">
@@ -576,7 +576,7 @@ journalctl -u uhmd -f
         <li>Nunca se renombran, mueven ni sobrescriben si ya existen: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> si existe, ni la configuración de logrotate — son datos propios y personalizados del administrador. Si faltan (ej. una instalación parcial/rota), los archivos ACL y la configuración de logrotate se recrean vacíos con un WARNING y <code>uhmiptables.sh</code> se vuelve a desplegar desde la plantilla mínima; los que ya existen quedan exactamente como estaban. <code>uhm.env</code> es la única excepción: <code>--update</code> nunca lo crea ni lo verifica — un <code>uhm.env</code> faltante no se detecta ni se repara en este modo, solo en una instalación nueva (sin <code>--update</code>)</li>
         <li><b>Pausa los servicios antes de reemplazar sus scripts, los reanuda al terminar:</b> <code>uhmd.service</code> y <code>uhmalert.service</code> (si está instalado) se detienen — solo si estaban activos — antes de sobrescribir cualquier archivo, y se reinician al finalizar la actualización; la entrada de cron de <code>uhmwatch</code> (no es un servicio systemd) se elimina durante esa misma ventana y se vuelve a registrar después. Nada que ya estuviera detenido/desactivado de antemano se inicia. <code>pydhcpd</code> se deja intencionalmente en paz — es un proyecto aparte que esta actualización nunca toca, y detenerlo cortaría el DHCP de toda la LAN, no solo del hotspot</li>
         <li>Elimina cualquier entrada de cron <code>@hourly</code> de uhmreload.sh residual (reemplazada por el reload de seguridad interno del daemon)</li>
-        <li>Crea un backup con timestamp de los scripts actuales antes de sobrescribir, en <code>/etc/uhm/bak/&lt;AAAAMMDD_HHMMSS&gt;/</code>; conserva las últimas 5 corridas, podando las más viejas automáticamente</li>
+        <li>Ejecuta <code>bkstack.sh</code> antes de sobrescribir nada, que escribe un zip completo de <code>/etc/uhm</code>, <code>/etc/pydhcp</code> y <code>/etc/acl</code> en <code>/etc/bak/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip</code>; si no está instalado, avisa y continúa</li>
       </ul>
      </td>
   </tr>
@@ -614,7 +614,7 @@ sudo bash uhmsetup.sh --remove
 | 3 | Remove the `uhmwatch` cron entry, and stop/disable/remove `uhmalert.service` if installed | Elimina la entrada de cron de `uhmwatch`, y detiene/deshabilita/elimina `uhmalert.service` si está instalado |
 | 4 | Uninstall the Webmin module (`uhmwebmin.sh uninstall`, if installed) | Desinstala el módulo de Webmin (`uhmwebmin.sh uninstall`, si está instalado) |
 | 5 | Remove `/etc/logrotate.d/uhm` | Elimina `/etc/logrotate.d/uhm` |
-| 6 | Remove `/etc/uhm/` and **all its contents** including `uhm.env`, ACL files, your `uhmiptables.sh`, and `bak/` (script backups accumulated by `--update` runs) | Elimina `/etc/uhm/` y **todo su contenido**, incluyendo `uhm.env`, archivos ACL, su `uhmiptables.sh`, y `bak/` (backups de scripts acumulados por corridas de `--update`) |
+| 6 | Remove `/etc/uhm/` and **all its contents** including `uhm.env`, ACL files and your `uhmiptables.sh` | Elimina `/etc/uhm/` y **todo su contenido**, incluyendo `uhm.env`, archivos ACL y su `uhmiptables.sh` |
 | 7 | Remove `/var/log/uhm.log`, rotated archives, `/var/log/uhmunifi.log`, `/var/log/uhmleases-failure.trace` and `/var/log/uhmiptables-failure.trace` | Elimina `/var/log/uhm.log`, los archivos rotados, `/var/log/uhmunifi.log`, `/var/log/uhmleases-failure.trace` y `/var/log/uhmiptables-failure.trace` |
 
 ### Files
@@ -908,6 +908,7 @@ sudo bash uhmsetup.sh
     <td style="width: 50%; vertical-align: top;">
       The daemon executes a full cycle every <code>POLL_INTERVAL</code> seconds (default 20, configured in <code>uhm.env</code>). Each cycle executes ten steps. Two independent mechanisms run inside the same cycle without being numbered steps -- see Independent Mechanisms below.
       <ol>
+        <li><b>malformed</b> — before any other step opens an ACL list, each list is checked against its own line format. In <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code> and the lease removal queue a bad line is deleted and the cycle continues — they authorize nothing. In <code>uhm-auth.txt</code> it is only reported with a <code>WARNING</code> and left in place: deleting a line there would revoke a guest's access with nothing on record but its disappearance, so it is left for <code>uhmleases.sh</code> to abort on. <code>mac-*.txt</code> is never touched here at all.</li>
         <li><b>vouchers</b> — loads the full voucher list from UniFi (<code>stat/voucher</code>) into an in-memory cache shared by the sessions step.</li>
         <li><b>snapshot</b> — captures md5 baselines of the ACL files before any modification. Taken before <b>dedup</b> so that step's <code>blockdhcp.txt</code> changes are detected as a real ACL change by the reload step below.</li>
         <li><b>dedup</b> — cross-list consistency check between <code>uhm-auth.txt</code> and <code>blockdhcp.txt</code> only: removes any MAC from <code>blockdhcp.txt</code> that also appears in <code>uhm-auth.txt</code>, and sanitizes malformed <code>blockdhcp.txt</code> lines when the MAC/IP/hostname can still be recovered (e.g. a missing trailing <code>;</code>). A line that can't be recovered (an empty required field after parsing) is discarded instead, with a WARNING logged, rather than written back still malformed — neither <code>blockdhcp.txt</code> nor <code>uhm-grace.txt</code> authorize anything, so losing a bad entry just means that MAC is treated as new again on its next lease, not a security gap. Never reads <code>mac-*.txt</code> content (see Managed MAC lists below).</li>
@@ -923,6 +924,7 @@ sudo bash uhmsetup.sh
     <td style="width: 50%; vertical-align: top;">
       El daemon ejecuta un ciclo completo cada <code>POLL_INTERVAL</code> segundos (default 20, configurado en <code>uhm.env</code>). Cada ciclo ejecuta diez pasos. Dos mecanismos independientes corren dentro del mismo ciclo sin ser pasos numerados -- ver Independent Mechanisms más abajo.
       <ol>
+        <li><b>malformed</b> — antes de que cualquier otro paso abra una lista ACL, cada lista se comprueba contra su propio formato de línea. En <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code> y la cola de remoción de leases una línea mala se elimina y el ciclo continúa — esas no autorizan nada. En <code>uhm-auth.txt</code> solo se reporta con un <code>WARNING</code> y se deja en su lugar: borrar una línea ahí le quitaría el acceso a un invitado sin más constancia que su desaparición, así que se deja para que <code>uhmleases.sh</code> aborte. <code>mac-*.txt</code> no se toca aquí en absoluto.</li>
         <li><b>vouchers</b> — carga la lista completa de vouchers desde UniFi (<code>stat/voucher</code>) en una caché en memoria compartida por el paso sessions.</li>
         <li><b>snapshot</b> — captura md5 baseline de los archivos ACL antes de cualquier modificación. Se toma antes de <b>dedup</b> para que los cambios de ese paso en <code>blockdhcp.txt</code> sean detectados como un cambio real de ACL por el paso de reload.</li>
         <li><b>dedup</b> — chequeo de consistencia solo entre <code>uhm-auth.txt</code> y <code>blockdhcp.txt</code>: elimina de <code>blockdhcp.txt</code> cualquier MAC que también aparezca en <code>uhm-auth.txt</code>, y sanea líneas malformadas de <code>blockdhcp.txt</code> cuando el MAC/IP/hostname todavía se puede recuperar (ej. un <code>;</code> final faltante). Una línea que no se puede recuperar (un campo obligatorio vacío tras el parseo) se descarta en su lugar, con un WARNING en el log, en vez de reescribirse aún malformada — ni <code>blockdhcp.txt</code> ni <code>uhm-grace.txt</code> autorizan nada, así que perder una entrada rota solo significa que esa MAC vuelve a tratarse como nueva en su próximo lease, no es un hueco de seguridad. Nunca lee el contenido de <code>mac-*.txt</code> (ver Listas de MACs gestionadas más abajo).</li>
@@ -946,8 +948,8 @@ sudo bash uhmsetup.sh
       <b>mac-*.txt change watcher</b> (independent, not a numbered step): every cycle, right after <b>snapshot</b>, fingerprints all <code>mac-*.txt</code> files with a combined md5 (existence + content, no MAC/status parsing) and compares it to the previous cycle's. If it changed, the reload isn't triggered immediately — it's flagged for the <b>reload</b> step to pick up next cycle, so it never causes a second, separate <code>uhmreload.sh</code> invocation in the same run as one already triggered by the ACL files above.
       <br><br>
       This is why an edit always produces <b>two</b> log lines, one cycle apart, not one — they mark two different moments, not a duplicate:
-      <code>2026-07-23 22:01:28 INFO: mac-*.txt changed -- reload scheduled for next cycle</code><br>
-      <code>2026-07-23 22:01:31 INFO: mac-*.txt change from previous cycle -- reloading now</code><br>
+      <code>2026-07-23 22:01:28 INFO: mac-*.txt changed, reload next cycle</code><br>
+      <code>2026-07-23 22:01:31 INFO: mac-*.txt changed, reloading now</code><br>
       <code>2026-07-23 22:01:31 INFO: invoking /etc/uhm/core/uhmreload.sh</code>
       <br><br>
       The first line is the watcher noticing the change (this cycle); the second is the reload step actually acting on it (next cycle), immediately followed by the actual invocation. Seeing only the first without a follow-up second line one cycle later would itself be a sign something is wrong.
@@ -958,8 +960,8 @@ sudo bash uhmsetup.sh
       <b>Watcher de cambios en mac-*.txt</b> (independiente, no es un paso numerado): cada ciclo, justo después de <b>snapshot</b>, calcula una huella md5 combinada de todos los <code>mac-*.txt</code> (existencia + contenido, sin parsear MAC/estado) y la compara con la del ciclo anterior. Si cambió, el reload no se dispara de inmediato — queda marcado para que el paso <b>reload</b> lo recoja en el siguiente ciclo, de modo que nunca provoca una segunda invocación separada de <code>uhmreload.sh</code> en la misma corrida que otra ya disparada por los archivos ACL de arriba.
       <br><br>
       Por eso una edición siempre produce <b>dos</b> líneas de log, separadas por un ciclo, no una — marcan dos momentos distintos, no una duplicación:
-      <code>2026-07-23 22:01:28 INFO: mac-*.txt changed -- reload scheduled for next cycle</code><br>
-      <code>2026-07-23 22:01:31 INFO: mac-*.txt change from previous cycle -- reloading now</code><br>
+      <code>2026-07-23 22:01:28 INFO: mac-*.txt changed, reload next cycle</code><br>
+      <code>2026-07-23 22:01:31 INFO: mac-*.txt changed, reloading now</code><br>
       <code>2026-07-23 22:01:31 INFO: invoking /etc/uhm/core/uhmreload.sh</code>
       <br><br>
       La primera línea es el watcher notando el cambio (este ciclo); la segunda es el paso de reload actuando sobre él (ciclo siguiente), seguida de inmediato por la invocación real. Ver solo la primera sin una segunda línea de seguimiento un ciclo después sería en sí misma una señal de que algo anda mal.
@@ -1067,12 +1069,12 @@ sudo bash uhmsetup.sh
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmd.sh</code> is the persistent systemd daemon — the entry point of the whole mechanism. It runs a full management cycle every <code>POLL_INTERVAL</code> seconds (default 20), polling the UniFi controller and reconciling ACL files. See Daemon Cycle above for the full 10-step breakdown.
+      <code>uhmd.sh</code> is the persistent systemd daemon — the entry point of the whole mechanism. It runs a full management cycle every <code>POLL_INTERVAL</code> seconds (default 20), polling the UniFi controller and reconciling ACL files. See Daemon Cycle above for the full 11-step breakdown.
       <br><br>
       Installed at <code>/etc/uhm/core/uhmd.sh</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmd.sh</code> es el daemon systemd persistente — el punto de entrada de todo el mecanismo. Ejecuta un ciclo de gestión completo cada <code>POLL_INTERVAL</code> segundos (default 20), consultando el controlador UniFi y reconciliando los archivos ACL. Ver Daemon Cycle arriba para el detalle completo de los 10 pasos.
+      <code>uhmd.sh</code> es el daemon systemd persistente — el punto de entrada de todo el mecanismo. Ejecuta un ciclo de gestión completo cada <code>POLL_INTERVAL</code> segundos (default 20), consultando el controlador UniFi y reconciliando los archivos ACL. Ver Daemon Cycle arriba para el detalle completo de los 11 pasos.
       <br><br>
       Instalado en <code>/etc/uhm/core/uhmd.sh</code>.
     </td>
@@ -1097,10 +1099,10 @@ sudo bash uhmsetup.sh
 2026-07-12 21:41:20 INFO: UniFi login failed (HTTP 000), retry in grace
 2026-07-12 21:41:30 INFO: UniFi login failed (HTTP 000), retry in grace
 2026-07-12 21:41:50 INFO: UniFi login OK
-2026-07-12 21:41:51 WARNING: Could not load vouchers (rc=empty)
+2026-07-12 21:41:51 INFO: Could not load vouchers (rc=empty) -- skip
 2026-07-12 21:41:56 INFO: sessions step, stat/guest unavailable -- skip
 2026-07-12 21:41:56 INFO: revoke step, stat/sta unavailable -- skip
-2026-07-12 21:42:11 WARNING: Could not load vouchers (rc=empty)
+2026-07-12 21:42:11 INFO: Could not load vouchers (rc=empty) -- skip
 2026-07-12 21:42:16 INFO: sessions step, stat/guest unavailable -- skip
 2026-07-12 21:42:16 INFO: revoke step, stat/sta unavailable -- skip
 2026-07-12 21:42:31 INFO: UniFi backend ready (voucher/guest/sta OK)
@@ -1148,8 +1150,8 @@ sudo bash uhmsetup.sh
 </table>
 
 ```text
-2026-07-23 14:13:45 INFO: mac-*.txt changed -- reload scheduled for next cycle
-2026-07-23 14:14:05 INFO: mac-*.txt change from previous cycle -- reloading now
+2026-07-23 14:13:45 INFO: mac-*.txt changed, reload next cycle
+2026-07-23 14:14:05 INFO: mac-*.txt changed, reloading now
 2026-07-23 14:14:05 INFO: invoking /etc/uhm/core/uhmreload.sh
 ```
 
@@ -1256,9 +1258,9 @@ Two separate triggers invoke `uhmreload.sh`, each logged differently so the reas
   </tr>
 </table>
 
-> **⚠️ WARNING:** `uhmleases.sh` and `pyleases.sh` both fully rebuild the same `/etc/pydhcp/core/pydhcpd.conf` from ACL sources on every run. They are **mutually exclusive** on the same installation — running both (e.g. one from cron, the other via `uhmreload.sh`) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from `uhmleases.sh`, or any change made through `pyleases.sh`). If you install `UHM`, use `uhmleases.sh` exclusively and do not run `pyleases.sh` on the same host. **Classes and pools:** the `pydhcpd` daemon supports several `pool { }` blocks and any number of `class`/`subclass` declarations, exactly as `isc-dhcp-server` does. `uhmleases.sh`, by design, only ever writes what this project documents: one pool with `deny members of "blockdhcp";`, plus the `fixed-address` reservations from the ACL lists. Any extra class or pool added by hand to `pydhcpd.conf` is discarded on the next run. This is not a hard limit: `uhmleases.sh` is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes `pydhcpd.conf` and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: `uhmsetup.sh --update` replaces the script with the shipped version, and although it saves the previous one under `/etc/uhm/bak/&lt;YYYYMMDD_HHMMSS&gt;/`, the edit has to be reapplied by hand after every update.
+> **⚠️ WARNING:** `uhmleases.sh` and `pyleases.sh` both fully rebuild the same `/etc/pydhcp/core/pydhcpd.conf` from ACL sources on every run. They are **mutually exclusive** on the same installation — running both (e.g. one from cron, the other via `uhmreload.sh`) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from `uhmleases.sh`, or any change made through `pyleases.sh`). If you install `UHM`, use `uhmleases.sh` exclusively and do not run `pyleases.sh` on the same host. **Classes and pools:** the `pydhcpd` daemon supports several `pool { }` blocks and any number of `class`/`subclass` declarations, exactly as `isc-dhcp-server` does. `uhmleases.sh`, by design, only ever writes what this project documents: one pool with `deny members of "blockdhcp";`, plus the `fixed-address` reservations from the ACL lists. Any extra class or pool added by hand to `pydhcpd.conf` is discarded on the next run. This is not a hard limit: `uhmleases.sh` is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes `pydhcpd.conf` and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: `uhmsetup.sh --update` replaces the script with the shipped version, and although `bkstack.sh` saves the previous one inside `/etc/bak/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip`, the edit has to be reapplied by hand after every update.
 >
-> **⚠️ WARNING:** `uhmleases.sh` y `pyleases.sh` reconstruyen completamente el mismo `/etc/pydhcp/core/pydhcpd.conf` a partir de fuentes ACL en cada ejecución. Son **mutuamente excluyentes** en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía `uhmreload.sh`) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de `uhmleases.sh`, o cualquier cambio hecho mediante `pyleases.sh`). Si instala `UHM`, use exclusivamente `uhmleases.sh` y no ejecute `pyleases.sh` en el mismo host. **Clases y pools:** el demonio `pydhcpd` soporta varios bloques `pool { }` y cualquier cantidad de declaraciones `class`/`subclass`, igual que `isc-dhcp-server`. `uhmleases.sh`, por diseño, solo escribe lo que este proyecto documenta: un pool con `deny members of "blockdhcp";`, más las reservas `fixed-address` de las listas ACL. Cualquier clase o pool agregado a mano a `pydhcpd.conf` se descarta en la siguiente ejecución. No es una camisa de fuerza: `uhmleases.sh` es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe `pydhcpd.conf` y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: `uhmsetup.sh --update` reemplaza el script por la versión del repositorio y, aunque respalda el anterior en `/etc/uhm/bak/&lt;AAAAMMDD_HHMMSS&gt;/`, la edición hay que volver a aplicarla a mano tras cada actualización.
+> **⚠️ WARNING:** `uhmleases.sh` y `pyleases.sh` reconstruyen completamente el mismo `/etc/pydhcp/core/pydhcpd.conf` a partir de fuentes ACL en cada ejecución. Son **mutuamente excluyentes** en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía `uhmreload.sh`) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de `uhmleases.sh`, o cualquier cambio hecho mediante `pyleases.sh`). Si instala `UHM`, use exclusivamente `uhmleases.sh` y no ejecute `pyleases.sh` en el mismo host. **Clases y pools:** el demonio `pydhcpd` soporta varios bloques `pool { }` y cualquier cantidad de declaraciones `class`/`subclass`, igual que `isc-dhcp-server`. `uhmleases.sh`, por diseño, solo escribe lo que este proyecto documenta: un pool con `deny members of "blockdhcp";`, más las reservas `fixed-address` de las listas ACL. Cualquier clase o pool agregado a mano a `pydhcpd.conf` se descarta en la siguiente ejecución. No es una camisa de fuerza: `uhmleases.sh` es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe `pydhcpd.conf` y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: `uhmsetup.sh --update` reemplaza el script por la versión del repositorio y, aunque `bkstack.sh` respalda el anterior dentro de `/etc/bak/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip`, la edición hay que volver a aplicarla a mano tras cada actualización.
 
 
 **ACL sources consumed by uhmleases:**
@@ -1286,6 +1288,10 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 | Leading `a` | Marks a well-formed, active entry -- any other leading character is treated as malformed (see ACL priority order). There is no opposite value (no `i`/`d`/etc.) | Marca una entrada activa y bien formada -- cualquier otro carácter inicial se trata como malformado (ver ACL priority order). No existe un valor opuesto (no hay `i`/`d`/etc.) |
 | Leading `#` (comment out) | Deactivates an entry -- comment out the whole line (e.g. `#a;MAC;IP;HOSTNAME;`) instead of changing the `a` itself. Only valid in `mac-*.txt` and `uhm-auth.txt`, the only two lists that ever produce a fixed-address `host { }` block in `pydhcpd.conf`; a commented entry there loses its fixed address and joins the same `blockdhcp` deny class as `blockdhcp.txt`. In `uhm-auth.txt`, this only affects DHCP-level treatment -- it does NOT exempt the entry from expiring by `END_TIME_EPOCH` (see `clean_expired_macs`); `mac-*.txt` has no such field, so there's nothing to expire there | Desactiva una entrada -- comenta la línea completa (p.ej. `#a;MAC;IP;HOSTNAME;`) en vez de cambiar la `a` misma. Solo es válido en `mac-*.txt` y `uhm-auth.txt`, las únicas dos listas que producen un bloque `host { }` de dirección fija en `pydhcpd.conf`; una entrada comentada ahí pierde su dirección fija y entra en la misma clase de denegación `blockdhcp` que `blockdhcp.txt`. En `uhm-auth.txt`, esto solo afecta el tratamiento a nivel DHCP -- NO exime a la entrada de vencer por `END_TIME_EPOCH` (ver `clean_expired_macs`); `mac-*.txt` no tiene ese campo, así que ahí no hay nada que vencer |
 | `#` in `blockdhcp.txt`, `uhm-grace.txt`, lease removal queue | Not supported -- these lists have no active/inactive concept (`blockdhcp.txt` is already a terminal deny state, `uhm-grace.txt` is purely temporary/self-expiring, and the lease removal queue is a working list with no `a;`/`#a;` syntax at all). A `#`-prefixed line in any of them is treated as malformed and dropped from the file, same as any other invalid line | No soportado -- estas listas no tienen concepto de activo/inactivo (`blockdhcp.txt` ya es un estado terminal de denegación, `uhm-grace.txt` es puramente temporal y autoexpira, y la cola de remoción de leases es una lista de trabajo sin sintaxis `a;`/`#a;` en absoluto). Una línea con `#` en cualquiera de ellas se trata como malformada y se elimina del archivo, igual que cualquier otra línea inválida |
+
+> **⚠️ WARNING -- hand-editing an authorization list.** `mac-*.txt` and `uhm-auth.txt` are the two lists that grant access, and they are the only two where a malformed line **aborts the reload** instead of being dropped. That is deliberate: silently deleting a line there would revoke a device's access — or a paying guest's — with nothing on record but its disappearance. A typo while commenting or uncommenting an entry stops `uhmleases.sh` with an `ERROR` naming the file and the line number, `pydhcpd.conf` is not rebuilt, and the firewall keeps the previous state until you fix it. Check the log after editing either file by hand: `tail -f /var/log/uhm.log`. The remaining lists (`blockdhcp.txt`, `uhm-grace.txt`, the lease removal queue) are derived and transient — they authorize nothing, so a bad line there is dropped and the run continues.
+
+> **⚠️ ADVERTENCIA -- editar a mano una lista de autorización.** `mac-*.txt` y `uhm-auth.txt` son las dos listas que conceden acceso, y las dos únicas donde una línea malformada **aborta el reload** en vez de eliminarse. Es deliberado: borrar en silencio una línea ahí le quitaría el acceso a un dispositivo — o a un invitado que pagó su voucher — sin más constancia que su desaparición. Un error de tecleo al comentar o descomentar una entrada detiene `uhmleases.sh` con un `ERROR` que nombra el archivo y el número de línea, `pydhcpd.conf` no se reconstruye, y el firewall conserva el estado anterior hasta que usted lo corrija. Revise el log después de editar a mano cualquiera de esos dos archivos: `tail -f /var/log/uhm.log`. Las demás listas (`blockdhcp.txt`, `uhm-grace.txt`, la cola de remoción de leases) son derivadas y transitorias — no autorizan nada, así que una línea mala ahí se elimina y la corrida sigue.
 
 #### Malformed lines and duplicates
 
@@ -1882,20 +1888,20 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 </table>
 
 ```text
-2026-07-12 00:40:26 WARNING: API GET stat/voucher -> HTTP 502
-2026-07-12 00:40:26 WARNING: Could not load vouchers (rc=empty)
-2026-07-12 00:40:28 WARNING: API GET stat/guest -> HTTP 000
+2026-07-12 00:40:26 INFO: API GET stat/voucher -> HTTP 502 -- skip
+2026-07-12 00:40:26 INFO: Could not load vouchers (rc=empty) -- skip
+2026-07-12 00:40:28 INFO: API GET stat/guest -> HTTP 000 -- skip
 2026-07-12 00:40:28 INFO: sessions step, stat/guest unavailable -- skip
-2026-07-12 00:40:29 WARNING: API GET stat/sta -> HTTP 000
+2026-07-12 00:40:29 INFO: API GET stat/sta -> HTTP 000 -- skip
 2026-07-12 00:40:29 INFO: revoke step, stat/sta unavailable -- skip
 [... cycles keep failing every ~POLL_INTERVAL, same pattern ...]
-2026-07-12 00:41:11 WARNING: Could not load vouchers (rc=empty)
-2026-07-12 00:41:11 ALERT: sent -- 3 consecutive cycle failures
+2026-07-12 00:41:11 INFO: Could not load vouchers (rc=empty) -- skip
+2026-07-12 00:41:11 ALERT: 3 consecutive cycle failures -- sent
 2026-07-12 00:41:11 ALERT: latest at 2026-07-12 00:41:11
 [... failures continue while the controller is still down ...]
-2026-07-12 00:42:43 INFO: Session expired -- re-authenticating
+2026-07-12 00:42:43 INFO: session expired, re-authenticating
 2026-07-12 00:42:43 INFO: UniFi login OK
-2026-07-12 00:43:13 ALERT: recovery notice sent
+2026-07-12 00:43:13 ALERT: recovery notice (no new failures) -- sent
 ```
 
 <table>
@@ -2110,7 +2116,8 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 ```text
 --------------------------------------------------------------------------------
-2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10, ip=192.168.0.231 host=no_name_fde07d34be -> grace
+2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10 -> grace
+2026-07-01 06:47:35 INFO: ip=192.168.0.231 host=no_name_fde07d34be
 2026-07-01 06:47:35 INFO: added 1 new client(s) to uhm-grace
 2026-07-01 06:47:35 INFO: uhm-grace.txt changed
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
@@ -2152,7 +2159,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 ```text
 2026-07-27 20:45:28 WARNING: uhmreload.sh failed (code 1), backing off -- alert
-2026-07-27 20:45:29 ALERT: sent -- WARNING: uhmreload.sh failed (code 1), backing
+2026-07-27 20:45:29 ALERT: WARNING: uhmreload.sh failed (code 1), backin -- sent
 ```
 
 | Field | Type | Description | Descripción |
