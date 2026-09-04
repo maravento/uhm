@@ -13,13 +13,13 @@
 #    "Could not load vouchers" line, which uhmd.sh's load_all_vouchers()
 #    logs exactly once per cycle when the controller is unreachable.
 #    Successful cycles are silent, so consecutive failures are identified
-#    by comparing timestamps: a gap larger than GAP_LIMIT = POLL_INTERVAL
-#    + 3*API_MAX_TIME + MARGIN (default 20 + 3*30 + 10 = 120s) between two
+#    by comparing timestamps: a gap larger than gap_limit = POLL_INTERVAL
+#    + 3*api_max_time + jitter_margin (default 20 + 3*30 + 10 = 120s) between two
 #    failure lines means cycles succeeded silently in between, and the
-#    streak resets. The 3*API_MAX_TIME term covers the worst case of a
+#    streak resets. The 3*api_max_time term covers the worst case of a
 #    failed cycle still making up to three 30s-capped API calls (vouchers,
 #    guest, sta) before it ends. Alerts once UHM_API_FAIL_THRESHOLD
-#    consecutive cycles fail, and again once recovered (same GAP_LIMIT is
+#    consecutive cycles fail, and again once recovered (same gap_limit is
 #    the read timeout used to detect recovery -- see watch loop below).
 #    Suppressed while uhmd.service has been active for less than
 #    UHM_ALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi
@@ -86,13 +86,8 @@
 
 set -uo pipefail
 
-# logging
-log_file="/var/log/uhm.log"
-log() {
-    local msg="$1"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$log_file" 2>/dev/null || true
-}
-
+# USAGE
+# Answered before any check: --help must work without root
 usage() {
     awk 'NR==1{next} /^#{20,}$/{c++; if(c==2){exit}} {print}' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -104,15 +99,25 @@ case "${1:-}" in
         ;;
 esac
 
-## root check
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# logging
+log_file="/var/log/uhm.log"
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+}
+
+# root check
 if [ "$(id -u)" != "0" ]; then
     log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
 
 # log file perms (as installed by uhmsetup.sh)
-_log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
-case "$_log_stat" in
+log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
+case "$log_stat" in
     ""|"root adm 640"|"root root 640") ;;
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
@@ -123,21 +128,29 @@ case "$_log_stat" in
         fi
         ;;
 esac
-unset _log_stat
+unset log_stat
 
-# DEPENDENCIES
-for dep in curl mawk coreutils util-linux grep sed systemd; do
-    if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: missing dependency '$dep' -- abort"
+# dependencies
+for dep_pkg in curl mawk coreutils util-linux grep sed systemd; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
     fi
 done
 
-_UH_UINT='^(0|[1-9][0-9]*)$'
+# ------------------------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------------------------
 
-TARGET="/etc/uhm/tools/uhmalert.sh"
-UNIT_PATH="/etc/systemd/system/uhmalert.service"
-CONFIG_FILE="/etc/uhm/uhm.env"
+UH_UINT='^(0|[1-9][0-9]*)$'
+
+target_path="/etc/uhm/tools/uhmalert.sh"
+unit_path="/etc/systemd/system/uhmalert.service"
+config_file="/etc/uhm/uhm.env"
+
+# ------------------------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------------------------
 
 # Appends $2 (one or more lines) right after the file's LAST
 # "# ====...====" line, instead of a plain >> append -- so the new block
@@ -146,17 +159,17 @@ CONFIG_FILE="/etc/uhm/uhm.env"
 # whichever one of them happens to be last. Falls back to a plain append if
 # the file has no delimiter line at all (empty/malformed file).
 insert_after_last_delimiter() {
-    local file="$1" content="$2" last_line tmp
-    last_line=$(grep -n '^# =\{5,\}$' "$file" | tail -1 | cut -d: -f1)
+    local conf_file="$1" env_block="$2" last_line tmp_file
+    last_line=$(grep -n '^# =\{5,\}$' "$conf_file" | tail -1 | cut -d: -f1)
     if [[ -z "$last_line" ]]; then
-        printf '\n%s\n' "$content" >> "$file"
+        printf '\n%s\n' "$env_block" >> "$conf_file"
         return
     fi
-    tmp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
-    head -n "$last_line" "$file" > "$tmp"
-    printf '\n%s\n' "$content" >> "$tmp"
-    tail -n "+$((last_line + 1))" "$file" >> "$tmp"
-    mv "$tmp" "$file"
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    head -n "$last_line" "$conf_file" > "$tmp_file"
+    printf '\n%s\n' "$env_block" >> "$tmp_file"
+    tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file"
+    mv "$tmp_file" "$conf_file"
 }
 
 install_module() {
@@ -167,20 +180,20 @@ install_module() {
     echo "=================================="
     echo ""
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "ERROR: $CONFIG_FILE not found" >&2
+    if [[ ! -f "$config_file" ]]; then
+        echo "ERROR: $config_file not found" >&2
         echo "ERROR: install and configure uhm first -- abort" >&2
         exit 1
     fi
 
     # Only append if not already configured -- never overwrite an existing
     # topic (e.g. on a re-install) or a threshold the user already tuned.
-    if grep -q '^UHM_NTFY_TOPIC=' "$CONFIG_FILE"; then
-        gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$CONFIG_FILE" | tail -1 | cut -d'=' -f2- | tr -d '"')
-        echo "UHM_NTFY_TOPIC already set in $CONFIG_FILE -- leaving it untouched."
+    if grep -q '^UHM_NTFY_TOPIC=' "$config_file"; then
+        gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$config_file" | tail -1 | cut -d'=' -f2- | tr -d '"')
+        echo "UHM_NTFY_TOPIC already set in $config_file -- leaving it untouched."
     else
         gen_topic="uhm-alert-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)"
-        insert_after_last_delimiter "$CONFIG_FILE" "# =============================================================================
+        insert_after_last_delimiter "$config_file" "# =============================================================================
 # UHM ALERT
 # =============================================================================
 UHM_NTFY_TOPIC=\"$gen_topic\"
@@ -188,27 +201,28 @@ UHM_API_FAIL_THRESHOLD=3
 UHM_ALERT_QUIET_PERIOD_SECONDS=120
 # ============================================================================="
         echo "Added UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD and"
-        echo "UHM_ALERT_QUIET_PERIOD_SECONDS to $CONFIG_FILE"
+        echo "UHM_ALERT_QUIET_PERIOD_SECONDS to $config_file"
     fi
     # Insert right after their neighbor in the Alert block (not a plain
     # >> append) so upgrading an older install doesn't scatter these
     # variables to the end of the file, past unrelated later sections.
-    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$CONFIG_FILE"; then
-        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$CONFIG_FILE"
+    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$config_file"; then
+        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$config_file"
     fi
-    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$CONFIG_FILE"; then
-        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$CONFIG_FILE"
-    fi
-
-    SELF="$(readlink -f "$0")"
-    if [[ "$SELF" != "$TARGET" ]]; then
-        echo "Deploying script to $TARGET..."
-        mkdir -p "$(dirname "$TARGET")"
-        install -m 755 -o root -g root "$SELF" "$TARGET"
+    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$config_file"; then
+        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$config_file"
     fi
 
-    echo "Writing systemd unit ($UNIT_PATH)..."
-    cat > "$UNIT_PATH" <<'UNITEOF'
+    local self_path
+    self_path="$(readlink -f "$0")"
+    if [[ "$self_path" != "$target_path" ]]; then
+        echo "Deploying script to $target_path..."
+        mkdir -p "$(dirname "$target_path")"
+        install -m 755 -o root -g root "$self_path" "$target_path"
+    fi
+
+    echo "Writing systemd unit ($unit_path)..."
+    cat > "$unit_path" <<'UNITEOF'
 [Unit]
 Description=UniFi Hotspot Connectivity Alert Watcher
 After=network.target uhmd.service
@@ -252,10 +266,14 @@ uninstall_module() {
     echo "Stopping and disabling uhmalert.service..."
     systemctl stop uhmalert.service 2>/dev/null || true
     systemctl disable uhmalert.service 2>/dev/null || true
-    rm -f "$UNIT_PATH"
+    rm -f "$unit_path"
     systemctl daemon-reload
     echo "uhmalert.service removed. The uhmalert.sh script was not deleted."
 }
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
 
 case "${1:-}" in
     install)
@@ -271,9 +289,9 @@ esac
 # prevent overlapping runs of the watch loop itself -- install/uninstall above
 # are one-shot admin actions and must not block on (or be blocked by) the
 # lock the service holds for its entire lifetime.
-SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$SCRIPT_LOCK")
-exec 200>"$SCRIPT_LOCK"
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
 if ! flock -n 200; then
     log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
@@ -283,14 +301,14 @@ fi
 # No -e: this is a long-running watch loop, one bad line (e.g. an
 # unparseable timestamp) must not kill the whole process.
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    log "ERROR: $CONFIG_FILE not found -- abort"
+if [[ ! -f "$config_file" ]]; then
+    log "ERROR: $config_file not found -- abort"
     exit 1
 fi
-_owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null)
-_perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
-if [[ "$_owner" != "root" ]] || [[ "$_perms" != "600" ]]; then
-    if chown root:root "$CONFIG_FILE" 2>/dev/null && chmod 600 "$CONFIG_FILE" 2>/dev/null; then
+file_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
+file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
+if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
+    if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
         log "WARNING: uhm.env perms fixed -- alert"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
@@ -301,61 +319,61 @@ fi
 # maliciously replaced config file cannot execute code -- same approach as
 # uhmleases.sh's load_env_file().
 load_env_file() {
-    local file="$1" line key value raw_key raw_value
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        key="${line%%=*}"
-        value="${line#*=}"
-        raw_key="$key" raw_value="$value"
-        key="${key#"${key%%[![:space:]]*}"}"
-        key="${key%"${key##*[![:space:]]}"}"
-        value="${value#"${value%%[![:space:]]*}"}"
-        value="${value%"${value##*[![:space:]]}"}"
-        if [[ "$key" != "$raw_key" || "$value" != "$raw_value" ]]; then
+    local conf_file="$1" env_line env_key env_value raw_key raw_value
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        raw_key="$env_key" raw_value="$env_value"
+        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
+        env_key="${env_key%"${env_key##*[![:space:]]}"}"
+        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
+        env_value="${env_value%"${env_value##*[![:space:]]}"}"
+        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
             log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $key"
+            log "WARNING: key $env_key"
         fi
-        if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
-            value="${value:1:$((${#value}-2))}"
+        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
+            env_value="${env_value:1:$((${#env_value}-2))}"
         fi
-        case "$key" in
+        case "$env_key" in
             UHM_NTFY_TOPIC|UHM_API_FAIL_THRESHOLD|UHM_ALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
-                printf -v "$key" '%s' "$value"
+                printf -v "$env_key" '%s' "$env_value"
                 ;;
             *)
                 ;;
         esac
-    done < "$file"
+    done < "$conf_file"
 }
-load_env_file "$CONFIG_FILE"
+load_env_file "$config_file"
 
 if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
-    log "ERROR: UHM_NTFY_TOPIC not set in $CONFIG_FILE -- abort"
+    log "ERROR: UHM_NTFY_TOPIC not set in $config_file -- abort"
     exit 1
 fi
 
-FAIL_THRESHOLD="${UHM_API_FAIL_THRESHOLD:-3}"
-if ! [[ "$FAIL_THRESHOLD" =~ $_UH_UINT ]] || (( FAIL_THRESHOLD == 0 )); then
+fail_threshold="${UHM_API_FAIL_THRESHOLD:-3}"
+if ! [[ "$fail_threshold" =~ $UH_UINT ]] || (( fail_threshold == 0 )); then
     log "WARNING: UHM_API_FAIL_THRESHOLD invalid -- fallback"
-    FAIL_THRESHOLD=3
+    fail_threshold=3
 fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
-if ! [[ "$POLL_INTERVAL" =~ $_UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
+if ! [[ "$POLL_INTERVAL" =~ $UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
     log "WARNING: POLL_INTERVAL invalid -- fallback"
     POLL_INTERVAL=20
 fi
-UHM_ALERT_QUIET_PERIOD="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
-[[ "$UHM_ALERT_QUIET_PERIOD" =~ $_UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid -- fallback"; UHM_ALERT_QUIET_PERIOD=120; }
-MARGIN=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
+quiet_period="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
+[[ "$quiet_period" =~ $UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid -- fallback"; quiet_period=120; }
+jitter_margin=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
             # falsely look like a gap with a silent recovery in between
-API_MAX_TIME=30 # matches curl --max-time in uhmd.sh's api_get calls
-GAP_LIMIT=$(( POLL_INTERVAL + 3 * API_MAX_TIME + MARGIN ))
-DEDUP_WINDOW=300 # suppress a repeated identical ERROR/WARNING catch-all
+api_max_time=30 # matches curl --max-time in uhmd.sh's api_get calls
+gap_limit=$(( POLL_INTERVAL + 3 * api_max_time + jitter_margin ))
+dedup_window=300 # suppress a repeated identical ERROR/WARNING catch-all
                   # alert if it fires again within this many seconds
 
-streak=0
-alerted=0
+fail_streak=0
+alert_sent=0
 last_ts_epoch=0
 last_generic_msg=""
 last_generic_time=0
@@ -367,14 +385,13 @@ last_generic_time=0
 # alert during this known startup window avoids false alarms without
 # weakening the threshold for a real outage later in the day.
 uhmd_started_at() {
-    local ts
-    ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
-    date -d "$ts" +%s 2>/dev/null || echo 0
+    local started_ts
+    started_ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
+    date -d "$started_ts" +%s 2>/dev/null || echo 0
 }
 
 notify() {
-    local msg="$1"
-    curl -s -d "$msg" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
+    curl -s -d "$1" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
 }
 
 # Bash builtins only, no fork -- systemd's default KillMode=control-group
@@ -382,55 +399,55 @@ notify() {
 # either by log()'s own timestamp prefix or by this line's message) can be
 # killed before it prints anything, logging this line with an empty
 # timestamp. printf's %()T is bash's own strftime, no subprocess involved.
-_on_term() {
-    printf -v _term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
-    echo "$_term_ts uhmalert done at: $_term_ts" | tee -a "$log_file" 2>/dev/null || true
+on_term() {
+    printf -v term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
+    echo "$term_ts uhmalert done at: $term_ts" | tee -a "$log_file" 2>/dev/null || true
     exit 0
 }
-trap _on_term TERM INT
+trap on_term TERM INT
 
-# Start
+# start
 log "uhmalert start..."
 
 exec 3< <(tail -n0 -F "$log_file" 2>/dev/null)
 
 while true; do
-    if (( alerted == 1 && last_ts_epoch != 0 )); then
-        _now_epoch=$(date +%s)
-        if (( _now_epoch - last_ts_epoch >= GAP_LIMIT )); then
+    if (( alert_sent == 1 && last_ts_epoch != 0 )); then
+        now_epoch=$(date +%s)
+        if (( now_epoch - last_ts_epoch >= gap_limit )); then
             if systemctl is-active --quiet uhmd; then
-                notify "uhm: recovered -- no new failures in the last ${GAP_LIMIT}s"
+                notify "uhm: recovered -- no new failures in the last ${gap_limit}s"
                 log "ALERT: recovery notice (no new failures) -- sent"
-                streak=0
-                alerted=0
+                fail_streak=0
+                alert_sent=0
             else
                 log "INFO: uhmd not active, no recovery notice -- skip"
-                streak=0
+                fail_streak=0
                 last_ts_epoch=0
             fi
         fi
     fi
-    _read_rc=0
-    IFS= read -r -t "$GAP_LIMIT" -u 3 line || _read_rc=$?
-    if (( _read_rc == 0 )); then
-        if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\  ]]; then
-            msg="${line:20}"
+    read_rc=0
+    IFS= read -r -t "$gap_limit" -u 3 log_line || read_rc=$?
+    if (( read_rc == 0 )); then
+        if [[ "$log_line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\  ]]; then
+            log_msg="${log_line:20}"
         else
-            msg="$line"
+            log_msg="$log_line"
         fi
 
         # Known-benign -- expected/already handled, must never alert.
-        [[ "$msg" == *"cycle lock held unexpectedly"* ]] && continue
+        [[ "$log_msg" == *"cycle lock held unexpectedly"* ]] && continue
 
         # Edge-triggered recovery: uhmd logs this once, exactly when
         # the backend transitions from failing to answering OK -- fires
-        # the recovery notice immediately instead of waiting for GAP_LIMIT.
-        if [[ "$msg" == "INFO: UniFi backend ready (voucher/guest/sta OK)" ]]; then
-            if (( alerted == 1 )); then
+        # the recovery notice immediately instead of waiting for gap_limit.
+        if [[ "$log_msg" == "INFO: UniFi backend ready (voucher/guest/sta OK)" ]]; then
+            if (( alert_sent == 1 )); then
                 notify "uhm: recovered -- backend answering again"
                 log "ALERT: recovery notice (backend ready) -- sent"
-                streak=0
-                alerted=0
+                fail_streak=0
+                alert_sent=0
             fi
             continue
         fi
@@ -440,62 +457,62 @@ while true; do
         # UHM_API_FAIL_THRESHOLD consecutive cycles) rather than firing on the
         # first occurrence like the generic catch-all does.
         is_connectivity=0
-        [[ "$msg" == *"Could not load vouchers"* ]] && is_connectivity=1
-        [[ "$msg" == *"API GET"* ]] && is_connectivity=1
+        [[ "$log_msg" == *"Could not load vouchers"* ]] && is_connectivity=1
+        [[ "$log_msg" == *"API GET"* ]] && is_connectivity=1
 
         # Generic catch-all: any other ERROR/WARNING line, from
         # uhmd.sh or the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain
         # (shared log) -- fires immediately, no streak needed. FIX: lines
         # come only from uhmwatch.sh (any of the services it manages) --
         # a successful recovery closing out an earlier WARNING/ERROR alert.
-        if (( is_connectivity == 0 )) && { [[ "$msg" == ERROR:* ]] || [[ "$msg" == WARNING:* ]] || [[ "$msg" == FIX:* ]]; }; then
-            _now_epoch=$(date +%s)
-            if [[ "$msg" == "$last_generic_msg" ]] && (( _now_epoch - last_generic_time < DEDUP_WINDOW )); then
-                log "INFO: dup alert suppressed (${DEDUP_WINDOW}s): ${msg:0:25}"
+        if (( is_connectivity == 0 )) && { [[ "$log_msg" == ERROR:* ]] || [[ "$log_msg" == WARNING:* ]] || [[ "$log_msg" == FIX:* ]]; }; then
+            now_epoch=$(date +%s)
+            if [[ "$log_msg" == "$last_generic_msg" ]] && (( now_epoch - last_generic_time < dedup_window )); then
+                log "INFO: dup alert suppressed (${dedup_window}s): ${log_msg:0:25}"
                 continue
             fi
-            last_generic_msg="$msg"
-            last_generic_time="$_now_epoch"
-            notify "uhm: $msg"
-            log "ALERT: ${msg:0:45} -- sent"
+            last_generic_msg="$log_msg"
+            last_generic_time="$now_epoch"
+            notify "uhm: $log_msg"
+            log "ALERT: ${log_msg:0:45} -- sent"
             continue
         fi
 
-        [[ "$msg" != *"Could not load vouchers"* ]] && continue
+        [[ "$log_msg" != *"Could not load vouchers"* ]] && continue
 
-        ts="${line:0:19}"
-        epoch=$(date -d "$ts" +%s 2>/dev/null) || continue
+        line_ts="${log_line:0:19}"
+        line_epoch=$(date -d "$line_ts" +%s 2>/dev/null) || continue
 
         # Gap since the last matching failure is bigger than one cycle
         # (plus margin) -- cycles succeeded silently in between, so this is
         # a fresh outage, not a continuation of the previous one.
-        if (( last_ts_epoch != 0 )) && (( epoch - last_ts_epoch > GAP_LIMIT )); then
-            streak=0
-            alerted=0
+        if (( last_ts_epoch != 0 )) && (( line_epoch - last_ts_epoch > gap_limit )); then
+            fail_streak=0
+            alert_sent=0
         fi
-        last_ts_epoch=$epoch
-        streak=$(( streak + 1 ))
+        last_ts_epoch=$line_epoch
+        fail_streak=$(( fail_streak + 1 ))
 
-        if (( streak == FAIL_THRESHOLD )) && (( alerted == 0 )); then
+        if (( fail_streak == fail_threshold )) && (( alert_sent == 0 )); then
             uhmd_start=$(uhmd_started_at)
-            if (( uhmd_start > 0 )) && (( epoch - uhmd_start < UHM_ALERT_QUIET_PERIOD )); then
-                log "INFO: $streak failures within startup grace, suppressed"
-                streak=0
+            if (( uhmd_start > 0 )) && (( line_epoch - uhmd_start < quiet_period )); then
+                log "INFO: $fail_streak failures within startup grace, suppressed"
+                fail_streak=0
             else
-                notify "uhm: $streak consecutive failed cycles reaching the controller (since $ts)"
-                log "ALERT: $streak consecutive cycle failures -- sent"
-                log "ALERT: latest at $ts"
-                alerted=1
+                notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $line_ts)"
+                log "ALERT: $fail_streak consecutive cycle failures -- sent"
+                log "ALERT: latest at $line_ts"
+                alert_sent=1
             fi
         fi
-    elif (( _read_rc == 1 )); then
+    elif (( read_rc == 1 )); then
         log "ERROR: uhmalert lost log monitoring (tail died) -- abort"
         exit 1
     else
-        # read timed out: no new line for a full GAP_LIMIT window. Recovery
+        # read timed out: no new line for a full gap_limit window. Recovery
         # (if any) was already evaluated by the pre-read check above; this
         # is just a safety-net reset.
-        streak=0
-        alerted=0
+        fail_streak=0
+        alert_sent=0
     fi
 done
