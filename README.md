@@ -63,7 +63,7 @@
 
 ---
 
-**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distros not tested, use at your own risk.
+**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distributions are not tested and are used at your own risk.
 
 ### Hardware
 
@@ -178,6 +178,7 @@
 | **procps** (`sysctl`) | `uhmiptables.sh` | Enables IPv4 forwarding | Habilita el forwarding IPv4 |
 | **systemd** (`systemctl`) | `uhmd`, `uhmreload.sh`, `uhmwatch.sh`, `uhmleases.sh`, `uhmalert.sh`, `uhmwebmin.sh` | Manages/checks the `uhmd`/`pydhcpd`/UniFi services | Gestiona/verifica los servicios `uhmd`/`pydhcpd`/UniFi |
 | **cron** | `uhmwatch.sh` (mandatory, installed automatically) | Runs the services watchdog every minute | Corre el vigilante de servicios cada minuto |
+| **logrotate** | `uhmsetup.sh` (writes `/etc/logrotate.d/uhm`) | Rotates `/var/log/uhm.log` daily; without it the shared log grows without limit | Rota `/var/log/uhm.log` a diario; sin él el log compartido crece sin límite |
 
 ### Optional
 
@@ -542,7 +543,7 @@ journalctl -u uhmd -f
         <li>Never renamed, moved or overwritten if already present: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> if it exists, and the logrotate config — they are the administrator's own live/customized data. If missing (e.g. a partial/broken install), the ACL files and the logrotate config are recreated empty with a WARNING and <code>uhmiptables.sh</code> is redeployed from the minimal template; existing ones are left exactly as they are. <code>uhm.env</code> is the one exception: <code>--update</code> never creates or checks it — a missing <code>uhm.env</code> is not detected or repaired by this mode, only by a fresh (non-<code>--update</code>) install</li>
         <li><b>Pauses services before replacing their scripts, resumes them after:</b> <code>uhmd.service</code> and <code>uhmalert.service</code> (if installed) are stopped — only if they were actually active — before any file is overwritten, and restarted once the update finishes; <code>uhmwatch</code>'s cron entry (not a systemd service) is removed for the same window and re-registered afterward. Nothing that was already stopped/disabled beforehand is started. <code>pydhcpd</code> is deliberately left alone — it's a separate project this update never touches, and stopping it would cut DHCP for the whole LAN, not just the hotspot</li>
         <li>Removes any stale <code>@hourly</code> uhmreload.sh cron entry (superseded by the daemon's own safety-net reload)</li>
-        <li>Runs <code>bkstack.sh</code> before overwriting anything, which writes a full zip of <code>/etc/uhm</code>, <code>/etc/pydhcp</code> and <code>/etc/acl</code> to <code>/etc/bak/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip</code>; warns and continues if it is not installed</li>
+        <li>Runs <code>bkstack.sh</code> before overwriting anything, which writes a full zip of <code>/etc/uhm</code>, <code>/etc/pydhcp</code> and <code>/etc/acl</code> to <code>/etc/bak/pydhcp/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip</code>; warns and continues if it is not installed</li>
       </ul>
      </td>
     <td style="width: 50%; vertical-align: top;">
@@ -552,7 +553,7 @@ journalctl -u uhmd -f
         <li>Nunca se renombran, mueven ni sobrescriben si ya existen: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> si existe, ni la configuración de logrotate — son datos propios y personalizados del administrador. Si faltan (ej. una instalación parcial/rota), los archivos ACL y la configuración de logrotate se recrean vacíos con un WARNING y <code>uhmiptables.sh</code> se vuelve a desplegar desde la plantilla mínima; los que ya existen quedan exactamente como estaban. <code>uhm.env</code> es la única excepción: <code>--update</code> nunca lo crea ni lo verifica — un <code>uhm.env</code> faltante no se detecta ni se repara en este modo, solo en una instalación nueva (sin <code>--update</code>)</li>
         <li><b>Pausa los servicios antes de reemplazar sus scripts, los reanuda al terminar:</b> <code>uhmd.service</code> y <code>uhmalert.service</code> (si está instalado) se detienen — solo si estaban activos — antes de sobrescribir cualquier archivo, y se reinician al finalizar la actualización; la entrada de cron de <code>uhmwatch</code> (no es un servicio systemd) se elimina durante esa misma ventana y se vuelve a registrar después. Nada que ya estuviera detenido/desactivado de antemano se inicia. <code>pydhcpd</code> se deja intencionalmente en paz — es un proyecto aparte que esta actualización nunca toca, y detenerlo cortaría el DHCP de toda la LAN, no solo del hotspot</li>
         <li>Elimina cualquier entrada de cron <code>@hourly</code> de uhmreload.sh residual (reemplazada por el reload de seguridad interno del daemon)</li>
-        <li>Ejecuta <code>bkstack.sh</code> antes de sobrescribir nada, que escribe un zip completo de <code>/etc/uhm</code>, <code>/etc/pydhcp</code> y <code>/etc/acl</code> en <code>/etc/bak/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip</code>; si no está instalado, avisa y continúa</li>
+        <li>Ejecuta <code>bkstack.sh</code> antes de sobrescribir nada, que escribe un zip completo de <code>/etc/uhm</code>, <code>/etc/pydhcp</code> y <code>/etc/acl</code> en <code>/etc/bak/pydhcp/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip</code>; si no está instalado, avisa y continúa</li>
       </ul>
      </td>
   </tr>
@@ -583,7 +584,7 @@ sudo bash uhmsetup.sh --remove
 
 ##### Uninstaller actions
 
-| # | Description (single confirmation up front, then unconditional) | Descripción (una sola confirmación al inicio, luego incondicional) |
+| # | Description (two confirmations up front, then unconditional) | Descripción (dos confirmaciones al inicio, luego incondicional) |
 |---|-----------------------------------------------------------|---------------------------------------------------------------|
 | 1 | Stop and disable `uhmd.service` and remove `/etc/systemd/system/uhmd.service` | Detiene y deshabilita `uhmd.service` y elimina `/etc/systemd/system/uhmd.service` |
 | 2 | Remove the `@hourly` cron entry for `/etc/uhm/core/uhmreload.sh` (or the pre-restructure `/etc/uhm/tools/uhmreload.sh` path, if upgrading from an older install) | Elimina la entrada de cron `@hourly` para `/etc/uhm/core/uhmreload.sh` (o la ruta previa a la reestructuración `/etc/uhm/tools/uhmreload.sh`, si se actualiza desde una instalación anterior) |
@@ -611,6 +612,28 @@ sudo bash uhmsetup.sh --remove
 | `/etc/uhm/core/uhmwatch.sh` | Services watchdog (mandatory) | Vigilante de servicios (obligatorio) |
 | `/run/uhmwatch/` | Watchdog recovery-attempt timestamps — cleared on reboot, not persistent | Marcas de tiempo de intentos de recuperación del vigilante — se limpian en cada reinicio, no persisten |
 | `/etc/uhm/tools/uhmwebmin.sh` | Webmin log viewer module | Módulo visor de log para Webmin |
+
+### Backups
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      There are two kinds of backup and they follow different rules. A <b>project backup</b> is a copy of the whole install, kept for the administrator: it goes to <code>/etc/bak/pydhcp</code>, carries a timestamp and keeps up to 3 copies. Only <code>bkstack.sh</code> writes one. A <b>routine-operation backup</b> is the copy a script takes of one specific file right before modifying it, so the change can be undone: it goes next to the file it copies, as <code>&lt;file&gt;.bak</code>, and keeps a single copy overwritten on every run. What decides the kind is what is copied, not how long the copy lasts.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Hay dos clases de respaldo y no se rigen igual. Un <b>respaldo de proyecto</b> es la copia de la instalación entera, guardada para el administrador: va a <code>/etc/bak/pydhcp</code>, lleva marca de tiempo y conserva hasta 3 copias. Solo <code>bkstack.sh</code> escribe una. Un <b>respaldo de operación rutinaria</b> es la copia que un script toma de un archivo concreto justo antes de modificarlo, para poder deshacer el cambio: va junto al archivo que copia, como <code>&lt;archivo&gt;.bak</code>, y conserva una sola copia, sobrescrita en cada ejecución. Lo que decide la clase es qué se copia, no cuánto dura la copia.
+    </td>
+  </tr>
+</table>
+
+| Path | Kind | Written by | Escrito por |
+|---|---|---|---|
+| `/etc/bak/pydhcp/bkstack_<TIMESTAMP>.zip` | Project, up to 3 | `bkstack.sh`, archiving `/etc/uhm`, `/etc/pydhcp` and `/etc/acl` | `bkstack.sh`, archivando `/etc/uhm`, `/etc/pydhcp` y `/etc/acl` |
+| `/etc/pydhcp/core/pydhcpd.conf.bak` | Routine, 1 copy | `uhmleases.sh`, before regenerating the config; restored automatically if `pydhcpd` then fails to start | `uhmleases.sh`, antes de regenerar la configuración; se restaura sola si `pydhcpd` no arranca después |
+
+> `bkstack.sh` ships with `pydhcp`, not with `uhm`, and archives both projects. That is why the project backup lands under `/etc/bak/pydhcp` even for `uhm`'s own files.
+>
+> `bkstack.sh` viene con `pydhcp`, no con `uhm`, y archiva ambos proyectos. Por eso el respaldo de proyecto queda bajo `/etc/bak/pydhcp` incluso para los archivos propios de `uhm`.
 
 ### Config Reference (uhm.env)
 
@@ -795,10 +818,10 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmwebmin.sh</code> installs a native Webmin module (<b>Networking → UHM Log Viewer</b>) that replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation. The module is written as a self-contained bash installer following the same pattern as <code>servicemon.sh</code> and <code>squidmon.sh</code>.
+      <code>uhmwebmin.sh</code> installs a native Webmin module (<b>Networking → UHM Log Viewer</b>) that replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation. The module is written as a self-contained bash installer.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmwebmin.sh</code> instala un módulo nativo de Webmin (<b>Networking → UHM Log Viewer</b>) que reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs. El módulo está escrito como un instalador bash autocontenido siguiendo el mismo patrón que <code>servicemon.sh</code> y <code>squidmon.sh</code>.
+      <code>uhmwebmin.sh</code> instala un módulo nativo de Webmin (<b>Networking → UHM Log Viewer</b>) que reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs. El módulo está escrito como un instalador bash autocontenido.
     </td>
   </tr>
 </table>
@@ -1234,9 +1257,9 @@ Two separate triggers invoke `uhmreload.sh`, each logged differently so the reas
   </tr>
 </table>
 
-> **⚠️ WARNING:** `uhmleases.sh` and `pyleases.sh` both fully rebuild the same `/etc/pydhcp/core/pydhcpd.conf` from ACL sources on every run. They are **mutually exclusive** on the same installation — running both (e.g. one from cron, the other via `uhmreload.sh`) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from `uhmleases.sh`, or any change made through `pyleases.sh`). If you install `UHM`, use `uhmleases.sh` exclusively and do not run `pyleases.sh` on the same host. **Classes and pools:** the `pydhcpd` daemon supports several `pool { }` blocks and any number of `class`/`subclass` declarations, exactly as `isc-dhcp-server` does. `uhmleases.sh`, by design, only ever writes what this project documents: one pool with `deny members of "blockdhcp";`, plus the `fixed-address` reservations from the ACL lists. Any extra class or pool added by hand to `pydhcpd.conf` is discarded on the next run. This is not a hard limit: `uhmleases.sh` is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes `pydhcpd.conf` and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: `uhmsetup.sh --update` replaces the script with the shipped version, and although `bkstack.sh` saves the previous one inside `/etc/bak/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip`, the edit has to be reapplied by hand after every update.
+> **⚠️ WARNING:** `uhmleases.sh` and `pyleases.sh` both fully rebuild the same `/etc/pydhcp/core/pydhcpd.conf` from ACL sources on every run. They are **mutually exclusive** on the same installation — running both (e.g. one from cron, the other via `uhmreload.sh`) makes each overwrite the other's rebuild, silently discarding whichever directives the other one doesn't know about (the UniFi Hotspot ACL entries from `uhmleases.sh`, or any change made through `pyleases.sh`). If you install `UHM`, use `uhmleases.sh` exclusively and do not run `pyleases.sh` on the same host. **Classes and pools:** the `pydhcpd` daemon supports several `pool { }` blocks and any number of `class`/`subclass` declarations, exactly as `isc-dhcp-server` does. `uhmleases.sh`, by design, only ever writes what this project documents: one pool with `deny members of "blockdhcp";`, plus the `fixed-address` reservations from the ACL lists. Any extra class or pool added by hand to `pydhcpd.conf` is discarded on the next run. This is not a hard limit: `uhmleases.sh` is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes `pydhcpd.conf` and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: `uhmsetup.sh --update` replaces the script with the shipped version, and although `bkstack.sh` saves the previous one inside `/etc/bak/pydhcp/bkstack_&lt;YYYYMMDD_HHMM&gt;.zip`, the edit has to be reapplied by hand after every update.
 >
-> **⚠️ WARNING:** `uhmleases.sh` y `pyleases.sh` reconstruyen completamente el mismo `/etc/pydhcp/core/pydhcpd.conf` a partir de fuentes ACL en cada ejecución. Son **mutuamente excluyentes** en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía `uhmreload.sh`) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de `uhmleases.sh`, o cualquier cambio hecho mediante `pyleases.sh`). Si instala `UHM`, use exclusivamente `uhmleases.sh` y no ejecute `pyleases.sh` en el mismo host. **Clases y pools:** el demonio `pydhcpd` soporta varios bloques `pool { }` y cualquier cantidad de declaraciones `class`/`subclass`, igual que `isc-dhcp-server`. `uhmleases.sh`, por diseño, solo escribe lo que este proyecto documenta: un pool con `deny members of "blockdhcp";`, más las reservas `fixed-address` de las listas ACL. Cualquier clase o pool agregado a mano a `pydhcpd.conf` se descarta en la siguiente ejecución. No es una camisa de fuerza: `uhmleases.sh` es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe `pydhcpd.conf` y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: `uhmsetup.sh --update` reemplaza el script por la versión del repositorio y, aunque `bkstack.sh` respalda el anterior dentro de `/etc/bak/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip`, la edición hay que volver a aplicarla a mano tras cada actualización.
+> **⚠️ WARNING:** `uhmleases.sh` y `pyleases.sh` reconstruyen completamente el mismo `/etc/pydhcp/core/pydhcpd.conf` a partir de fuentes ACL en cada ejecución. Son **mutuamente excluyentes** en la misma instalación — correr ambos (por ejemplo uno desde cron y el otro vía `uhmreload.sh`) hace que cada uno sobrescriba la reconstrucción del otro, descartando en silencio las directivas que el otro no conoce (las entradas ACL de UniFi Hotspot de `uhmleases.sh`, o cualquier cambio hecho mediante `pyleases.sh`). Si instala `UHM`, use exclusivamente `uhmleases.sh` y no ejecute `pyleases.sh` en el mismo host. **Clases y pools:** el demonio `pydhcpd` soporta varios bloques `pool { }` y cualquier cantidad de declaraciones `class`/`subclass`, igual que `isc-dhcp-server`. `uhmleases.sh`, por diseño, solo escribe lo que este proyecto documenta: un pool con `deny members of "blockdhcp";`, más las reservas `fixed-address` de las listas ACL. Cualquier clase o pool agregado a mano a `pydhcpd.conf` se descarta en la siguiente ejecución. No es una camisa de fuerza: `uhmleases.sh` es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe `pydhcpd.conf` y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: `uhmsetup.sh --update` reemplaza el script por la versión del repositorio y, aunque `bkstack.sh` respalda el anterior dentro de `/etc/bak/pydhcp/bkstack_&lt;AAAAMMDD_HHMM&gt;.zip`, la edición hay que volver a aplicarla a mano tras cada actualización.
 
 
 **ACL sources consumed by uhmleases:**
@@ -1618,7 +1641,7 @@ ACTIONS
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmacl.sh</b> -- Interactive diagnostic tool that verifies the presence and consistency of MAC addresses across every local DHCP/ACL data source used by <code>pydhcpd</code> and <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>mac/*.txt</code>, <code>pydhcpd.leases</code> and (options 1 and 4) the UniFi controller's <code>stat/sta</code>/<code>stat/guest</code>. For auditing what UniFi itself reports (authorized sessions, vouchers), see <code>uhmunifi.sh</code> above. Launched with no arguments, it presents a menu with four operations:
+      <b>uhmacl.sh</b> -- Interactive diagnostic tool that verifies the presence and consistency of MAC addresses across every local DHCP/ACL data source used by <code>pydhcpd</code> and <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>mac-*.txt</code>, <code>pydhcpd.leases</code> and (options 1 and 4) the UniFi controller's <code>stat/sta</code>/<code>stat/guest</code>. For auditing what UniFi itself reports (authorized sessions, vouchers), see <code>uhmunifi.sh</code> above. Launched with no arguments, it presents a menu with four operations:
       <ul>
         <li><b>Check MAC</b> -- inspect a single MAC across all local data sources and flag contradictory states (e.g. a MAC present in both <code>blockdhcp</code> and <code>mac</code>). When the MAC is in the grace period, it also prints the remaining time before promotion to <code>blockdhcp</code>. Also queries UniFi live for that MAC's <code>essid</code>, <code>authorized</code> and <code>is_guest</code> flags (plus <code>voucher_code</code> from <code>stat/guest</code> if present) -- this is the only reliable way to see whether the AP is actually holding the client at the captive portal, since a MAC can be fully correct across every local ACL file above and still be held there if UniFi itself reports <code>authorized=false</code> on a Guest-type WLAN (example output below)</li>
         <li><b>Grace period status</b> -- list every MAC currently in <code>uhm-grace.txt</code> with IP, hostname and time remaining, plus a total/expired/active count. Output is plain text with bold headers only, no color, so it stays legible on light and dark terminals.</li>
@@ -1628,7 +1651,7 @@ ACTIONS
       Exits <code>0</code> on normal termination and <code>1</code> on any abort -- not root, already running, missing dependency, unreadable or incomplete configuration, unreadable data file, temp file failure, or UniFi query failure. Requires root because the underlying files are owned by <code>root</code>/<code>pydhcpd</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmacl.sh</b> -- Herramienta interactiva de diagnostico que verifica la presencia y consistencia de direcciones MAC en todas las fuentes de datos DHCP/ACL locales usadas por <code>pydhcpd</code> y <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>mac/*.txt</code>, <code>pydhcpd.leases</code> y (opciones 1 y 4) el <code>stat/sta</code>/<code>stat/guest</code> del controlador UniFi. Para auditar lo que UniFi mismo reporta (sesiones autorizadas, vouchers), ver <code>uhmunifi.sh</code> más arriba. Lanzada sin argumentos, presenta un menu con cuatro operaciones:
+      <b>uhmacl.sh</b> -- Herramienta interactiva de diagnostico que verifica la presencia y consistencia de direcciones MAC en todas las fuentes de datos DHCP/ACL locales usadas por <code>pydhcpd</code> y <code>UHM</code>: <code>uhm-auth.txt</code>, <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code>, <code>mac-*.txt</code>, <code>pydhcpd.leases</code> y (opciones 1 y 4) el <code>stat/sta</code>/<code>stat/guest</code> del controlador UniFi. Para auditar lo que UniFi mismo reporta (sesiones autorizadas, vouchers), ver <code>uhmunifi.sh</code> más arriba. Lanzada sin argumentos, presenta un menu con cuatro operaciones:
       <ul>
         <li><b>Check MAC</b> -- inspecciona una sola MAC en todas las fuentes locales y marca estados contradictorios (ej. una MAC presente en <code>blockdhcp</code> y <code>mac</code> al mismo tiempo). Si la MAC esta en periodo de gracia, tambien imprime el tiempo restante antes de promocion a <code>blockdhcp</code>. Tambien consulta en vivo a UniFi los flags <code>essid</code>, <code>authorized</code> e <code>is_guest</code> de esa MAC (mas <code>voucher_code</code> de <code>stat/guest</code> si existe) -- es la unica forma confiable de saber si el AP realmente esta reteniendo al cliente en el portal cautivo, ya que una MAC puede estar perfectamente correcta en todos los archivos ACL locales de arriba y aun asi quedar retenida si UniFi mismo reporta <code>authorized=false</code> en una WLAN tipo Guest (ejemplo de salida abajo)</li>
         <li><b>Grace period status</b> -- lista cada MAC actualmente en <code>uhm-grace.txt</code> con IP, hostname y tiempo restante, más un conteo total/expiradas/activas. La salida es texto plano con encabezados en negrita solamente, sin color, para que siga siendo legible en terminales claras y oscuras.</li>
@@ -1680,7 +1703,7 @@ sudo bash /etc/uhm/tools/uhmacl.sh
  uhm-auth.txt:     N
  uhm-grace.txt:    Y
  blockdhcp.txt:    N
- mac/*.txt:    N
+ mac-*.txt:   N
  pydhcpd.leases:   N
 
  Querying https://192.168.0.10:11443...
@@ -1701,7 +1724,7 @@ Same option, this time for a managed (`mac-*.txt`) device -- the UniFi query is 
  uhm-auth.txt:     N
  uhm-grace.txt:    N
  blockdhcp.txt:    N
- mac/*.txt:    Y
+ mac-*.txt:   Y
         /etc/acl/mac/mac-limited.txt
  pydhcpd.leases:   N
 
@@ -1755,7 +1778,7 @@ Same option, this time for a managed (`mac-*.txt`) device -- the UniFi query is 
  uhm-auth.txt:     N
  uhm-grace.txt:    N
  blockdhcp.txt:    N
- mac/*.txt:    Y
+ mac-*.txt:   Y
         /etc/acl/mac/mac-limited.txt
  pydhcpd.leases:   N
 ```

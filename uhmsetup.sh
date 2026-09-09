@@ -52,7 +52,7 @@
 #     curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
 #     mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
 #     grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (find),
-#     procps (sysctl, used by uhmiptables.sh)
+#     procps (sysctl, used by uhmiptables.sh), logrotate
 #
 # Hard dependency NOT an apt package (aborts if missing):
 #     pydhcpd must be installed and running, with pydhcp.env present and
@@ -96,7 +96,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 
 # USAGE
-# Prints the header block of this file as the help text
+# Answered before any check: --help must work without root
 usage() {
     cat <<EOF
 Usage: sudo bash $(basename "$0") [OPTION]
@@ -168,7 +168,7 @@ repo_service="${script_dir}/service/uhmd.service"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmacl, uhmunifi or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils procps)
+apt_deps=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils procps logrotate)
 
 # Discovered runtime values (filled during install)
 
@@ -1076,7 +1076,7 @@ do_update() {
         # path via `uhmwatch.sh install`, which also self-migrates away
         # any stale legacy-path entry. Simpler and correct across the
         # core/-relocation than trying to text-surgery two possible paths.
-        crontab -l 2>/dev/null | grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" | crontab -
+        crontab -l 2>/dev/null | { grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" || true; } | crontab -
         info "uhmwatch cron entry removed for update"
         info "  (re-registered on resume)"
     fi
@@ -1182,17 +1182,30 @@ do_remove() {
     warn "    Run ${bkstack_script} first if you want a backup"
     warn "  - ${uhm_log_file}, rotated logs"
     warn "  - uhmunifi.log and reload failure traces"
+    warn "/etc/bak is NOT touched."
     warn "Package dependencies"
     warn "  (curl, jq, iptables, ipset, etc.) are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" || { info "Aborted by user."; exit 0; }
 
+    local confirm_answer
+    echo ""
+    echo "Final confirmation required."
+    echo "Type the word YES (uppercase) to remove uhm:"
+    echo ""
+    read -rp " > " confirm_answer
+    if [[ "$confirm_answer" != "YES" ]]; then
+        info "Aborted by user."
+        exit 0
+    fi
+    echo ""
+
     perform_remove
 }
 
 perform_remove() {
-    # Everything below is unconditional -- the single confirmation above,
-    # with the full list of what gets removed, is the only gate. Uninstall
+    # Everything below is unconditional -- the two confirmations above,
+    # with the full list of what gets removed, are the only gate. Uninstall
     # means removing everything (except package dependencies), not a
     # step-by-step negotiation.
 
@@ -1331,7 +1344,7 @@ main() {
             ;;
         --remove|remove|--uninstall|uninstall)
             do_remove
-            printf ' \e[32m \e[0m %s\n' "uhmsetup done at: $(date)"
+            log "uhmsetup done at: $(date)"
             exit 0
             ;;
         *)

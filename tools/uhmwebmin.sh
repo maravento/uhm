@@ -78,7 +78,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in coreutils util-linux ncurses-bin grep sed systemd mawk; do
+for dep_pkg in coreutils util-linux ncurses-bin grep sed systemd mawk perl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         echo "ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
@@ -295,19 +295,19 @@ log_lines="${params[lines]:-200}"
 (( log_lines < 50 )) && log_lines=50
 
 # First load or log rotated: read last N lines
-if (( pos == 0 )) || (( pos > file_size )); then
+if (( byte_pos == 0 )) || (( byte_pos > file_size )); then
     log_data=$(tail -n "$log_lines" "$log_file" 2>/dev/null || true)
     byte_pos=$file_size
     log_rotated=true
 else
     # No new data
-    if (( pos >= file_size )); then
+    if (( byte_pos >= file_size )); then
         printf '{"rows":[],"pos":%d}\n' "$file_size"
         exit 0
     fi
     # Read from last position
-    bytes_to_read=$(( file_size - pos ))
-    log_data=$(tail -c +"$(( pos + 1 ))" "$log_file" 2>/dev/null | head -c "$bytes_to_read" || true)
+    bytes_to_read=$(( file_size - byte_pos ))
+    log_data=$(tail -c +"$(( byte_pos + 1 ))" "$log_file" 2>/dev/null | head -c "$bytes_to_read" || true)
     byte_pos=$file_size
     log_rotated=false
 fi

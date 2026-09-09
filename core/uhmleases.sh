@@ -815,7 +815,7 @@ dedup_uhm_auth() {
     rm -f "$tmp_file" "$dropped_count"
 }
 
-function check_duplicate() {
+check_duplicate() {
     # -- mac-*.txt vs itself: fatal, admin must fix by hand ------------------
     shopt -s nullglob
     local acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
@@ -862,7 +862,7 @@ function check_duplicate() {
 # misconfiguration, regardless of whether a client currently holds it. This
 # is unrelated to duplicate detection -- kept as its own guard, called
 # alongside check_duplicate but never merged into it.
-function check_mac_ip_ranges() {
+check_mac_ip_ranges() {
     shopt -s nullglob
     local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
@@ -915,7 +915,7 @@ check_mac_ip_ranges
 
 # Log lines below do not carry the function name -- they use short,
 # generic phrasing instead.
-function expire_grace_entries() {
+expire_grace_entries() {
     [ ! -f "$UHM_GRACE" ] && return
     local file_temp now_epoch lease_age acl_status mac_addr client_ip client_name entry_epoch
     file_temp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
@@ -959,7 +959,7 @@ function expire_grace_entries() {
     chown root:root "$UHM_GRACE"
 }
 
-function is_pydhcp() {
+is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
     dhcp_conf="$DHCPDv4_CONF"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create temp file in /etc/pydhcp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
@@ -967,7 +967,7 @@ function is_pydhcp() {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function read_leases() {
+    read_leases() {
         # grep returns exit 1 on no-match, which is legitimate here and must
         # not abort the script. Disable pipefail for the duration of this
         # function and restore it on return -- restore only if it was
@@ -1061,7 +1061,7 @@ function is_pydhcp() {
                 # empty result, not a parsing failure. Safe to clear.
                 log "INFO: all $total_seen lease(s) belong to blocked MACs"
                 log "INFO: clearing pydhcpd.leases"
-                echo "" > "$leases_file"
+                : > "$leases_file"
                 rm -f "$temp_leases"
             elif (( original_count > 0 )); then
                 # Empty result NOT fully explained by blocked MACs (parsing
@@ -1070,7 +1070,7 @@ function is_pydhcp() {
                 log "WARNING: pydhcpd.leases unreadable, file untouched -- alert"
                 rm -f "$temp_leases"
             else
-                echo "" > "$leases_file"
+                : > "$leases_file"
             fi
         fi
         chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$leases_file"
@@ -1087,7 +1087,7 @@ function is_pydhcp() {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function update_dhcp_conf {
+    update_dhcp_conf() {
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
@@ -1193,7 +1193,7 @@ class "blockdhcp" {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function clean_acl {
+    clean_acl() {
         log "INFO: removing empty lines from ACL files"
         sed '/^$/d' -i "$ACL_BLOCK_FILE"
         sed '/^$/d' -i "$ACL_MAC_LIMITED"
@@ -1202,7 +1202,7 @@ class "blockdhcp" {
         sed '/^$/d' -i "$UHM_GRACE"
     }
 
-    function order_files_acl {
+    order_files_acl() {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
         sort -t';' -k3,3V "$UHM_MACAUTH" -o "$UHM_MACAUTH"
         sort -V "$UHM_GRACE" -o "$UHM_GRACE"

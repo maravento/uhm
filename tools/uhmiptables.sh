@@ -31,14 +31,14 @@ set -uo pipefail
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "uhmiptables.sh: this script must be run as root -- abort" >&2
+    echo "uhmiptables.sh: ERROR: this script must be run as root -- abort" >&2
     exit 1
 fi
 
 # dependencies
 for dep_pkg in iptables procps iproute2; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        echo "uhmiptables.sh: missing dependency '$dep_pkg' -- abort" >&2
+        echo "uhmiptables.sh: ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
     fi
 done
@@ -97,30 +97,29 @@ load_conf "$uhm_conf" || true
 # wan is a placeholder: uhmsetup.sh replaces it with sed -i during the
 # setup wizard, after asking and listing available interfaces.
 wan_iface="eth0"
-lan_iface="${INTERFACESv4:-eth1}"
-local_subnet="${SERV_SUBNET:-192.168.0.0}"
-server_addr="${SERVER_IP:-192.168.0.10}"
-SERV_DNS="${SERV_DNS:-$server_addr}"
-squid_port=3128
-squid_intercept_port=3129
-wpad_port="${WPAD_PORT:-18100}"
-[[ "$wpad_port" =~ $UH_UINT ]] && (( wpad_port >= 1 && wpad_port <= 65535 )) \
+INTERFACESv4="${INTERFACESv4:-eth1}"
+SERV_SUBNET="${SERV_SUBNET:-192.168.0.0}"
+SERVER_IP="${SERVER_IP:-192.168.0.10}"
+SERV_DNS="${SERV_DNS:-$SERVER_IP}"
+WPAD_PORT="${WPAD_PORT:-18100}"
+[[ "$WPAD_PORT" =~ $UH_UINT ]] && (( WPAD_PORT >= 1 && WPAD_PORT <= 65535 )) \
     || { echo "uhmiptables.sh: ERROR: WPAD_PORT is not a valid port -- abort" >&2; exit 1; }
-uh_mask="${SERV_MASK:-255.255.255.0}"
-if [[ " $UH_PREFIX " =~ [[:space:]]${uh_mask//./\\.}:([0-9]+)[[:space:]] ]]; then
+SERV_MASK="${SERV_MASK:-255.255.255.0}"
+if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
     netmask_int="${BASH_REMATCH[1]}"
 else
     echo "uhmiptables.sh: ERROR: SERV_MASK is not a valid netmask -- abort" >&2
     exit 1
 fi
-acl_mac_path="${ACL_MAC_PATH:-/etc/acl/mac}"
-acl_path="${acl_mac_path%/mac}"
+acl_path="${ACL_MAC_PATH:-/etc/acl/mac}"
+acl_path="${acl_path%/mac}"
+acl_mac_path="$acl_path/mac"
 acl_ipt_path="${acl_path}/ipt"
-hotspot_path="${UHM_PATH:-/etc/uhm}"
-UHM_GRACE="${UHM_GRACE:-${hotspot_path}/acl/uhm-grace.txt}"
+UHM_PATH="${UHM_PATH:-/etc/uhm}"
+UHM_GRACE="${UHM_GRACE:-${UHM_PATH}/acl/uhm-grace.txt}"
 
 ip link show "$wan_iface" >/dev/null 2>&1 || {
-    echo "uhmiptables.sh: interface '$wan_iface' does not exist -- abort" >&2
+    echo "uhmiptables.sh: ERROR: interface '$wan_iface' does not exist -- abort" >&2
     exit 1
 }
 
@@ -130,13 +129,13 @@ sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 # state, not by sysctl's exit code, so a value already set by another
 # means is accepted.
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
-    echo "uhmiptables.sh: IPv4 forwarding is off, LAN cannot route -- abort" >&2
+    echo "uhmiptables.sh: ERROR: IPv4 forwarding is off, LAN cannot route -- abort" >&2
     exit 1
 fi
 
 # A rule that fails here leaves the LAN without NAT, so every step below
 # reports it instead of letting the script exit 0 and pass as a good reload.
-fail() { echo "uhmiptables.sh: $1 -- abort" >&2; exit 1; }
+fail() { echo "uhmiptables.sh: ERROR: $1 -- abort" >&2; exit 1; }
 
 iptables -t nat -N UHM_NAT 2>/dev/null || true
 iptables -t nat -F UHM_NAT || fail "cannot flush UHM_NAT"

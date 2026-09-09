@@ -27,7 +27,7 @@
 # uhm-auth.txt      - Clients with an active voucher (hotspot authorized)
 # uhm-grace.txt     - Clients in the grace period (no voucher yet)
 # blockdhcp.txt     - Blocked MACs (grace expired without voucher)
-# mac/*.txt     - Permanent ACL lists (limited, unlimited)
+# mac-*.txt        - Permanent ACL lists (limited, unlimited)
 # pydhcpd.leases    - DHCP lease file. A MAC is reported as present when it
 #                     appears in the file, which is not the same as holding a
 #                     valid lease: pydhcpd keeps an expired lease block on
@@ -195,7 +195,7 @@ if [ ! -d "$ACL_MAC_PATH" ]; then
 fi
 
 shopt -s nullglob
-uhm_mac_lists=("$ACL_MAC_PATH"/*.txt)
+uhm_mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
 shopt -u nullglob
 if (( ${#uhm_mac_lists[@]} == 0 )); then
     echo "ERROR: no mac-*.txt in $ACL_MAC_PATH -- abort" >&2
@@ -241,7 +241,7 @@ found_in_leases() {
 }
 
 found_in_acl_dir() {
-    grep -rqiE "^a;${1};" "$ACL_MAC_PATH"/
+    grep -qiE "^#?a;${1};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null
 }
 
 press_enter() {
@@ -287,7 +287,7 @@ load_unifi_config() {
             env_value="${env_value//\\\\/\\}"
         fi
         case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|UHM_ESSID)
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
             *)
@@ -301,7 +301,6 @@ load_unifi_config() {
     [[ -z "${UNIFI_PASSWORD:-}" ]] && missing_keys+=("UNIFI_PASSWORD")
     [[ -z "${UNIFI_TYPE:-}" ]] && missing_keys+=("UNIFI_TYPE")
     [[ -z "${UNIFI_SITE:-}" ]] && missing_keys+=("UNIFI_SITE")
-    [[ -z "${UHM_ESSID:-}" ]] && missing_keys+=("UHM_ESSID")
     if (( ${#missing_keys[@]} > 0 )); then
         echo "ERROR: missing variables in uhm.env:" >&2
         local missing_key
@@ -464,10 +463,10 @@ check_mac() {
     printf " %-18s" "blockdhcp.txt:"
     if found_in "$mac_addr" "$ACL_BLOCK_FILE"; then in_block=1; printf "$mark_yes\n"; else printf "$mark_no\n"; fi
 
-    printf " %-18s" "mac/*.txt:"
+    printf " %-18s" "mac-*.txt:"
     if found_in_acl_dir "$mac_addr"; then
         in_acl=1; printf "$mark_yes\n"
-        grep -rliE "^a;${mac_addr};" "$ACL_MAC_PATH"/ | sed 's/^/ /'
+        grep -liE "^#?a;${mac_addr};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null | sed 's/^/ /'
     else
         printf "$mark_no\n"
     fi
@@ -597,11 +596,11 @@ menu_consistency() {
 
     # From mac dir
     shopt -s nullglob
-    for acl_file in "$ACL_MAC_PATH"/*.txt; do
+    for acl_file in "$ACL_MAC_PATH"/mac-*.txt; do
         before_count=$(wc -l < "$tmp_file")
-        grep -hioE "^a;$UH_MAC_RE" "$acl_file" | cut -d';' -f2 \
+        grep -hioE "^#?a;$UH_MAC_RE" "$acl_file" | cut -d';' -f2 \
             | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
-        (( $(wc -l < "$tmp_file") == before_count )) && info "no active entries in $(basename "$acl_file")"
+        (( $(wc -l < "$tmp_file") == before_count )) && info "no entries in $(basename "$acl_file")"
     done
     shopt -u nullglob
 
@@ -705,9 +704,9 @@ menu_search() {
 
     # Search in mac dir (lines containing query, extract MAC)
     shopt -s nullglob
-    for acl_file in "$ACL_MAC_PATH"/*.txt; do
+    for acl_file in "$ACL_MAC_PATH"/mac-*.txt; do
         grep -hiF "$search_query" "$acl_file" \
-            | grep -ioE "^a;$UH_MAC_RE" | cut -d';' -f2 \
+            | grep -ioE "^#?a;$UH_MAC_RE" | cut -d';' -f2 \
             | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
     done
     shopt -u nullglob

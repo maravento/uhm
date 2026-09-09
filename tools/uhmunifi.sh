@@ -399,11 +399,14 @@ guest_rc=$(echo "$guest_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 voucher_rc=$(echo "$voucher_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 
 # Startup availability check: every endpoint this script works with must
-# answer before the menu is drawn, so an action can never fail halfway
-# through because the controller went away. do_login's own "exit 1" on
-# failed re-authentication only kills the subshell of the api_get/api_post
-# call that triggered it (command substitution), so it never aborts this
-# script by itself -- this loop is what stops it, from the main body.
+# answer before the menu is drawn, so a controller that is already down is
+# caught here instead of halfway through an action. do_login's own "exit 1"
+# on failed re-authentication only kills the subshell of the api_get/
+# api_post call that triggered it (command substitution), so it never
+# aborts this script by itself -- this loop is what stops it, from the main
+# body. It only covers startup: if the controller goes away later, with the
+# menu already open, api_get returns an empty body and the action reports
+# no results rather than an error.
 for endpoint_rc in "stat/sta:$sta_rc" "stat/guest:$guest_rc" "stat/voucher:$voucher_rc"; do
     if [[ "${endpoint_rc#*:}" != "ok" ]]; then
         log "ERROR: ${endpoint_rc%%:*} query failed -- abort"
@@ -885,6 +888,7 @@ interactive_delete_expired() {
 
         while IFS= read -r mac_addr; do
             [ -z "$mac_addr" ] && continue
+            is_managed_mac "$mac_addr" && continue
             local unauth_rc
             unauth_rc=$(api_post "cmd/stamgr" \
                 "{\"cmd\":\"unauthorize-guest\",\"mac\":\"${mac_addr}\"}" \
@@ -900,6 +904,7 @@ interactive_delete_expired() {
 
         while IFS= read -r mac_addr; do
             [ -z "$mac_addr" ] && continue
+            is_managed_mac "$mac_addr" && continue
             local forget_rc
             forget_rc=$(api_post "cmd/stamgr" \
                 "{\"cmd\":\"forget-sta\",\"macs\":[\"${mac_addr}\"]}" \
@@ -1043,6 +1048,7 @@ interactive_revoke_by_code() {
     echo ""
 
     for mac_addr in "${all_macs[@]}"; do
+        is_managed_mac "$mac_addr" && continue
         local is_active
         is_active=$(echo "$sta_json" | jq -r --arg m "$mac_addr" '
             .data[] | select((.mac | ascii_downcase) == $m) | .mac
