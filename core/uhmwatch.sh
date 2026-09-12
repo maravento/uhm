@@ -273,7 +273,7 @@ esac
 # sourced to prevent code execution.
 uhm_conf="/etc/uhm/uhm.env"
 load_conf() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+    local conf_file="$1" env_line env_key env_value
     [[ ! -f "$conf_file" ]] && { log "WARNING: uhm.env not found -- fallback"; return 1; }
     local file_owner file_perms
     file_owner=$(stat -c '%U' "$conf_file" 2>/dev/null)
@@ -291,21 +291,11 @@ load_conf() {
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $env_key"
-        fi
-        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
-            env_value="${env_value:1:$((${#env_value}-2))}"
-            env_value="${env_value//\\\"/\"}"
-            env_value="${env_value//\\\$/\$}"
-            env_value="${env_value//\\\`/\`}"
-            env_value="${env_value//\\\\/\\}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
         fi
         case "$env_key" in
             UNIFI_TYPE|UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_CERT_PIN|RECOVERY_COOLDOWN_SECONDS|STARTUP_GRACE_SECONDS)
@@ -669,6 +659,11 @@ check_unifi_classic() {
 # MAIN
 # ------------------------------------------------------------------------------
 
+# start -- console only: this script runs every minute via cron, so writing
+# the start/end pair to uhm.log would add ~2880 lines a day of routine noise
+# to the same log uhmalert.sh reads to detect real failures.
+echo "uhmwatch start..."
+
 check_uhmd
 check_ualert
 check_pydhcpd
@@ -681,3 +676,6 @@ else
     # uosserver above. check_unifi_classic already covers it.
     check_unifi_classic
 fi
+
+# end
+echo "uhmwatch done at: $(date)"

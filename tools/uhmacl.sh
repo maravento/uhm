@@ -141,27 +141,22 @@ if [[ "$uhm_owner" != "root" ]] || [[ "$uhm_perms" != "600" ]]; then
     exit 1
 fi
 unset uhm_owner uhm_perms
-load_uhm_env() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+load_conf() {
+    local conf_file="$1" env_line env_key env_value
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            echo "ERROR: stray whitespace in a config key" >&2
-            echo "ERROR: key $env_key -- abort" >&2
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            echo "ERROR: malformed line in $conf_file: '$env_line' -- abort" >&2
             exit 1
         fi
-        env_value="${env_value%\"}"
-        env_value="${env_value#\"}"
         case "$env_key" in
-            BLOCKDHCP_GRACE_SECONDS|UHM_MACAUTH|UHM_GRACE|ACL_BLOCK_FILE|ACL_MAC_PATH|PYDHCPD_LEASES)
+            BLOCKDHCP_GRACE_SECONDS|UHM_MACAUTH|UHM_GRACE|ACL_BLOCK_FILE|ACL_MAC_PATH|PYDHCPD_LEASES|\
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
         esac
@@ -174,8 +169,8 @@ if [ ! -r "$pydhcp_conf" ]; then
     echo "ERROR: uhm reads the ACL paths and lease file from it" >&2
     exit 1
 fi
-load_uhm_env "$pydhcp_conf"
-load_uhm_env "$uhm_conf"
+load_conf "$pydhcp_conf"
+load_conf "$uhm_conf"
 for required_key in BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
     if [ -z "${!required_key:-}" ]; then
         echo "ERROR: $required_key not set in uhm.env or pydhcp.env -- abort" >&2
@@ -254,46 +249,12 @@ press_enter() {
 # Path to the full configuration file (contains UniFi credentials). Only used
 # by the UniFi-querying path below -- the local ACL/lease checks don't need it.
 
-# Loads the UNIFI_* variables from uhm.env, but only if the file is owned by
-# root and has no write permission for group/other (the same validation
-# uhmd.sh performs before loading its own config). Returns 1 without loading
-# anything if the validation fails, instead of continuing with potentially
-# compromised credentials.
+# Re-reads uhm.env through load_conf and verifies that every UNIFI_* key the
+# controller calls need is present, aborting with the list of missing ones.
+# The file's root:root 600 ownership is already enforced at startup, before
+# any key is read.
 load_unifi_config() {
-    # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
-    # maliciously replaced config file cannot execute code -- same approach
-    # as uhmleases.sh's load_env_file().
-    local env_line env_key env_value raw_key raw_value
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            echo "ERROR: stray whitespace in a config key" >&2
-            echo "ERROR: key $env_key -- abort" >&2
-            exit 1
-        fi
-        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
-            env_value="${env_value:1:$((${#env_value}-2))}"
-            env_value="${env_value//\\\"/\"}"
-            env_value="${env_value//\\\$/\$}"
-            env_value="${env_value//\\\`/\`}"
-            env_value="${env_value//\\\\/\\}"
-        fi
-        case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$uhm_conf"
+    load_conf "$uhm_conf"
 
     local missing_keys=()
     [[ -z "${UNIFI_CONTROLLER_URL:-}" ]] && missing_keys+=("UNIFI_CONTROLLER_URL")

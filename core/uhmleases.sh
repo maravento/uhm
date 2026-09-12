@@ -238,24 +238,18 @@ unset env_owner env_perms
 
 # Load only known KEY=VALUE pairs from ENV_FILE instead of sourcing it,
 # so a tampered or maliciously replaced env file cannot execute code.
-load_env_file() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+load_conf() {
+    local conf_file="$1" env_line env_key env_value
     while IFS= read -r env_line || [ -n "$env_line" ]; do
         [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $env_key"
-        fi
-        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
-            env_value="${env_value:1:$((${#env_value}-2))}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
         fi
         case "$env_key" in
             SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
@@ -280,8 +274,8 @@ if [ ! -r "$pydhcp_env" ]; then
     log "ERROR: uhm reads pydhcp's network and ACL values from it"
     exit 1
 fi
-load_env_file "$pydhcp_env"
-load_env_file "$env_file"
+load_conf "$pydhcp_env"
+load_conf "$env_file"
 
 if [ -z "${SERVER_IP:-}" ]; then
     log "ERROR: SERVER_IP not set -- abort"

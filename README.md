@@ -10,12 +10,16 @@
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <p>Many small and medium businesses, cybercafés, and other environments decide to deploy a captive portal and choose Ubiquiti UniFi technology (APs, switches, etc.). However, these setups need DHCP functions, traffic control, access policies, and filtering, among others, which normally require dedicated management hardware from the brand, but but the high cost of this hardware can make it unaffordable. So, they opt to use the <strong>UniFi Network self-hosted</strong> software on a PC, but they still need third-party hardware or software to provide these functions. </p>
-      <p><strong>UHM</strong> fills this gap, extending the capabilities of <strong>UniFi Network self-hosted</strong> under Linux. It provides the DHCP service required for the <strong>Third-Party Gateway</strong> scenario, respects UniFi's captive portal and vouchers, and adds an additional layer of access policies via ACLs and filtering via <code>ipset</code>/<code>iptables</code>, without depending on dedicated UniFi management hardware. </p>
+      <p>Many small and medium-sized businesses and other environments deploy captive portals using Ubiquiti UniFi technology (APs, switches, etc.). These installations may require DHCP, traffic control, access policies, filtering, and security features that normally depend on dedicated hardware and, due to its cost, may not always be viable to acquire. An alternative is to use <strong>UniFi Network self-hosted</strong> on a PC, but these installations still require additional infrastructure to manage the network.</p>
+      <p><strong>UHM</strong> provides this additional infrastructure using <strong>UniFi Network self-hosted</strong> under Linux in <strong>Third-Party Gateway</strong> mode.</p>
+      <p>Initial authentication remains the responsibility of the <strong>UniFi</strong> captive portal through vouchers. From that point onward, <strong>UHM</strong> provides functions such as DHCP, MAC + IP validation, ACLs, firewall rules using <code>iptables</code>/<code>ipset</code>, and other network and access-control functions.</p>
+      <p>This architecture also allows users to incorporate other Linux tools and services, such as Squid, WPAD, Unbound, Suricata, Apache2, Samba, and many others, to build an infrastructure with the level of control and security they require. When <a href="https://github.com/maravento/proxymon"><strong>Proxymon</strong></a> is also integrated, traffic and data-usage monitoring and control can be added, including usage limits for Internet connections with data plans.</p>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <p>Muchas pequeñas y medianas empresas, cibercafés y otros entornos, deciden implementar un portal cautivo y eligen tecnología Ubiquiti UniFi (APs, switches, etc.). Sin embargo, estas instalaciones necesitan funciones de DHCP, control de tráfico, políticas de acceso y filtrado, entre otras, que normalmente requieren hardware dedicado de administración de la marca, pero que, por su alto costo, no siempre pueden adquirir. Entonces, optan por utilizar el software <strong>UniFi Network self-hosted</strong> en un PC, pero igualmente siguen necesitando hardware o software de terceros que proporcione estas funciones. </p>
-      <p><strong>UHM</strong> llena este vacío, ampliando las capacidades de <strong>UniFi Network self-hosted</strong> bajo Linux. Proporciona el servicio DHCP necesario para el escenario <strong>Third-Party Gateway</strong>, respeta el portal cautivo y los vouchers de UniFi, y añade una capa adicional de políticas de acceso mediante ACLs y filtrado mediante <code>ipset</code>/<code>iptables</code>, sin depender de hardware dedicado de administración UniFi. </p>
+      <p>Muchas pequeñas y medianas empresas y otros entornos implementan portales cautivos utilizando tecnología Ubiquiti UniFi (APs, switches, etc.). Estas instalaciones pueden requerir funciones de DHCP, control de tráfico, políticas de acceso, filtrado y seguridad que normalmente dependen de hardware dedicado y que, por su costo, no siempre resulta viable adquirir. Una alternativa es utilizar <strong>UniFi Network self-hosted</strong> en un PC, pero estas instalaciones siguen necesitando infraestructura adicional para gestionar la red.</p>
+      <p><strong>UHM</strong> proporciona esta infraestructura adicional utilizando como base <strong>UniFi Network self-hosted</strong> bajo Linux en modo <strong>Third-Party Gateway</strong>.</p>
+      <p>La autenticación inicial sigue a cargo del portal cautivo de <strong>UniFi</strong> mediante vouchers. A partir de ahí, <strong>UHM</strong> permite gestionar funciones como DHCP, validación de MAC + IP, ACLs, reglas de firewall con <code>iptables</code>/<code>ipset</code> y otras funciones de control de acceso y red.</p>
+      <p>Esta arquitectura también permite que el usuario incorpore otras herramientas y servicios de Linux, tales como Squid, WPAD, Unbound, Suricata, Apache2, Samba y muchas otras, para construir una infraestructura con el nivel de control y seguridad que requiera. Si además se integra <a href="https://github.com/maravento/proxymon"><strong>Proxymon</strong></a>, es posible añadir monitoreo y control del tráfico y del consumo de datos, incluyendo límites de consumo para conexiones a Internet con planes de datos.</p>
     </td>
   </tr>
 </table>
@@ -392,6 +396,14 @@ uhm/                      # as cloned -- see note above
       Before running <code>uhmd</code>, in the UniFi Network controller:
       <ol>
         <li><b>Guest SSID</b>: enable Hotspot / Captive Portal.</li>
+        <li><b>SSID name and admin password</b>: independently of what the UniFi controller itself accepts or rejects -- Ubiquiti publishes no allowed character set for either, and the SSID length limit is UniFi's own (1-32 bytes, 31 on some versions) -- this is what <code>UHM</code> can handle when it receives them through the API:
+          <ul>
+            <li><b>Key path:</b> <code>/etc/uhm/uhm.env</code></li>
+            <li><b>Format:</b> <code>KEY=value</code> lines with no quoting. Letters, digits, accents, spaces between words (<code>PCR ALCALDIA</code>) and any punctuation are accepted, including <code>=</code>, <code>#</code>, <code>$</code>, <code>\</code> and quotes inside the text.</li>
+            <li><b><code>uhm.env</code> condition:</b> the first and the last character of the value must be visible and other than a quote. A leading or trailing space, or a value wrapped in quotes, therefore makes the line malformed and every <code>UHM</code> script aborts on reading it.</li>
+          </ul>
+          <b>WARNING:</b> <code>UHM</code> neither creates nor modifies these values. The SSID and the administrator password must already exist in UniFi; <code>UHM</code> only obtains them through the controller API. The SSID is never typed during install -- it is read from the controller or picked from a menu -- and the administrator password is asked for in order to connect to the API.
+        </li>
         <li><b>Landing Page</b>: select <i>Success Message</i> instead of a custom redirect URL — this is what allows iptables to capture the client's authentication chain. Do <b>not</b> enable <i>HTTPS Redirection Support</i>, <i>Encrypted URL</i>, <i>Secure Portal</i>, or <i>Domain</i> — the portal must be served over plain HTTP (e.g. <code>http://&lt;controller-ip&gt;:8880/guest/s/default/</code>).</li>
         <li>Do <b>not</b> use <i>Pre-Authorization Allowances</i> or <i>Post-Authorization Restrictions</i> — they interfere with iptables' redirect of the client's authentication flow.</li>
         <li><b>Administrator's choice</b>: <i>Client Device Isolation</i> blocks all device-to-device traffic on the SSID, which also blocks every discovery protocol (mDNS/Bonjour, WSD, SSDP) that clients rely on to find network printers and scanners. Unicast to a device's IP still works, so the symptom is a printer that cannot be found by the "Add printer" wizard but prints correctly once its IP is entered by hand. Decide by what the SSID must support: <b>keep it enabled</b> when clients only need internet access (no Samba shares, no network printers) — this is the safer default for a pure guest network; <b>disable it</b> when clients must reach Samba folders and/or network printers, as they cannot see each other otherwise. Independent of the captive portal: the portal page does not isolate anything, the isolation comes from this setting.</li>
@@ -413,6 +425,14 @@ uhm/                      # as cloned -- see note above
       Antes de ejecutar <code>uhmd</code>, en el controlador UniFi Network:
       <ol>
         <li><b>SSID de invitados</b>: habilitar Hotspot / Portal Cautivo.</li>
+        <li><b>Nombre del SSID y contraseña del admin</b>: con independencia de lo que el propio controlador UniFi acepte o rechace -- Ubiquiti no publica un conjunto de caracteres permitido para ninguno de los dos, y el límite de longitud del SSID es de UniFi (1-32 bytes, 31 en algunas versiones) --, esto es lo que puede manejar <code>UHM</code> al recibirlos mediante la API:
+          <ul>
+            <li><b>Path de claves:</b> <code>/etc/uhm/uhm.env</code></li>
+            <li><b>Formato:</b> líneas <code>CLAVE=valor</code> sin comillas. Se admiten letras, dígitos, tildes, espacios entre palabras (<code>PCR ALCALDIA</code>) y cualquier signo de puntuación, incluidos <code>=</code>, <code>#</code>, <code>$</code>, <code>\</code> y comillas dentro del texto.</li>
+            <li><b>Condición de <code>uhm.env</code>:</b> el primer y el último carácter del valor deben ser visibles y distintos de una comilla. Por tanto, un espacio al inicio o al final, o un valor envuelto en comillas, deja la línea mal formada y provoca que los scripts de <code>UHM</code> aborten al leerla.</li>
+          </ul>
+          <b>WARNING:</b> <code>UHM</code> no crea ni modifica estos valores. El SSID y la contraseña del administrador deben existir previamente en UniFi; <code>UHM</code> únicamente los obtiene mediante la API del controlador. El SSID no se introduce durante la instalación -- se obtiene del controlador o se selecciona mediante un menú -- y la contraseña del administrador se solicita para realizar la conexión con la API.
+        </li>
         <li><b>Landing Page</b>: seleccionar <i>Success Message</i> en lugar de una URL de redirección personalizada — esto es lo que le permite a iptables capturar la cadena de autenticación del cliente. <b>No</b> habilitar <i>HTTPS Redirection Support</i>, <i>Encrypted URL</i>, <i>Secure Portal</i> ni <i>Domain</i> — el portal debe servirse por HTTP plano (ej. <code>http://&lt;ip-controlador&gt;:8880/guest/s/default/</code>).</li>
         <li><b>No</b> usar <i>Pre-Authorization Allowances</i> ni <i>Post-Authorization Restrictions</i> — interfieren con la redirección de iptables del flujo de autenticación del cliente.</li>
         <li><b>Decisión del administrador</b>: <i>Client Device Isolation</i> bloquea todo el tráfico entre equipos del SSID, y con ello bloquea todos los protocolos de descubrimiento (mDNS/Bonjour, WSD, SSDP) que los clientes usan para encontrar impresoras y escáneres de red. El unicast a la IP del equipo sigue funcionando, por lo que el síntoma es una impresora que el asistente de "Agregar impresora" no encuentra pero que imprime correctamente al introducir su IP a mano. Decida según lo que el SSID deba soportar: <b>manténgalo activo</b> cuando los clientes solo necesiten acceso a internet (sin carpetas Samba ni impresoras de red) — es el valor por defecto más seguro para una red de invitados pura; <b>desactívelo</b> cuando los clientes deban alcanzar carpetas Samba y/o impresoras de red, ya que de otro modo no pueden verse entre sí. Es independiente del portal cautivo: la página del portal no aísla nada, el aislamiento viene de este ajuste.</li>
@@ -711,9 +731,9 @@ DHCPDv4_CONF=/etc/pydhcp/core/pydhcpd.conf
 DHCPDv4_BIN=/usr/bin/python3
 DHCPDv4_SCRIPT=/etc/pydhcp/core/pydhcpd.py
 PYDHCPD_LEASES=/etc/pydhcp/core/pydhcpd.leases
-INTERFACESv4="eth1"
-DAEMON_USER="pydhcpd"
-DAEMON_GROUP="pydhcpd"
+INTERFACESv4=eth1
+DAEMON_USER=pydhcpd
+DAEMON_GROUP=pydhcpd
 # -- Network values (chosen by the administrator during install) --------------
 SERVER_IP=192.168.0.10
 SERV_SUBNET=192.168.0.0
@@ -766,16 +786,16 @@ RESERVATION_TTL_SECONDS=30
 # =============================================================================
 # -- UniFi keys ---------------------------------------------------------------
 # Guest SSID
-UHM_ESSID="EXAMPLE_SSID"
+UHM_ESSID=EXAMPLE_SSID
 # Unifi Access
-UNIFI_CONTROLLER_URL="https://192.168.0.10:11443"
-UNIFI_USERNAME="admin"
-UNIFI_PASSWORD="mypass"
-UNIFI_SITE="default"
+UNIFI_CONTROLLER_URL=https://192.168.0.10:11443
+UNIFI_USERNAME=admin
+UNIFI_PASSWORD=mypass
+UNIFI_SITE=default
 # Unifi type (classic or unifi-os)
-UNIFI_TYPE="unifi-os"
+UNIFI_TYPE=unifi-os
 # Cert
-UNIFI_CERT_PIN="sha256//AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDE="
+UNIFI_CERT_PIN=sha256//AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDE=
 # -- Hotspot keys -------------------------------------------------------------
 # Hotspot Range
 UHM_INI_RANGE=192.168.0.180
@@ -787,9 +807,9 @@ RELOAD_SAFETY_INTERVAL_SECONDS=3600
 BLOCKDHCP_GRACE_SECONDS=86400
 RECOVERY_COOLDOWN_SECONDS=600
 # -- Scripts ------------------------------------------------------------------
-UHM_RELOAD="/etc/uhm/core/uhmreload.sh"
-UHM_LEASES="/etc/uhm/core/uhmleases.sh"
-UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
+UHM_RELOAD=/etc/uhm/core/uhmreload.sh
+UHM_LEASES=/etc/uhm/core/uhmleases.sh
+UHM_IPTABLES=/etc/uhm/tools/uhmiptables.sh
 # Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
 UHM_LEASES_TIMEOUT_SECONDS=120
 UHM_IPTABLES_TIMEOUT_SECONDS=60
@@ -803,7 +823,7 @@ UHM_QUEUE=/etc/uhm/acl/uhm-queue.txt
 # =============================================================================
 # UHM ALERT
 # =============================================================================
-UHM_NTFY_TOPIC="uhm-alert-x7k2m9qv"
+UHM_NTFY_TOPIC=uhm-alert-x7k2m9qv
 UHM_API_FAIL_THRESHOLD=3
 UHM_ALERT_QUIET_PERIOD_SECONDS=120
 # =============================================================================

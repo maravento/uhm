@@ -188,29 +188,19 @@ log "uhmunifi start..."
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
-load_config() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+load_conf() {
+    local conf_file="$1" env_line env_key env_value
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "ERROR: stray whitespace in a config key"
-            log "ERROR: key $env_key -- abort"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
             exit 1
         fi
-        env_value="${env_value%\"}"
-        env_value="${env_value#\"}"
-        env_value="${env_value//\\\"/\"}"
-        env_value="${env_value//\\\$/\$}"
-        env_value="${env_value//\\\`/\`}"
-        env_value="${env_value//\\\\/\\}"
         case "$env_key" in
             UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|UHM_ESSID|UHM_MACAUTH|ACL_MAC_PATH)
                 printf -v "$env_key" '%s' "$env_value"
@@ -225,8 +215,8 @@ if [ ! -r "$pydhcp_conf" ]; then
     log "ERROR: uhm reads ACL_MAC_PATH from it"
     exit 1
 fi
-load_config "$pydhcp_conf"
-load_config "$uhm_conf"
+load_conf "$pydhcp_conf"
+load_conf "$uhm_conf"
 
 for required_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UHM_ESSID \
           UHM_MACAUTH ACL_MAC_PATH; do

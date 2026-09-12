@@ -223,16 +223,6 @@ insert_after_last_delimiter() {
     mv "$tmp_file" "$conf_file"
 }
 
-dq_escape() {
-    # dq_escape STRING -- escape \ " $ ` for safe reuse inside double quotes
-    local raw_string="$1"
-    raw_string="${raw_string//\\/\\\\}"
-    raw_string="${raw_string//\"/\\\"}"
-    raw_string="${raw_string//\$/\\\$}"
-    raw_string="${raw_string//\`/\\\`}"
-    printf '%s' "$raw_string"
-}
-
 confirm() {
     # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
     local prompt_text="$1" default_value="${2:-n}" user_answer hint_text
@@ -308,7 +298,7 @@ detect_dhcp_backend() {
 # Sets SERVER_IP, SERV_MASK, SERV_SUBNET, SERV_BROADCAST,
 # SERV_DNS, SERV_INI_RANGE_BLOCK, SERV_END_RANGE_BLOCK for
 # run_setup_wizard.
-load_pydhcp_env() {
+load_conf() {
     [ -f "$pydhcp_env" ] \
         || { err "$pydhcp_env not found"; abort "install pydhcp first, see its README -- abort"; }
 
@@ -324,20 +314,17 @@ load_pydhcp_env() {
 
     # Load only these known keys instead of sourcing the whole file, so a
     # tampered pydhcp.env cannot execute code.
-    local env_line env_key env_value raw_key raw_value
+    local env_line env_key env_value
     while IFS= read -r env_line || [ -n "$env_line" ]; do
         [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $env_key"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $pydhcp_env: '$env_line' -- abort"
+            exit 1
         fi
         case "$env_key" in
             SERVER_IP|SERV_MASK|SERV_SUBNET|SERV_BROADCAST|SERV_DNS|\
@@ -521,7 +508,7 @@ fetch_unifi_ssids() {
 # SETUP WIZARD
 # Collects every value uhm.env needs and writes the block
 run_setup_wizard() {
-    local cfg_wan_if
+    local wan_iface
     local cfg_ini_range cfg_end_range cfg_essid
     local cfg_unifi_user cfg_unifi_pass cfg_reload_script
     local found_url found_type
@@ -540,9 +527,9 @@ run_setup_wizard() {
     local iface_list
     iface_list=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
     echo "Available interfaces: $iface_list"
-    ask_interface "WAN interface" "eth0" cfg_wan_if
+    ask_interface "WAN interface" "eth0" wan_iface
     if [[ -f "$uhm_iptables_dest" ]]; then
-        sed -i "s:eth0:$cfg_wan_if:g" "$uhm_iptables_dest"
+        sed -i "s:eth0:$wan_iface:g" "$uhm_iptables_dest"
     fi
 
     step "pydhcp network configuration"
@@ -703,11 +690,14 @@ run_setup_wizard() {
     (
         umask 077
         local essid_answer user_answer pass_answer url_answer reload_script_answer
-        essid_answer=$(dq_escape "$cfg_essid")
-        user_answer=$(dq_escape "$cfg_unifi_user")
-        pass_answer=$(dq_escape "$cfg_unifi_pass")
-        reload_script_answer=$(dq_escape "$cfg_reload_script")
-        url_answer=$(dq_escape "$found_url")
+        # Written verbatim: uhm.env holds bare KEY=value lines, so a value
+        # never needs escaping and load_conf would read any added backslash
+        # as part of the value.
+        essid_answer="$cfg_essid"
+        user_answer="$cfg_unifi_user"
+        pass_answer="$cfg_unifi_pass"
+        reload_script_answer="$cfg_reload_script"
+        url_answer="$found_url"
 
         # uhm.env holds only uhm's own keys. pydhcp's values (network,
         # ACL paths, leases) stay in pydhcp.env and are read from there at
@@ -729,18 +719,18 @@ run_setup_wizard() {
 # =============================================================================
 # -- UniFi keys ---------------------------------------------------------------
 # Guest SSID
-UHM_ESSID="${essid_answer}"
+UHM_ESSID=${essid_answer}
 # Unifi Access
-UNIFI_CONTROLLER_URL="${url_answer}"
-UNIFI_USERNAME="${user_answer}"
-UNIFI_PASSWORD="${pass_answer}"
+UNIFI_CONTROLLER_URL=${url_answer}
+UNIFI_USERNAME=${user_answer}
+UNIFI_PASSWORD=${pass_answer}
 # UniFi always creates a site named "default". If the administrator renamed it,
 # edit this value to match the exact site name shown in the UniFi controller.
-UNIFI_SITE="default"
+UNIFI_SITE=default
 # Unifi type (classic or unifi-os)
-UNIFI_TYPE="${found_type}"
+UNIFI_TYPE=${found_type}
 # Cert
-UNIFI_CERT_PIN="${cfg_cert_pin}"
+UNIFI_CERT_PIN=${cfg_cert_pin}
 # -- Hotspot keys ---------------------------------------------------------------
 # Hotspot Range
 UHM_INI_RANGE=${cfg_ini_range}
@@ -752,10 +742,10 @@ RELOAD_SAFETY_INTERVAL_SECONDS=3600
 BLOCKDHCP_GRACE_SECONDS=${cfg_grace_seconds}
 RECOVERY_COOLDOWN_SECONDS=600
 # -- Scripts ------------------------------------------------------------------
-UHM_RELOAD="${reload_script_answer}"
-UHM_LEASES="${core_dir}/uhmleases.sh"
+UHM_RELOAD=${reload_script_answer}
+UHM_LEASES=${core_dir}/uhmleases.sh
 # By sysadmin
-UHM_IPTABLES="${uhm_iptables_dest}"
+UHM_IPTABLES=${uhm_iptables_dest}
 # Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
 UHM_LEASES_TIMEOUT_SECONDS=120
 UHM_IPTABLES_TIMEOUT_SECONDS=60
@@ -1330,7 +1320,7 @@ main() {
         ""|install)
             check_apt_deps
             detect_dhcp_backend
-            load_pydhcp_env
+            load_conf
             do_install
             log "uhmsetup done at: $(date)"
             exit 0

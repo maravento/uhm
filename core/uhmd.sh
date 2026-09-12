@@ -358,30 +358,21 @@ mac_reload_pending=0
 last_reload_epoch=0
 
 # Loads only known KEY=VALUE pairs from config_file instead of sourcing it,
-# so a tampered or maliciously replaced config file cannot execute code --
-# same approach as uhmleases.sh's load_env_file().
-load_env_file() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+# so a tampered or maliciously replaced config file cannot execute code.
+# Canonical parser, identical in every script of the project: a malformed
+# line aborts.
+load_conf() {
+    local conf_file="$1" env_line env_key env_value
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $env_key"
-        fi
-        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
-            env_value="${env_value:1:$((${#env_value}-2))}"
-            env_value="${env_value//\\\"/\"}"
-            env_value="${env_value//\\\$/\$}"
-            env_value="${env_value//\\\`/\`}"
-            env_value="${env_value//\\\\/\\}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
         fi
         case "$env_key" in
             UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|\
@@ -447,8 +438,8 @@ load_config() {
         log "ERROR: uhm reads pydhcp's network and ACL values from it"
         exit 1
     fi
-    load_env_file "$pydhcp_env"
-    load_env_file "$config_file"
+    load_conf "$pydhcp_env"
+    load_conf "$config_file"
 
     # uhm's own ACL files (UHM_MACAUTH, UHM_GRACE, UHM_QUEUE) and
     # pydhcp's (ACL_BLOCK_FILE, ACL_MAC_PATH) -- all configurable via uhm.env,

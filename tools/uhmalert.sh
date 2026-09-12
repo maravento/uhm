@@ -196,7 +196,7 @@ install_module() {
         insert_after_last_delimiter "$config_file" "# =============================================================================
 # UHM ALERT
 # =============================================================================
-UHM_NTFY_TOPIC=\"$gen_topic\"
+UHM_NTFY_TOPIC=$gen_topic
 UHM_API_FAIL_THRESHOLD=3
 UHM_ALERT_QUIET_PERIOD_SECONDS=120
 # ============================================================================="
@@ -316,26 +316,20 @@ if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
     fi
 fi
 # Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
-# maliciously replaced config file cannot execute code -- same approach as
-# uhmleases.sh's load_env_file().
-load_env_file() {
-    local conf_file="$1" env_line env_key env_value raw_key raw_value
+# maliciously replaced config file cannot execute code. Canonical parser,
+# identical in every script of the project: a malformed line aborts.
+load_conf() {
+    local conf_file="$1" env_line env_key env_value
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
-        raw_key="$env_key" raw_value="$env_value"
-        env_key="${env_key#"${env_key%%[![:space:]]*}"}"
-        env_key="${env_key%"${env_key##*[![:space:]]}"}"
-        env_value="${env_value#"${env_value%%[![:space:]]*}"}"
-        env_value="${env_value%"${env_value##*[![:space:]]}"}"
-        if [[ "$env_key" != "$raw_key" || "$env_value" != "$raw_value" ]]; then
-            log "WARNING: stray whitespace fixed -- alert"
-            log "WARNING: key $env_key"
-        fi
-        if [[ "$env_value" == \"*\" && "$env_value" == *\" && ${#env_value} -ge 2 ]]; then
-            env_value="${env_value:1:$((${#env_value}-2))}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
         fi
         case "$env_key" in
             UHM_NTFY_TOPIC|UHM_API_FAIL_THRESHOLD|UHM_ALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
@@ -346,7 +340,7 @@ load_env_file() {
         esac
     done < "$conf_file"
 }
-load_env_file "$config_file"
+load_conf "$config_file"
 
 if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
     log "ERROR: UHM_NTFY_TOPIC not set in $config_file -- abort"
