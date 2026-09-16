@@ -173,14 +173,14 @@
 | **bsdextrautils** (`column`) | `uhmunifi.sh` | Formats table output | Formatea la salida en tablas |
 | **python3** | `uhmleases.sh` (runtime), `uhmsetup.sh` (install time) | Range arithmetic: checks that `SERVER_IP` does not fall inside the block pool or the hotspot range, and that the hotspot range is inside the network and does not overlap pydhcp's pool | Aritmética de rangos: verifica que `SERVER_IP` no caiga dentro del pool de bloqueo ni del rango del hotspot, y que el rango del hotspot esté dentro de la red y no se solape con el pool de pydhcp |
 | **mawk** (`awk`), **coreutils**, **grep** | all bash scripts in the project | Text/field parsing (MAC/IP/ACL lines, DHCP config, logs) | Parseo de texto/campos (líneas MAC/IP/ACL, config DHCP, logs) |
-| **sed** | `uhmd.sh`, `uhmleases.sh`, `uhmwatch.sh`, `uhmunifi.sh`, `uhmacl.sh`, `uhmwebmin.sh` | In-place ACL/config file edits | Edición in-place de archivos ACL/config |
+| **sed** | `uhmd.sh`, `uhmleases.sh`, `uhmwatch.sh`, `uhmunifi.sh`, `uhmacl.sh` | In-place ACL/config file edits | Edición in-place de archivos ACL/config |
 | **util-linux** (`flock`) | all bash scripts in the project | Per-script instance locking, prevents overlapping runs | Bloqueo de instancia por script, evita ejecuciones superpuestas |
 | **iproute2** (`ip`) | `uhmsetup.sh` (install time only) | Detects network interfaces during the setup wizard | Detecta interfaces de red durante el wizard de instalación |
-| **ncurses-bin** (`clear`) | `uhmacl.sh`, `uhmwebmin.sh` | Clears the terminal between screen refreshes | Limpia la terminal entre refrescos de pantalla |
+| **ncurses-bin** (`clear`) | `uhmacl.sh` | Clears the terminal between screen refreshes | Limpia la terminal entre refrescos de pantalla |
 | **libc-bin** (`getent`) | `uhmleases.sh` | Checks that the `pydhcpd` user and group exist | Verifica que el usuario y grupo `pydhcpd` existan |
 | **findutils** (`find`) | `uhmsetup.sh` | Clears the install directory on uninstall, preserving `bak/` | Vacía el directorio de instalación al desinstalar, conservando `bak/` |
 | **procps** (`sysctl`) | `uhmiptables.sh` | Enables IPv4 forwarding | Habilita el forwarding IPv4 |
-| **systemd** (`systemctl`) | `uhmd`, `uhmreload.sh`, `uhmwatch.sh`, `uhmleases.sh`, `uhmalert.sh`, `uhmwebmin.sh` | Manages/checks the `uhmd`/`pydhcpd`/UniFi services | Gestiona/verifica los servicios `uhmd`/`pydhcpd`/UniFi |
+| **systemd** (`systemctl`) | `uhmd`, `uhmreload.sh`, `uhmwatch.sh`, `uhmleases.sh`, `uhmalert.sh`, `uhmtool.sh` | Manages/checks the `uhmd`/`pydhcpd`/UniFi services | Gestiona/verifica los servicios `uhmd`/`pydhcpd`/UniFi |
 | **cron** | `uhmwatch.sh` (mandatory, installed automatically) | Runs the services watchdog every minute | Corre el vigilante de servicios cada minuto |
 | **logrotate** | `uhmsetup.sh` (writes `/etc/logrotate.d/uhm`) | Rotates `/var/log/uhm.log` daily; without it the shared log grows without limit | Rota `/var/log/uhm.log` a diario; sin él el log compartido crece sin límite |
 
@@ -189,6 +189,7 @@
 | Component | When it's needed | Cuándo se necesita |
 |-----------|-------------------|---------------------|
 | **squid**, **apache2**, DHCP option 252 (WPAD) | Only if your network uses [proxymon](https://github.com/maravento/proxymon) (Squid-based filtering) — `apache2` hosts the WPAD/PAC file, and WPAD lets clients auto-discover the proxy. See that project for installation and configuration details. | Solo si su red usa [proxymon](https://github.com/maravento/proxymon) (filtrado basado en Squid) — `apache2` sirve el archivo WPAD/PAC, y WPAD permite que los clientes descubran el proxy automáticamente. Consulte ese proyecto para detalles de instalación y configuración. |
+| **apache2**, **libapache2-mod-php** | Only if you install the web interface. Both are verified when the panel is accepted during install, and the panel is skipped with a message if either is missing. | Solo si instala la interfaz web. Ambos se verifican cuando se acepta el panel durante la instalación, y el panel se salta con un mensaje si falta alguno. |
 
 ```bash
 # Required packages
@@ -199,7 +200,7 @@ sudo apt install -y bash curl jq iptables ipset cron python3 openssl bsdextrauti
 #   • pydhcp — https://github.com/maravento/pydhcp
 
 # Optional
-sudo apt install -y squid apache2
+sudo apt install -y squid apache2 libapache2-mod-php
 ```
 
 > Without UniFi reachable or without `pydhcpd` running (beyond their respective startup grace windows), `UHM` refuses to start. Without a working `uhmiptables.sh`, the daemon still starts and keeps classifying clients (grace/authorized/blocked) normally, but firewall enforcement is skipped with a log warning until it's configured. These are hard dependencies for full functionality.
@@ -327,10 +328,19 @@ uhm/                      # as cloned -- see note above
 │   ├── uhmiptables_example.txt   # full reference ruleset (ipsets, iptables, redirects)
 │   │                             # -- not deployed by uhmsetup.sh; copy it by hand over
 │   │                             # tools/uhmiptables.sh and adapt it
-│   ├── uhmunifi.sh               # audits UniFi clients and vouchers
-│   └── uhmwebmin.sh              # installs/uninstalls the Webmin module -- a real-time
-│                                 # log viewer for uhmd (AJAX polling, dark mode, level
-│                                 # badges, search)
+│   ├── uhmtool.sh                # JSON backend for the web interface -- reads the log,
+│   │                             # the ACL files and the UniFi API, and writes back an
+│   │                             # ACL file after validating it
+│   └── uhmunifi.sh               # audits UniFi clients and vouchers
+├── web/                     # web interface -- deployed to /var/www/uhm only when
+│                            # the panel is accepted during install
+│   ├── aclview/index.php         # ACL tab: editor for the ACL lists
+│   ├── logview/index.php         # LogView tab: real-time viewer for uhmd
+│   ├── toolview/index.php        # Tool tab: local ACL and UniFi reports
+│   ├── api.php                   # single endpoint, calls uhmtool.sh through sudo
+│   ├── index.html                # panel shell: three tabs, light and dark theme
+│   ├── uhmweb.conf               # Apache vhost on port 4048
+│   └── uhmweb.sudoers            # sudo rule that lets www-data reach uhmtool.sh
 └── uhmsetup.sh              # installer / updater / uninstaller (interactive);
                              # run from here, never deployed to /etc/uhm/
 ```
@@ -356,8 +366,8 @@ uhm/                      # as cloned -- see note above
 ├── uhm-queue.txt                 # internal working file (uhmd.sh / uhmleases.sh only)
 └── uhm-grace.txt                 # grace-period clients (no voucher yet)
 
-/etc/acl/mac/            # pydhcp's namespace -- NOT generated by UHM
-├── mac-limited.txt                 # user-maintained; UHM only reads it
+/etc/acl/mac/                # pydhcp's namespace -- NOT generated by UHM
+├── mac-limited.txt               # user-maintained; UHM only reads it
 └── mac-unlimited.txt             # user-maintained; UHM only reads it
 
 /etc/pydhcp/acl/             # pydhcp's own namespace -- NOT generated by UHM
@@ -365,11 +375,20 @@ uhm/                      # as cloned -- see note above
                                   # reused (not owned) by uhmleases.sh
 ```
 
-`ACL_MAC_PATH` (`/etc/acl/mac`), `ACL_DHCP_PATH` (`/etc/pydhcp/acl`) and their file variables are configurable in `uhm.env` precisely because those directories belong to other projects — `UHM` must respect whatever path the administrator already has configured for `pydhcp`/`iptables`, not impose its own. `uhm.env` itself lives at `/etc/uhm/` (not inside `acl/`, since it is configuration, not a data list). Only `/etc/uhm/acl/` is this project's own and moves together with it (see Remove / Update).
-
-**Naming convention:** the config variables for this project's own three lists are named after the file each one points at and all start with `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Variables for files owned by other projects keep the `ACL_` prefix (`ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). The prefix alone tells you who owns the file, which is what decides whether `UHM` may create it: `uhmd.sh` and `uhmleases.sh` each create their own three lists empty if missing, but never create `blockdhcp.txt` or any `mac-*.txt` — a missing `blockdhcp.txt` aborts the daemon with a pointer to `pydhcp`'s own `pysetup.sh`.
-
-**Convención de nombres:** las variables de configuración de las tres listas propias de este proyecto se nombran según el archivo al que apuntan y todas empiezan por `U` — `UHM_MACAUTH`, `UHM_GRACE`, `UHM_QUEUE`. Las variables de archivos que pertenecen a otros proyectos conservan el prefijo `ACL_` (`ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED`, `ACL_BLOCK_FILE`, `ACL_MAC_PATH`, `ACL_DHCP_PATH`, `ACL_PATH`). El prefijo por sí solo indica de quién es el archivo, que es lo que decide si `UHM` puede crearlo: `uhmd.sh` y `uhmleases.sh` crean vacías sus tres listas propias si faltan, pero nunca crean `blockdhcp.txt` ni ningún `mac-*.txt` — un `blockdhcp.txt` ausente aborta el daemon indicando el `pysetup.sh` de `pydhcp`.
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>), <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>) and their file variables are configurable in <code>uhm.env</code> precisely because those directories belong to other projects — <code>UHM</code> must respect whatever path the administrator already has configured for <code>pydhcp</code>/<code>iptables</code>, not impose its own. <code>uhm.env</code> itself lives at <code>/etc/uhm/</code> (not inside <code>acl/</code>, since it is configuration, not a data list). Only <code>/etc/uhm/acl/</code> is this project's own and moves together with it (see Remove / Update).
+      <br><br>
+      The config variables for this project's own three lists are named after the file each one points at and all start with <code>U</code> — <code>UHM_MACAUTH</code>, <code>UHM_GRACE</code>, <code>UHM_QUEUE</code>. Variables for files owned by other projects keep the <code>ACL_</code> prefix (<code>ACL_MAC_LIMITED</code>, <code>ACL_MAC_UNLIMITED</code>, <code>ACL_BLOCK_FILE</code>, <code>ACL_MAC_PATH</code>, <code>ACL_DHCP_PATH</code>, <code>ACL_PATH</code>). The prefix alone tells you who owns the file, which is what decides whether <code>UHM</code> may create it: <code>uhmd.sh</code> and <code>uhmleases.sh</code> each create their own three lists empty if missing, but never create <code>blockdhcp.txt</code> or any <code>mac-*.txt</code> — a missing <code>blockdhcp.txt</code> aborts the daemon with a pointer to <code>pydhcp</code>'s own <code>pysetup.sh</code>.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>), <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>) y sus variables de archivo son configurables en <code>uhm.env</code> justamente porque esos directorios pertenecen a otros proyectos — <code>UHM</code> debe respetar la ruta que el administrador ya tenga configurada para <code>pydhcp</code>/<code>iptables</code>, no imponer la suya. El propio <code>uhm.env</code> vive en <code>/etc/uhm/</code> (no dentro de <code>acl/</code>, porque es configuración, no una lista de datos). Solo <code>/etc/uhm/acl/</code> es propio de este proyecto y se mueve junto con él (ver Remove / Update).
+      <br><br>
+      Las variables de configuración de las tres listas propias de este proyecto se nombran según el archivo al que apuntan y todas empiezan por <code>U</code> — <code>UHM_MACAUTH</code>, <code>UHM_GRACE</code>, <code>UHM_QUEUE</code>. Las variables de archivos que pertenecen a otros proyectos conservan el prefijo <code>ACL_</code> (<code>ACL_MAC_LIMITED</code>, <code>ACL_MAC_UNLIMITED</code>, <code>ACL_BLOCK_FILE</code>, <code>ACL_MAC_PATH</code>, <code>ACL_DHCP_PATH</code>, <code>ACL_PATH</code>). El prefijo por sí solo indica de quién es el archivo, que es lo que decide si <code>UHM</code> puede crearlo: <code>uhmd.sh</code> y <code>uhmleases.sh</code> crean vacías sus tres listas propias si faltan, pero nunca crean <code>blockdhcp.txt</code> ni ningún <code>mac-*.txt</code> — un <code>blockdhcp.txt</code> ausente aborta el daemon indicando el <code>pysetup.sh</code> de <code>pydhcp</code>.
+    </td>
+  </tr>
+</table>
 
 ### ACL priority order
 
@@ -487,10 +506,10 @@ uhm/                      # as cloned -- see note above
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (WAN interface, hotspot IP range as two full addresses, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from <code>pydhcp.env</code>, not asked; UHM supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and unconditional installation of <code>uhmwatch</code> (mandatory -- see uhmwatch below for why), plus two yes/no prompts (default no) for the truly optional components: <code>uhmalert</code> right there instead of as a separate manual step afterward, and the Webmin log viewer module — only asked if Webmin is actually detected on the system, skipped with a message otherwise. Make sure every item in Requirements (particularly the Mandatory dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
+      Clone the repository with <code>git clone</code> and run the installer. <code>uhmsetup.sh</code> handles dependency verification, DHCP backend detection, file deployment, interactive setup wizard (WAN interface, hotspot IP range as two full addresses, UniFi credentials, controller auto-discovery, guest SSID, optional managed MAC lists -- network values are read from <code>pydhcp.env</code>, not asked; UHM supports a single controller and a single guest SSID, both auto-detected via the UniFi API -- see below for exactly how each is resolved), logrotate config, systemd service registration, cleanup of any stale <code>@hourly</code> cron entry from installs done before the daemon handled its own safety-net reload, and unconditional installation of <code>uhmwatch</code> (mandatory -- see uhmwatch below for why), plus two yes/no prompts (default no) for the truly optional components: <code>uhmalert</code> right there instead of as a separate manual step afterward, and the web interface — a yes/no prompt too, skipped with a message if <code>apache2</code> or <code>libapache2-mod-php</code> is missing. Make sure every item in Requirements (particularly the Mandatory dependencies) is in place <b>before</b> running the installer — none of it is installed automatically, and <code>pydhcp</code> must already be running with <code>/etc/pydhcp/pydhcp.env</code> present and complete (<code>uhmsetup.sh</code> reads its network values from there instead of asking again).
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaz WAN, rango IP del hotspot como dos direcciones completas, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de <code>pydhcp.env</code>, no se preguntan; UHM soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, e instalación incondicional de <code>uhmwatch</code> (obligatorio -- ver uhmwatch más abajo para el porqué), más dos preguntas sí/no (default no) para los componentes realmente opcionales: <code>uhmalert</code> ahí mismo en vez de como paso manual separado después, y el módulo visor de log de Webmin — solo se pregunta si Webmin está realmente detectado en el sistema, si no se salta con un mensaje. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de Requirements (en particular las dependencias de Mandatory) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
+      Clone el repositorio con <code>git clone</code> y ejecute el instalador. <code>uhmsetup.sh</code> se encarga de verificar dependencias, detectar el backend DHCP, desplegar archivos, correr el wizard interactivo (interfaz WAN, rango IP del hotspot como dos direcciones completas, credenciales UniFi, autodescubrimiento del controlador, SSID de invitados, listas opcionales de MACs gestionadas -- los valores de red se leen de <code>pydhcp.env</code>, no se preguntan; UHM soporta un solo controlador y un solo SSID de invitados, ambos autodetectados vía la API de UniFi -- ver abajo el detalle exacto de cómo se resuelve cada uno), configurar logrotate, registrar el servicio systemd, limpiar cualquier entrada de cron <code>@hourly</code> residual de instalaciones anteriores a que el daemon manejara su propio reload de seguridad, e instalación incondicional de <code>uhmwatch</code> (obligatorio -- ver uhmwatch más abajo para el porqué), más dos preguntas sí/no (default no) para los componentes realmente opcionales: <code>uhmalert</code> ahí mismo en vez de como paso manual separado después, y la interfaz web — también pregunta sí/no, se salta con un mensaje si falta <code>apache2</code> o <code>libapache2-mod-php</code>. Asegúrese de tener listos, <b>antes</b> de ejecutar el instalador, todo lo de Requirements (en particular las dependencias de Mandatory) — nada se instala automáticamente, y <code>pydhcp</code> ya debe estar corriendo con <code>/etc/pydhcp/pydhcp.env</code> presente y completo (<code>uhmsetup.sh</code> lee sus valores de red desde ahí en vez de volver a preguntarlos).
     </td>
   </tr>
 </table>
@@ -559,7 +578,7 @@ journalctl -u uhmd -f
     <td style="width: 50%; vertical-align: top;">
       To update scripts while never touching existing configuration or ACL data:
       <ul>
-        <li>Updates: everything under <code>core/</code> (<code>uhmd.sh</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>), <code>service/uhmd.service</code>, and every script under <code>tools/</code> (<code>uhmunifi.sh</code>, <code>uhmacl.sh</code>, <code>uhmalert.sh</code>, <code>uhmwebmin.sh</code>) — <code>tools/uhmiptables_example.txt</code> is a reference example, never deployed, and <code>tools/uhmiptables.sh</code> is deployed only when absent</li>
+        <li>Updates: everything under <code>core/</code> (<code>uhmd.sh</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>), <code>service/uhmd.service</code>, and every script under <code>tools/</code> (<code>uhmunifi.sh</code>, <code>uhmacl.sh</code>, <code>uhmalert.sh</code>, <code>uhmtool.sh</code>) — <code>tools/uhmiptables_example.txt</code> is a reference example, never deployed, and <code>tools/uhmiptables.sh</code> is deployed only when absent</li>
         <li>Never renamed, moved or overwritten if already present: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> if it exists, and the logrotate config — they are the administrator's own live/customized data. If missing (e.g. a partial/broken install), the ACL files and the logrotate config are recreated empty with a WARNING and <code>uhmiptables.sh</code> is redeployed from the minimal template; existing ones are left exactly as they are. <code>uhm.env</code> is the one exception: <code>--update</code> never creates or checks it — a missing <code>uhm.env</code> is not detected or repaired by this mode, only by a fresh (non-<code>--update</code>) install</li>
         <li><b>Pauses services before replacing their scripts, resumes them after:</b> <code>uhmd.service</code> and <code>uhmalert.service</code> (if installed) are stopped — only if they were actually active — before any file is overwritten, and restarted once the update finishes; <code>uhmwatch</code>'s cron entry (not a systemd service) is removed for the same window and re-registered afterward. Nothing that was already stopped/disabled beforehand is started. <code>pydhcpd</code> is deliberately left alone — it's a separate project this update never touches, and stopping it would cut DHCP for the whole LAN, not just the hotspot</li>
         <li>Removes any stale <code>@hourly</code> uhmreload.sh cron entry (superseded by the daemon's own safety-net reload)</li>
@@ -569,7 +588,7 @@ journalctl -u uhmd -f
     <td style="width: 50%; vertical-align: top;">
       Para actualizar los scripts sin tocar nunca la configuración ni los datos ACL ya existentes:
       <ul>
-        <li>Actualiza: todo lo que está bajo <code>core/</code> (<code>uhmd.sh</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>), <code>service/uhmd.service</code>, y todos los scripts de <code>tools/</code> (<code>uhmunifi.sh</code>, <code>uhmacl.sh</code>, <code>uhmalert.sh</code>, <code>uhmwebmin.sh</code>) — <code>tools/uhmiptables_example.txt</code> es un ejemplo de referencia, nunca se despliega, y <code>tools/uhmiptables.sh</code> se despliega solo si falta</li>
+        <li>Actualiza: todo lo que está bajo <code>core/</code> (<code>uhmd.sh</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>), <code>service/uhmd.service</code>, y todos los scripts de <code>tools/</code> (<code>uhmunifi.sh</code>, <code>uhmacl.sh</code>, <code>uhmalert.sh</code>, <code>uhmtool.sh</code>) — <code>tools/uhmiptables_example.txt</code> es un ejemplo de referencia, nunca se despliega, y <code>tools/uhmiptables.sh</code> se despliega solo si falta</li>
         <li>Nunca se renombran, mueven ni sobrescriben si ya existen: <code>uhm.env</code>, <code>/etc/uhm/acl/</code> (<code>uhm-auth.txt</code>, <code>uhm-queue.txt</code>, <code>uhm-grace.txt</code>), <code>tools/uhmiptables.sh</code> si existe, ni la configuración de logrotate — son datos propios y personalizados del administrador. Si faltan (ej. una instalación parcial/rota), los archivos ACL y la configuración de logrotate se recrean vacíos con un WARNING y <code>uhmiptables.sh</code> se vuelve a desplegar desde la plantilla mínima; los que ya existen quedan exactamente como estaban. <code>uhm.env</code> es la única excepción: <code>--update</code> nunca lo crea ni lo verifica — un <code>uhm.env</code> faltante no se detecta ni se repara en este modo, solo en una instalación nueva (sin <code>--update</code>)</li>
         <li><b>Pausa los servicios antes de reemplazar sus scripts, los reanuda al terminar:</b> <code>uhmd.service</code> y <code>uhmalert.service</code> (si está instalado) se detienen — solo si estaban activos — antes de sobrescribir cualquier archivo, y se reinician al finalizar la actualización; la entrada de cron de <code>uhmwatch</code> (no es un servicio systemd) se elimina durante esa misma ventana y se vuelve a registrar después. Nada que ya estuviera detenido/desactivado de antemano se inicia. <code>pydhcpd</code> se deja intencionalmente en paz — es un proyecto aparte que esta actualización nunca toca, y detenerlo cortaría el DHCP de toda la LAN, no solo del hotspot</li>
         <li>Elimina cualquier entrada de cron <code>@hourly</code> de uhmreload.sh residual (reemplazada por el reload de seguridad interno del daemon)</li>
@@ -609,7 +628,7 @@ sudo bash uhmsetup.sh --remove
 | 1 | Stop and disable `uhmd.service` and remove `/etc/systemd/system/uhmd.service` | Detiene y deshabilita `uhmd.service` y elimina `/etc/systemd/system/uhmd.service` |
 | 2 | Remove the `@hourly` cron entry for `/etc/uhm/core/uhmreload.sh` (or the pre-restructure `/etc/uhm/tools/uhmreload.sh` path, if upgrading from an older install) | Elimina la entrada de cron `@hourly` para `/etc/uhm/core/uhmreload.sh` (o la ruta previa a la reestructuración `/etc/uhm/tools/uhmreload.sh`, si se actualiza desde una instalación anterior) |
 | 3 | Remove the `uhmwatch` cron entry, and stop/disable/remove `uhmalert.service` if installed | Elimina la entrada de cron de `uhmwatch`, y detiene/deshabilita/elimina `uhmalert.service` si está instalado |
-| 4 | Uninstall the Webmin module (`uhmwebmin.sh uninstall`, if installed) | Desinstala el módulo de Webmin (`uhmwebmin.sh uninstall`, si está instalado) |
+| 4 | Remove the web interface: `/var/www/uhm`, its vhost, its sudo rule and its `Listen` directives, if installed | Elimina la interfaz web: `/var/www/uhm`, su vhost, su regla de sudo y sus directivas `Listen`, si está instalada |
 | 5 | Remove `/etc/logrotate.d/uhm` | Elimina `/etc/logrotate.d/uhm` |
 | 6 | Remove `/etc/uhm/` and **all its contents** including `uhm.env`, ACL files and your `uhmiptables.sh` | Elimina `/etc/uhm/` y **todo su contenido**, incluyendo `uhm.env`, archivos ACL y su `uhmiptables.sh` |
 | 7 | Remove `/var/log/uhm.log`, rotated archives, `/var/log/uhmunifi.log`, `/var/log/uhmleases-failure.trace` and `/var/log/uhmiptables-failure.trace` | Elimina `/var/log/uhm.log`, los archivos rotados, `/var/log/uhmunifi.log`, `/var/log/uhmleases-failure.trace` y `/var/log/uhmiptables-failure.trace` |
@@ -631,7 +650,10 @@ sudo bash uhmsetup.sh --remove
 | `/etc/logrotate.d/uhm` | Logrotate config | Config de logrotate |
 | `/etc/uhm/core/uhmwatch.sh` | Services watchdog (mandatory) | Vigilante de servicios (obligatorio) |
 | `/run/uhmwatch/` | Watchdog recovery-attempt timestamps — cleared on reboot, not persistent | Marcas de tiempo de intentos de recuperación del vigilante — se limpian en cada reinicio, no persisten |
-| `/etc/uhm/tools/uhmwebmin.sh` | Webmin log viewer module | Módulo visor de log para Webmin |
+| `/etc/uhm/tools/uhmtool.sh` | JSON backend for the web interface | Backend JSON de la interfaz web |
+| `/var/www/uhm/` | Web interface (optional) | Interfaz web (opcional) |
+| `/etc/apache2/sites-available/uhmweb.conf` | Apache vhost on port 4048 (optional) | Vhost de Apache en el puerto 4048 (opcional) |
+| `/etc/sudoers.d/uhmweb` | Sudo rule for `www-data` (optional) | Regla de sudo para `www-data` (opcional) |
 
 ### Backups
 
@@ -833,55 +855,125 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 >
 > Las claves que se agregan después (por ejemplo con `uhmalert.sh install`, o un relleno de `pyleases.sh`/`pysetup.sh` en una instalación anterior) llegan como un bloque completo — con sus propias líneas `# =====...=====` de apertura y cierre — añadido justo después del último delimitador que ya haya en el archivo, de modo que el archivo siempre termina en un delimitador.
 
-### Webmin Module
+### Web Interface
 
-<table>
+<table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmwebmin.sh</code> installs a native Webmin module (<b>Networking → UHM Log Viewer</b>) that replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation. The module is written as a self-contained bash installer.
+      The web interface is an Apache vhost on port <code>4048</code> with three tabs: <b>LogView</b>, <b>ACLView</b> and <b>ToolView</b>. It is optional, offered as a yes/no prompt during install, and deployed to <code>/var/www/uhm</code>. Apache runs it as <code>www-data</code>, which never reads or writes a root-owned file: every answer comes from <code>tools/uhmtool.sh</code>, invoked through the sudo rule in <code>/etc/sudoers.d/uhmweb</code>. Access is restricted by IP to the LAN range and to localhost.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>uhmwebmin.sh</code> instala un módulo nativo de Webmin (<b>Networking → UHM Log Viewer</b>) que reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs. El módulo está escrito como un instalador bash autocontenido.
+      La interfaz web es un vhost de Apache en el puerto <code>4048</code> con tres pestañas: <b>LogView</b>, <b>ACLView</b> y <b>ToolView</b>. Es opcional, se ofrece como pregunta sí/no durante la instalación, y se despliega en <code>/var/www/uhm</code>. Apache la corre como <code>www-data</code>, que nunca lee ni escribe un archivo de root: cada respuesta viene de <code>tools/uhmtool.sh</code>, invocado a través de la regla de sudo en <code>/etc/sudoers.d/uhmweb</code>. El acceso se restringe por IP al rango de la LAN y a localhost.
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb.png" width="100%"></a>
+</p>
+<p align="center"><i>Panel header and tab bar</i></p>
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      There are two ways to reach each view: <code>http://localhost:4048/?tab=logview</code>, <code>?tab=aclview</code> or <code>?tab=toolview</code> open the panel on that tab, with the tab bar; <code>http://localhost:4048/logview/</code>, <code>/aclview/</code> and <code>/toolview/</code> open that module on its own, without the tab bar. Both forms are valid.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Hay dos maneras de llegar a cada vista: <code>http://localhost:4048/?tab=logview</code>, <code>?tab=aclview</code> o <code>?tab=toolview</code> abren el panel en esa pestaña, con la barra de pestañas; <code>http://localhost:4048/logview/</code>, <code>/aclview/</code> y <code>/toolview/</code> abren ese módulo solo, sin la barra. Ambas formas son válidas.
     </td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td align="center"><b>Light</b></td>
-    <td align="center"><b>Dark</b></td>
-  </tr>
-  <tr>
-    <td><a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmview1.png" width="100%"></a></td>
-    <td><a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmview2.png" width="100%"></a></td>
+    <td style="width: 50%; vertical-align: top;">
+      <strong>Important</strong>
+      <ul>
+        <li>Requires <code>apache2</code> and <code>libapache2-mod-php</code>. No other service may be listening on the port.</li>
+        <li>UHM uses Apache2 exclusively on port 4048, because it is listed as <strong>Unassigned</strong> by IANA. For more information visit <a href="https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt">https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt</a></li>
+        <li>The vhost ships with <code>192.168.0.0/24</code> as a safe default, replaced at install time with the real LAN range read from <code>pydhcp.env</code>. Access it at <code>http://&lt;SERVER_IP&gt;:4048/</code></li>
+      </ul>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <strong>Importante</strong>
+      <ul>
+        <li>Requiere <code>apache2</code> y <code>libapache2-mod-php</code>. Ningún otro servicio puede estar escuchando en el puerto.</li>
+        <li>UHM usa Apache2 exclusivamente en el puerto 4048, ya que está listado como <strong>Sin asignar</strong> por IANA. Para más información visita <a href="https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt">https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt</a></li>
+        <li>El vhost trae <code>192.168.0.0/24</code> como valor por defecto seguro, reemplazado en la instalación por el rango real de la LAN leído de <code>pydhcp.env</code>. Se accede en <code>http://&lt;SERVER_IP&gt;:4048/</code></li>
+      </ul>
+    </td>
   </tr>
 </table>
 
-##### Features
+##### LogView
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-logview.png" width="100%"></a>
+</p>
+<p align="center"><i>LogView — real-time viewer for uhmd</i></p>
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Replaces <code>tail -f</code> for monitoring <code>/var/log/uhm.log</code>. It uses AJAX byte-offset polling — reading only new bytes since the last position — so it never stalls on log rotation.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Reemplaza a <code>tail -f</code> para monitorear <code>/var/log/uhm.log</code>. Usa polling AJAX por byte offset — leyendo solo los bytes nuevos desde la última posición — así nunca se atasca con la rotación de logs.
+    </td>
+  </tr>
+</table>
 
 | Feature | Description | Descripción |
 |---------|--------------|-------------|
 | **Live polling** | AJAX polling by byte offset (1s–30s configurable). Never stalls on log rotation. | Polling AJAX por byte offset (1s–30s configurable). No se atasca con la rotación de logs. |
-| **Dark / Light mode** | Toggle with moon/sun button. Preference saved in `localStorage`. | Alternancia con botón luna/sol. Preferencia guardada en `localStorage`. |
+| **Dark / Light mode** | Toggle with moon/sun button in the panel header. Preference saved in `localStorage` and shared by the three tabs. | Alternancia con botón luna/sol en la cabecera del panel. Preferencia guardada en `localStorage` y compartida por las tres pestañas. |
 | **Level badges** | Color-coded badges, one distinctive color per level: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). | Badges con color, un color distintivo por nivel: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). |
 | **Full-log grep** | Searches the entire log file via `grep -Fia`. Results highlighted inline. | Busca en el archivo completo vía `grep -Fia`. Resultados resaltados inline. |
 | **Cycle stats bar** | Parses the last stats line and shows Vouchers, Authorized, Grace, New Auth, Revoked as pills. | Parsea la última línea de stats y muestra Vouchers, Authorized, Grace, New Auth, Revoked como pills. |
 | **Service status** | Shows PID, uptime, and memory from `systemctl status uhmd`. | Muestra PID, uptime y memoria desde `systemctl status uhmd`. |
 | **Text filter** | Live filter on visible rows (plain substring match, case-insensitive). | Filtro en vivo sobre filas visibles (coincidencia de subcadena literal, sin distinguir mayúsculas/minúsculas). |
 | **Level filter** | Dropdown to show only INFO / WARNING / ERROR / ALERT / FIX / STATUS. | Dropdown para mostrar solo INFO / WARNING / ERROR / ALERT / FIX / STATUS. |
-| **Configurable** | Log file path editable from Webmin module config (gear icon). | Ruta del log editable desde la configuración del módulo Webmin (icono engranaje). |
 
-```bash
-# Install
-sudo bash tools/uhmwebmin.sh install
+##### ACLView
 
-# Uninstall
-sudo bash tools/uhmwebmin.sh uninstall
-```
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-aclview.png" width="100%"></a>
+</p>
+<p align="center"><i>ACLView — editor for the ACL lists</i></p>
 
-> Requires Webmin installed (`/usr/share/webmin`). After install, log out and back into Webmin. The module appears under **Networking**. Access is granted to the Webmin `root` account and to the detected local sudo user -- for any other Webmin user, grant it from **Webmin → Webmin Users**.
->
-> Requiere Webmin instalado (`/usr/share/webmin`). Tras instalar, hacer logout y login en Webmin. El módulo aparece bajo **Networking**. El acceso se concede a la cuenta `root` de Webmin y al usuario local con sudo detectado -- para cualquier otro usuario de Webmin, concederlo desde **Webmin → Webmin Users**.
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Editor for the ACL lists. The selector offers the four files declared in <code>uhm.env</code>/<code>pydhcp.env</code> — <code>uhm-auth</code>, <code>uhm-grace</code>, <code>uhm-queue</code> and <code>blockdhcp</code> — plus every <code>mac-*.txt</code> found in <code>ACL_MAC_PATH</code>. No other path is reachable. Every line is validated against the exact format its own file requires, the same one <code>uhmleases.sh</code> enforces: a single malformed line rejects the whole save and reports its line number, so a list that would abort the daemon's reload chain never reaches disk. The previous content is kept as <code>&lt;file&gt;.bak</code>.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Editor de las listas ACL. El selector ofrece los cuatro archivos declarados en <code>uhm.env</code>/<code>pydhcp.env</code> — <code>uhm-auth</code>, <code>uhm-grace</code>, <code>uhm-queue</code> y <code>blockdhcp</code> — más todos los <code>mac-*.txt</code> encontrados en <code>ACL_MAC_PATH</code>. Ninguna otra ruta es alcanzable. Cada línea se valida contra el formato exacto que exige su propio archivo, el mismo que impone <code>uhmleases.sh</code>: una sola línea mal formada rechaza el guardado completo e informa su número de línea, así una lista que abortaría la cadena de reload del demonio nunca llega al disco. El contenido anterior se conserva como <code>&lt;archivo&gt;.bak</code>.
+    </td>
+  </tr>
+</table>
+
+##### ToolView
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-toolview.png" width="100%"></a>
+</p>
+<p align="center"><i>ToolView — local ACL and UniFi reports</i></p>
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Read-only reports. The selector lists the same reports the two terminal tools already offer. <b>Local ACL</b> — Check MAC, Grace period, Consistency check and Search by IP or hostname — are the four menu options of <code>uhmacl.sh</code>. <b>UniFi</b> — Connection status, Authorized, Vouchers, Guest sessions and Unauthorized — are the five reports of <code>uhmunifi.sh</code>. Data is read from its original sources. That script's Actions submenu is excluded. For more information see <code>uhmunifi.sh</code>.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Reportes de solo lectura. El selector lista los mismos reportes que ya ofrecen las dos herramientas de terminal. <b>Local ACL</b> — Check MAC, Grace period, Consistency check y Search by IP or hostname — son las cuatro opciones del menú de <code>uhmacl.sh</code>. <b>UniFi</b> — Connection status, Authorized, Vouchers, Guest sessions y Unauthorized — son los cinco reportes de <code>uhmunifi.sh</code>. Los datos se leen de sus fuentes originales. Se excluye el submenú Actions de ese script. Para mayor información consulte <code>uhmunifi.sh</code>.
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-toolviewmenu.png" width="20%"></a>
+</p>
+<p align="center"><i>Report selector</i></p>
 
 ### Reconfigure
 
@@ -1955,14 +2047,14 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> is a <b>mandatory</b>, standalone services watchdog — installed automatically by <code>uhmsetup.sh</code>, not offered as a yes/no prompt like <code>uhmalert</code>/<code>uhmwebmin</code>. Every unit it watches already has its own systemd <code>Restart=</code> policy, but that alone gives up permanently once its <code>StartLimitBurst</code> is exhausted, with no further attempt and no alert of its own (see below). <code>uhmwatch</code> is the last line of defense against that — it runs every minute, independent of whatever state systemd itself gave up in, so <code>UHM</code>'s essential services don't stay down indefinitely just because systemd stopped trying. Checks every service <code>UHM</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), <code>pydhcpd.service</code> (always -- external dependency UHM cannot function without, watched here since pydhcp's own <code>Restart=on-failure</code> gives up silently after its burst with no alerting of its own), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run. Each recovery attempt runs <code>systemctl reset-failed</code> right before <code>start</code>/<code>restart</code> — every unit already carries its own <code>Restart=</code> policy with a <code>StartLimitBurst</code>, and once that burst is exhausted systemd stops trying on its own and stays quiet about it, which would otherwise make this watchdog's own restart attempt fail silently right when it's needed most. To avoid then hammering a persistently broken service every single minute, each restart attempt (successful or not) is timestamped per-service under <code>/run/uhmwatch/</code> (cleared on reboot), and a new attempt is skipped — logged only, not acted on — until <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) has passed since the last one.
+      <b>uhmwatch.sh</b> is a <b>mandatory</b>, standalone services watchdog — installed automatically by <code>uhmsetup.sh</code>, not offered as a yes/no prompt like <code>uhmalert</code> or the web interface. Every unit it watches already has its own systemd <code>Restart=</code> policy, but that alone gives up permanently once its <code>StartLimitBurst</code> is exhausted, with no further attempt and no alert of its own (see below). <code>uhmwatch</code> is the last line of defense against that — it runs every minute, independent of whatever state systemd itself gave up in, so <code>UHM</code>'s essential services don't stay down indefinitely just because systemd stopped trying. Checks every service <code>UHM</code> depends on, restarting whichever is down: <code>uhmd.service</code> (always), <code>uhmalert.service</code> (only if installed), <code>pydhcpd.service</code> (always -- external dependency UHM cannot function without, watched here since pydhcp's own <code>Restart=on-failure</code> gives up silently after its burst with no alerting of its own), and the UniFi backend (<code>uosserver.service</code> for <code>UNIFI_TYPE=unifi-os</code>, or <code>unifi.service</code> for <code>classic</code>). Each check is fully independent — one check's failure never skips or blocks the others in the same run. Each recovery attempt runs <code>systemctl reset-failed</code> right before <code>start</code>/<code>restart</code> — every unit already carries its own <code>Restart=</code> policy with a <code>StartLimitBurst</code>, and once that burst is exhausted systemd stops trying on its own and stays quiet about it, which would otherwise make this watchdog's own restart attempt fail silently right when it's needed most. To avoid then hammering a persistently broken service every single minute, each restart attempt (successful or not) is timestamped per-service under <code>/run/uhmwatch/</code> (cleared on reboot), and a new attempt is skipped — logged only, not acted on — until <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) has passed since the last one.
       <br><br>
       Standalone — never reads or modifies <code>uhmd.sh</code>, only manages services via <code>systemctl</code>. Writes to the same shared <code>/var/log/uhm.log</code> as the rest of <code>UHM</code> (no separate log file or logrotate of its own). Silent on a healthy run — nothing is logged unless a check finds a problem or takes a fix action.
       <br><br>
       The <code>pydhcpd.service</code> check specifically skips its "OFFLINE" verdict (no WARNING, no restart) if <code>uhmleases.sh</code> currently holds the same cycle lock <code>uhmd.sh</code> uses (<code>/var/lock/uhmd-cycle.lock</code>) — a normal reload stops/reconfigures/starts <code>pydhcpd</code> itself for a few seconds, and a cron tick landing in that window would otherwise "fix" a service that isn't actually broken, restarting it out from under <code>uhmleases.sh</code>'s own pending restart and aborting that reload.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmwatch.sh</b> es un vigilante de servicios <b>obligatorio</b> e independiente — se instala automáticamente con <code>uhmsetup.sh</code>, no se ofrece como pregunta sí/no como <code>uhmalert</code>/<code>uhmwebmin</code>. Cada unidad que vigila ya tiene su propia política <code>Restart=</code> de systemd, pero eso solo se rinde para siempre en cuanto agota su <code>StartLimitBurst</code>, sin más intentos y sin aviso propio (ver más abajo). <code>uhmwatch</code> es la última línea de defensa contra eso — corre cada minuto, independiente del estado en que systemd se haya rendido, para que los servicios esenciales de <code>UHM</code> no queden caídos indefinidamente solo porque systemd dejó de intentarlo. Verifica cada servicio del que depende <code>UHM</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), <code>pydhcpd.service</code> (siempre -- dependencia externa sin la cual UHM no puede funcionar, vigilada acá porque el propio <code>Restart=on-failure</code> de pydhcp se rinde en silencio tras agotar su cupo, sin ningún aviso propio), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida. Cada intento de recuperación corre <code>systemctl reset-failed</code> justo antes de <code>start</code>/<code>restart</code> — cada unidad ya trae su propia política <code>Restart=</code> con un <code>StartLimitBurst</code>, y una vez agotado ese cupo systemd deja de reintentar por su cuenta y no avisa — lo que de otro modo haría fallar en silencio el intento de este vigilante justo cuando más se lo necesita. Para no machacar después con un restart cada minuto a un servicio persistentemente roto, cada intento de recuperación (exitoso o no) queda con marca de tiempo por servicio bajo <code>/run/uhmwatch/</code> (se limpia en cada reinicio), y un nuevo intento se salta -- solo se loguea, no se actúa -- hasta que pasen <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) desde el último.
+      <b>uhmwatch.sh</b> es un vigilante de servicios <b>obligatorio</b> e independiente — se instala automáticamente con <code>uhmsetup.sh</code>, no se ofrece como pregunta sí/no como <code>uhmalert</code> o la interfaz web. Cada unidad que vigila ya tiene su propia política <code>Restart=</code> de systemd, pero eso solo se rinde para siempre en cuanto agota su <code>StartLimitBurst</code>, sin más intentos y sin aviso propio (ver más abajo). <code>uhmwatch</code> es la última línea de defensa contra eso — corre cada minuto, independiente del estado en que systemd se haya rendido, para que los servicios esenciales de <code>UHM</code> no queden caídos indefinidamente solo porque systemd dejó de intentarlo. Verifica cada servicio del que depende <code>UHM</code>, reiniciando el que esté caído: <code>uhmd.service</code> (siempre), <code>uhmalert.service</code> (solo si está instalado), <code>pydhcpd.service</code> (siempre -- dependencia externa sin la cual UHM no puede funcionar, vigilada acá porque el propio <code>Restart=on-failure</code> de pydhcp se rinde en silencio tras agotar su cupo, sin ningún aviso propio), y el backend de UniFi (<code>uosserver.service</code> para <code>UNIFI_TYPE=unifi-os</code>, o <code>unifi.service</code> para <code>classic</code>). Cada chequeo es completamente independiente — el fallo de uno nunca salta ni bloquea a los demás en la misma corrida. Cada intento de recuperación corre <code>systemctl reset-failed</code> justo antes de <code>start</code>/<code>restart</code> — cada unidad ya trae su propia política <code>Restart=</code> con un <code>StartLimitBurst</code>, y una vez agotado ese cupo systemd deja de reintentar por su cuenta y no avisa — lo que de otro modo haría fallar en silencio el intento de este vigilante justo cuando más se lo necesita. Para no machacar después con un restart cada minuto a un servicio persistentemente roto, cada intento de recuperación (exitoso o no) queda con marca de tiempo por servicio bajo <code>/run/uhmwatch/</code> (se limpia en cada reinicio), y un nuevo intento se salta -- solo se loguea, no se actúa -- hasta que pasen <code>RECOVERY_COOLDOWN_SECONDS</code> (default 600s / 10 min) desde el último.
       <br><br>
       Independiente — nunca lee ni modifica <code>uhmd.sh</code>, solo gestiona servicios vía <code>systemctl</code>. Escribe al mismo <code>/var/log/uhm.log</code> compartido con el resto de <code>UHM</code> (sin log ni logrotate propio). Silencioso en una corrida sana — no registra nada salvo que un chequeo encuentre un problema o tome una acción de reparación.
       <br><br>
@@ -2091,10 +2183,10 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. Every component classifies every line as <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code>, or (for <code>uhmalert.sh</code>) <code>ALERT:</code> — including continuation lines, since a message split across two physical lines to respect the 80-column limit always carries the same level on both. The Webmin viewer (<code>uhmwebmin.sh</code>) groups the few genuinely level-less lines (the compact <code>field=value|field=value</code> counters, and each sub-script's own <code>"&lt;name&gt; start..."</code>/<code>"&lt;name&gt; done"</code> boundary markers) under a generic <code>STATUS</code> level. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
+      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. Every component classifies every line as <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code>, or (for <code>uhmalert.sh</code>) <code>ALERT:</code> — including continuation lines, since a message split across two physical lines to respect the 80-column limit always carries the same level on both. The LogView tab of the web interface groups the few genuinely level-less lines (the compact <code>field=value|field=value</code> counters, and each sub-script's own <code>"&lt;name&gt; start..."</code>/<code>"&lt;name&gt; done"</code> boundary markers) under a generic <code>STATUS</code> level. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. Cada componente clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code> o (en <code>uhmalert.sh</code>) <code>ALERT:</code> — incluidas las líneas de continuación, ya que un mensaje partido en dos líneas físicas por el límite de 80 columnas siempre lleva el mismo nivel en ambas. El visor de Webmin (<code>uhmwebmin.sh</code>) agrupa las pocas líneas genuinamente sin nivel (los contadores compactos <code>campo=valor|campo=valor</code>, y las marcas de inicio/cierre <code>"&lt;nombre&gt; start..."</code>/<code>"&lt;nombre&gt; done"</code> de cada sub-script) bajo un nivel genérico <code>STATUS</code>. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
+      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. Cada componente clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code> o (en <code>uhmalert.sh</code>) <code>ALERT:</code> — incluidas las líneas de continuación, ya que un mensaje partido en dos líneas físicas por el límite de 80 columnas siempre lleva el mismo nivel en ambas. La pestaña LogView de la interfaz web agrupa las pocas líneas genuinamente sin nivel (los contadores compactos <code>campo=valor|campo=valor</code>, y las marcas de inicio/cierre <code>"&lt;nombre&gt; start..."</code>/<code>"&lt;nombre&gt; done"</code> de cada sub-script) bajo un nivel genérico <code>STATUS</code>. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
     </td>
   </tr>
 </table>
@@ -2108,7 +2200,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 | `INFO:` | Routine state changes and notifications -- everything else, including anything skipped or defaulted without needing administrator attention. Paired with `-- skip` (an action was discarded, for any reason) or `-- degraded` (a system/environment limitation -- not a bad config value -- left the script running without an optimization or protection it would normally have; nothing for the administrator to fix). | Cambios de estado rutinarios y notificaciones -- todo lo demás, incluyendo lo omitido o resuelto con un valor por defecto sin necesitar atención del administrador. Acompañado de `-- skip` (se descartó una acción, por cualquier razón) o `-- degraded` (una limitación del sistema/entorno -- no un valor malo de configuración -- dejó el script funcionando sin una optimización o protección que normalmente tendría; no hay nada que el administrador deba corregir). |
 | `ALERT:` | `uhmalert.sh` only -- confirms a push notification was actually sent for an `ERROR:`/`WARNING:`/`FIX:` line it picked up. | Exclusivo de `uhmalert.sh` -- confirma que se envió una notificación push por una línea `ERROR:`/`WARNING:`/`FIX:` detectada. |
 | `FIX:` | A prior problem (`ERROR:`/`WARNING:`) is now confirmed resolved -- e.g. a service `uhmwatch.sh` restarted came back healthy. | Un problema previo (`ERROR:`/`WARNING:`) ya se confirmó resuelto -- ej. un servicio que `uhmwatch.sh` reinició volvió a estar sano. |
-| `STATUS` (no prefix) | Level-less lines: each script's own `"<name> start..."`/`"<name> done"` boundary markers, and the compact `field=value\|field=value` counters -- grouped under this generic label only by the Webmin viewer (`uhmwebmin.sh`), not written as `STATUS:` in the log itself. | Líneas sin nivel: las marcas de inicio/cierre `"<nombre> start..."`/`"<nombre> done"` de cada script, y los contadores compactos `campo=valor\|campo=valor` -- agrupadas bajo esta etiqueta genérica solo por el visor de Webmin (`uhmwebmin.sh`), no se escriben como `STATUS:` en el log real. |
+| `STATUS` (no prefix) | Level-less lines: each script's own `"<name> start..."`/`"<name> done"` boundary markers, and the compact `field=value\|field=value` counters -- grouped under this generic label only by the LogView tab of the web interface, not written as `STATUS:` in the log itself. | Líneas sin nivel: las marcas de inicio/cierre `"<nombre> start..."`/`"<nombre> done"` de cada script, y los contadores compactos `campo=valor\|campo=valor` -- agrupadas bajo esta etiqueta genérica solo por la pestaña LogView de la interfaz web, no se escriben como `STATUS:` en el log real. |
 
 > `uhmalert.sh` sends push notifications only for `ERROR:`/`WARNING:`/`FIX:` lines. For pydhcp's own log format and levels, see [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
 >
@@ -2382,8 +2474,8 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 ---
 
 - [Archify](https://github.com/tt-a1i/archify)
-- [Webmin](https://webmin.com/) (optional, required by `tools/uhmwebmin.sh`)
-- [Maintenance Scripts (uhmacl, uhmalert, uhmiptables, uhmunifi, uhmwebmin)](https://github.com/maravento/uhm/tree/master/tools)
+- [Apache HTTP Server](https://httpd.apache.org/) (optional, required by the web interface)
+- [Maintenance Scripts (uhmacl, uhmalert, uhmiptables, uhmtool, uhmunifi)](https://github.com/maravento/uhm/tree/master/tools)
 
 ## NOTICE
 

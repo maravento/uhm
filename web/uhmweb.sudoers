@@ -1,0 +1,9 @@
+# uhm - sudo rule for the web interface
+# Deploy as /etc/sudoers.d/uhmweb, owned by root:root, mode 440.
+#
+# The web interface runs as www-data and reads no root-owned file on its
+# own: every answer comes from uhmtool.sh, the only command allowed here.
+# Validate before reloading Apache: visudo -c -f /etc/sudoers.d/uhmweb
+
+www-data ALL=(root) NOPASSWD: /etc/uhm/tools/uhmtool.sh
+Defaults!/etc/uhm/tools/uhmtool.sh !requiretty

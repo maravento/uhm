@@ -21,13 +21,14 @@
 # ./core/uhmwatch.sh
 # ./tools/uhmunifi.sh
 # ./tools/uhmacl.sh
-# ./tools/uhmwebmin.sh
+# ./tools/uhmtool.sh
 # ./tools/uhmalert.sh
 # ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
 # ./tools/uhmiptables_example.txt (reference example only, never deployed)
 # ./acl/uhm-auth.txt
 # ./acl/uhm-queue.txt
 # ./acl/uhm-grace.txt
+# ./web/ (web interface -- deployed only when the panel is accepted)
 #
 # core/ holds the reload mechanism (uhmleases.sh reconciles ACLs/leases,
 # uhmreload.sh invokes it, uhmd.sh/.service run the daemon that calls
@@ -155,6 +156,11 @@ uhm_log_file="/var/log/uhm.log"
 logrotate_file="/etc/logrotate.d/uhm"
 uhm_iptables_dest="${tools_dir}/uhmiptables.sh"
 service_dest="/etc/systemd/system/uhmd.service"
+web_root="/var/www/uhm"
+web_port="4048"
+vhost_dest="/etc/apache2/sites-available/uhmweb.conf"
+sudoers_dest="/etc/sudoers.d/uhmweb"
+apache_ports="/etc/apache2/ports.conf"
 
 # Repo file expectations (relative to this script)
 repo_core="${script_dir}/core"
@@ -162,6 +168,7 @@ repo_tools="${script_dir}/tools"
 repo_acl="${script_dir}/acl"
 repo_uhmd="${repo_core}/uhmd.sh"
 repo_service="${script_dir}/service/uhmd.service"
+repo_web="${script_dir}/web"
 
 # Required apt packages
 # Project-wide list: this installer verifies every package the deployed
@@ -234,22 +241,6 @@ confirm() {
 
 # PREFLIGHT CHECKS
 # Verified before anything is written to disk
-check_distro() {
-    local distro_id="" distro_version=""
-    if [[ -r /etc/os-release ]]; then
-        # shellcheck source=/dev/null
-        . /etc/os-release
-        distro_id="${ID:-}"
-        distro_version="${VERSION_ID:-}"
-    fi
-    if [[ "$distro_id" != "ubuntu" || "$distro_version" != "24.04" ]]; then
-        warn "Tested only on Ubuntu 24.04. Detected: ${distro_id:-unknown} ${distro_version:-unknown}"
-        warn "Continuing at your own risk."
-    else
-        info "Ubuntu ${distro_version} detected"
-    fi
-}
-
 check_repo_files() {
     [[ -r "$repo_uhmd" ]] || { err "missing $(basename "$repo_uhmd")"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -r "$repo_service" ]] || { err "missing $(basename "$repo_service")"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
@@ -258,6 +249,7 @@ check_repo_files() {
     [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "missing core/uhmwatch.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_tools" ]] || { err "missing tools/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_acl" ]] || { err "missing acl/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -d "$repo_web" ]] || { err "missing web/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     info "Repo files located"
 }
 
@@ -850,6 +842,84 @@ deploy_uhmiptables() {
     info "Minimal template deployed to $uhm_iptables_dest (routing + NAT only)"
 }
 
+# Deploys the web interface: pages under $web_root, the vhost, the sudo
+# rule that lets www-data reach uhmtool.sh, and the Listen directives.
+# uhmtool.sh itself is already deployed by deploy_scripts().
+install_web() {
+    local dep_pkg net_prefix
+
+    for dep_pkg in apache2 libapache2-mod-php; do
+        if ! dpkg -s "$dep_pkg" &>/dev/null; then
+            warn "'$dep_pkg' is not installed, web interface -- skip"
+            return 1
+        fi
+    done
+
+    if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
+        net_prefix="${BASH_REMATCH[1]}"
+    else
+        warn "cannot derive the prefix from $SERV_MASK, web interface -- skip"
+        return 1
+    fi
+
+    mkdir -p "$web_root"
+    cp -a "${repo_web}/." "$web_root/"
+    chown -R root:root "$web_root"
+    find "$web_root" -type d -exec chmod 755 {} +
+    find "$web_root" -type f -exec chmod 644 {} +
+
+    install -m 644 -o root -g root "${repo_web}/uhmweb.conf" "$vhost_dest"
+    sed -i "s|192.168.0.0/24|${SERV_SUBNET}/${net_prefix}|g" "$vhost_dest"
+
+    install -m 440 -o root -g root "${repo_web}/uhmweb.sudoers" "$sudoers_dest"
+    if ! visudo -c -f "$sudoers_dest" &>/dev/null; then
+        rm -f "$sudoers_dest"
+        warn "invalid sudo rule removed, web interface -- skip"
+        return 1
+    fi
+
+    [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
+    sed -i -E "/^Listen [^[:space:]]*:${web_port}\$/d; /^Listen ${web_port}\$/d" "$apache_ports"
+    echo "Listen ${SERVER_IP}:${web_port}" >> "$apache_ports"
+    echo "Listen 127.0.0.1:${web_port}" >> "$apache_ports"
+
+    a2enmod headers &>/dev/null || true
+    a2ensite uhmweb &>/dev/null || true
+
+    if ! apache2ctl configtest &>/dev/null; then
+        warn "apache configtest failed, not reloaded -- alert"
+        warn "  check $vhost_dest and run: systemctl reload apache2"
+        return 1
+    fi
+    systemctl reload apache2 &>/dev/null || true
+
+    info "Web interface available at http://${SERVER_IP}:${web_port}/"
+    return 0
+}
+
+remove_web() {
+    if [[ -f "$vhost_dest" ]]; then
+        a2dissite uhmweb &>/dev/null || true
+        rm -f "$vhost_dest"
+        info "Removed $vhost_dest"
+    else
+        info "No vhost found"
+    fi
+
+    if [[ -f "$apache_ports" ]]; then
+        sed -i -E "/^Listen [^[:space:]]*:${web_port}\$/d; /^Listen ${web_port}\$/d" "$apache_ports"
+        info "Listen directives for ${web_port} removed"
+    fi
+
+    rm -f "$sudoers_dest"
+    rm -rf "$web_root"
+    info "Removed $web_root and $sudoers_dest"
+
+    if dpkg -s apache2 &>/dev/null && apache2ctl configtest &>/dev/null; then
+        systemctl reload apache2 &>/dev/null || true
+    fi
+}
+
 install_logrotate() {
     # $1: "warn" logs a WARNING before creating a missing logrotate config
     # (used by --update, where this should already exist); default is quiet
@@ -948,7 +1018,6 @@ do_install() {
     trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes"; perform_remove; }' EXIT
 
     step "Preflight"
-    check_distro
     check_repo_files
 
     step "Filesystem layout"
@@ -976,13 +1045,8 @@ do_install() {
     if confirm "Install uhmalert (ntfy push notifications on connectivity loss)?" "n"; then
         bash "${tools_dir}/uhmalert.sh" install
     fi
-    if dpkg -s webmin &>/dev/null; then
-        if confirm "Install the Webmin log viewer module?" "n"; then
-            bash "${tools_dir}/uhmwebmin.sh" install
-        fi
-    else
-        info "Webmin not detected, module prompt -- skip"
-        info "  install Webmin first, run: bash tools/uhmwebmin.sh install"
+    if confirm "Install the web interface (log viewer, ACL editor, reports)?" "n"; then
+        install_web || true
     fi
 
     step "Cron"
@@ -1017,7 +1081,6 @@ do_update() {
     echo "------------------------------------------------------"
 
     step "Preflight"
-    check_distro
     check_repo_files
 
     # Accepts either the current core/ layout or the pre-restructure layout
@@ -1073,6 +1136,19 @@ do_update() {
 
     step "Deploy updated scripts"
     deploy_scripts
+
+    step "Web interface"
+    # Code only, and only where the panel is already installed. The vhost
+    # carries the administrator's own LAN range, so it is never rewritten.
+    if [[ -d "$web_root" ]]; then
+        cp -a "${repo_web}/." "$web_root/"
+        chown -R root:root "$web_root"
+        find "$web_root" -type d -exec chmod 755 {} +
+        find "$web_root" -type f -exec chmod 644 {} +
+        info "Web interface updated in $web_root"
+    else
+        info "Web interface not installed -- skip"
+    fi
 
     step "ACL data files"
     # acl_dir (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), config_file
@@ -1165,7 +1241,7 @@ do_remove() {
     warn "  - cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
     warn "  - the uhmwatch cron entry"
     warn "  - uhmalert.service if installed"
-    warn "  - Webmin module (uhmwebmin) if installed"
+    warn "  - the web interface, its vhost and its sudo rule, if installed"
     warn "  - ${logrotate_file}"
     warn "  - ${hotspot_dir}"
     warn "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
@@ -1247,21 +1323,9 @@ perform_remove() {
         info "No uhmwatch cron entry found"
     fi
 
-    # uhmwebmin / Webmin module (optional component)
-    step "uhmwebmin (Webmin module)"
-    if [[ -d /usr/share/webmin/uhm ]]; then
-        if [[ -f "${tools_dir}/uhmwebmin.sh" ]]; then
-            bash "${tools_dir}/uhmwebmin.sh" uninstall || {
-                warn "uhmwebmin.sh uninstall failed -- alert"
-                warn "remove /usr/share/webmin/uhm and /etc/webmin/uhm by hand"
-            }
-        else
-            warn "Webmin module found but ${tools_dir}/uhmwebmin.sh is missing"
-            warn "  remove /usr/share/webmin/uhm and /etc/webmin/uhm manually"
-        fi
-    else
-        info "Webmin module not installed"
-    fi
+    # Web interface (optional component)
+    step "Web interface"
+    remove_web
 
     # Logrotate
     step "Logrotate"

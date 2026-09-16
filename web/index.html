@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>UniFi Hotspot Manager</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='30' fill='none' stroke='%233498db' stroke-width='12'/><circle cx='50' cy='50' r='8' fill='%233498db'/></svg>">
+  <style>
+    :root{
+      --bg-app: #f8f9fa;
+      --panel-bg: #ffffff;
+      --header-dark: #1e2a35;
+      --tabs-bg: #2b3b4a;
+      --accent: #3498db;
+      --text-muted: #6c757d;
+      --spinner-track: #e9ecef;
+      --loading-bg: rgba(255,255,255,0.95);
+    }
+
+    html.dark{
+      --bg-app: #0d1117;
+      --panel-bg: #0d1117;
+      --header-dark: #161b22;
+      --tabs-bg: #1c2128;
+      --accent: #3498db;
+      --text-muted: #8b949e;
+      --spinner-track: #30363d;
+      --loading-bg: rgba(13,17,23,0.95);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    html,body { height: 100%; }
+
+    body {
+      background: var(--bg-app);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ===== MAIN HEADER ===== */
+    .header-pro {
+      background: var(--header-dark);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+      border-bottom: 3px solid var(--accent);
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .header-bar.single {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+
+    .header-left:hover .logo-text { text-decoration: underline; }
+
+    .logo-icon {
+      font-size: 22px;
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255,255,255,0.06);
+      border-radius: 8px;
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #fff;
+    }
+
+    /* Centered against the full header width, the same axis the tab row
+       uses, so the subtitle and the tabs share one center line. */
+    .header-center {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .subtitle {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+      margin: 0;
+      line-height: 1;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-theme {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #e6eef8;
+      padding: 6px 12px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .btn-theme:hover { background: rgba(255, 255, 255, 0.16); }
+
+    .header-date {
+      color: #e2e8f0;
+      font-size: 13px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.07);
+      padding: 5px 11px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+
+    /* ===== TABS ===== */
+    .tabs-pro {
+      background: var(--tabs-bg);
+      display: flex;
+      justify-content: center;
+      border-bottom: 2px solid rgba(0,0,0,0.08);
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .tab-pro {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 24px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border-bottom: 3px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tab-pro:hover {
+      background: rgba(255, 255, 255, 0.03);
+      color: #fff;
+    }
+
+    .tab-pro.active {
+      background: var(--panel-bg);
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      border-radius: 4px 4px 0 0;
+    }
+
+    .tab-icon { font-size: 16px; }
+
+    /* ===== CONTENT ===== */
+    main {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: var(--panel-bg);
+      width: 100%;
+    }
+
+    .tabs-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .tab-content {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s ease, visibility 0.3s ease;
+      z-index: 1;
+    }
+
+    .tab-content.active {
+      opacity: 1;
+      visibility: visible;
+      z-index: 2;
+    }
+
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      z-index: 5;
+      background: var(--loading-bg);
+      padding: 24px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--spinner-track);
+      border-top: 3px solid var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .iframe-full {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+
+    @media (max-width: 768px) {
+      .header-bar.single { padding: 10px 16px; }
+      .logo-text { font-size: 16px; }
+      .subtitle { font-size: 13px; color: #e6eef8; text-align: left; }
+      .tab-pro { padding: 8px 12px; font-size: 13px; }
+      .header-center { position: static; transform: none; order: 3; width: 100%; margin-top: 6px; text-align: left; }
+    }
+
+    @media (max-width: 480px) {
+      .logo-text { display: none; }
+      .subtitle { display: none; }
+      .tab-pro { padding: 8px 10px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="header-pro">
+    <div class="header-bar single">
+      <a class="header-left" href="https://github.com/maravento/uhm" target="_blank" rel="noopener noreferrer">
+        <div class="logo-icon">&#9685;</div>
+        <div class="logo-text">UHM - UniFi Hotspot Manager</div>
+      </a>
+
+      <div class="header-center">
+        <p class="subtitle">Monitoring Dashboard</p>
+      </div>
+
+      <div class="header-right">
+        <button class="btn-theme" id="themeButton" type="button" title="Toggle dark/light mode">&#127769;</button>
+        <div class="header-date" id="clock"></div>
+      </div>
+    </div>
+
+    <nav class="tabs-pro" role="tablist" aria-label="Sections">
+      <button class="tab-pro active" data-target="logview" role="tab" aria-selected="true">
+        <span class="tab-icon">&#128196;</span>
+        <span>LogView</span>
+      </button>
+      <button class="tab-pro" data-target="aclview" role="tab" aria-selected="false">
+        <span class="tab-icon">&#9998;</span>
+        <span>ACLView</span>
+      </button>
+      <button class="tab-pro" data-target="toolview" role="tab" aria-selected="false">
+        <span class="tab-icon">&#128269;</span>
+        <span>ToolView</span>
+      </button>
+    </nav>
+  </header>
+
+  <main>
+    <div class="tabs-container">
+      <div id="logview" class="tab-content active">
+        <div class="loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loading-text">Loading LogView...</div>
+        </div>
+        <iframe class="iframe-full" src="logview/index.php" onload="hideLoading(this)"></iframe>
+      </div>
+
+      <div id="aclview" class="tab-content">
+        <div class="loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loading-text">Loading ACL...</div>
+        </div>
+        <iframe class="iframe-full" src="aclview/index.php" onload="hideLoading(this)"></iframe>
+      </div>
+
+      <div id="toolview" class="tab-content">
+        <div class="loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loading-text">Loading Tool...</div>
+        </div>
+        <iframe class="iframe-full" src="toolview/index.php" onload="hideLoading(this)"></iframe>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // The three modules read the same localStorage key, so a tab loaded
+    // later already comes up in the current theme without being told.
+    var themeButton = document.getElementById('themeButton');
+    var darkMode = false;
+    try { darkMode = localStorage.getItem('uh_dm') === '1'; } catch (e) { darkMode = false; }
+
+    function applyTheme() {
+      document.documentElement.classList.toggle('dark', darkMode);
+      themeButton.innerHTML = darkMode ? '&#9728;&#65039;' : '&#127769;';
+      document.querySelectorAll('iframe').forEach(function (frame) {
+        try { frame.contentWindow.postMessage({ uhDark: darkMode }, '*'); } catch (e) { /* not loaded yet */ }
+      });
+    }
+
+    themeButton.addEventListener('click', function () {
+      darkMode = !darkMode;
+      try { localStorage.setItem('uh_dm', darkMode ? '1' : '0'); } catch (e) { /* storage disabled */ }
+      applyTheme();
+    });
+
+    applyTheme();
+
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock').textContent =
+        now.toISOString().replace('T', ' ').substring(0, 19);
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    function activateTab(target) {
+      var panel = document.getElementById(target);
+      if (!panel) return;
+
+      document.querySelectorAll('.tabs-pro .tab-pro').forEach(function (other) {
+        var on = other.getAttribute('data-target') === target;
+        other.classList.toggle('active', on);
+        other.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.tab-content').forEach(function (other) {
+        other.classList.remove('active');
+      });
+      panel.classList.add('active');
+    }
+
+    document.querySelectorAll('.tabs-pro .tab-pro').forEach(function (button) {
+      button.addEventListener('click', function () {
+        activateTab(button.getAttribute('data-target'));
+      });
+    });
+
+    // ?tab=logview|aclview|toolview opens the panel on that tab. Each
+    // module directory also serves its own page, without the tab bar.
+    var requested = new URLSearchParams(window.location.search).get('tab');
+    if (requested) activateTab(requested);
+
+    function hideLoading(frame) {
+      try {
+        frame.contentWindow.postMessage({ uhDark: darkMode }, '*');
+      } catch (e) { /* cross-origin never happens here */ }
+      var loader = frame.parentElement.querySelector('.loading');
+      if (loader) {
+        loader.style.opacity = '0';
+        setTimeout(function () { loader.style.display = 'none'; }, 250);
+      }
+    }
+
+    setTimeout(function () {
+      document.querySelectorAll('.loading').forEach(function (loader) {
+        loader.style.opacity = '0';
+        setTimeout(function () { loader.style.display = 'none'; }, 300);
+      });
+    }, 6000);
+  </script>
+</body>
+</html>

@@ -7,7 +7,7 @@
 #
 # DESCRIPTION:
 # Mandatory -- installed automatically, not offered as a
-# yes/no prompt like uhmalert/uhmwebmin. Every unit it watches (uhmd,
+# yes/no prompt like uhmalert or the web interface. Every unit it watches (uhmd,
 # pydhcpd, the UniFi backend) already has its own systemd Restart=
 # policy, but that alone gives up permanently once StartLimitBurst is
 # exhausted, with no further attempt and no alert -- see the
