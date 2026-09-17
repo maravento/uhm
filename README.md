@@ -67,7 +67,7 @@
 
 ---
 
-**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distributions are not tested and are used at your own risk.
+**⚠️ WARNING:** Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions is at your own risk.
 
 ### Hardware
 
@@ -304,6 +304,7 @@ uhm/                      # as cloned -- see note above
 │   ├── uhm-auth.txt              # authenticated clients, each with a voucher (fixed hotspot IP)
 │   ├── uhm-grace.txt             # clients still in the grace period, no voucher yet
 │   └── uhm-queue.txt             # MACs queued for lease removal, drained on the next run
+│
 ├── core/                    # the reload mechanism, plus uhmwatch -- UHM cannot
 │                            # function correctly without any of these four
 │   ├── uhmd.sh                   # main daemon: polls the UniFi API and manages ACLs (systemd)
@@ -317,6 +318,7 @@ uhm/                      # as cloned -- see note above
 │                                 # because it's mandatory
 ├── service/
 │   └── uhmd.service              # systemd unit for uhmd
+│
 ├── tools/                   # independent, optional utilities -- UHM runs
 │                            # fine without any of these
 │   ├── uhmacl.sh                 # interactive menu to check MAC consistency across
@@ -332,6 +334,7 @@ uhm/                      # as cloned -- see note above
 │   │                             # the ACL files and the UniFi API, and writes back an
 │   │                             # ACL file after validating it
 │   └── uhmunifi.sh               # audits UniFi clients and vouchers
+│
 ├── web/                     # web interface -- deployed to /var/www/uhm only when
 │                            # the panel is accepted during install
 │   ├── aclview/index.php         # ACL tab: editor for the ACL lists
@@ -341,6 +344,7 @@ uhm/                      # as cloned -- see note above
 │   ├── index.html                # panel shell: three tabs, light and dark theme
 │   ├── uhmweb.conf               # Apache vhost on port 4048
 │   └── uhmweb.sudoers            # sudo rule that lets www-data reach uhmtool.sh
+│
 └── uhmsetup.sh              # installer / updater / uninstaller (interactive);
                              # run from here, never deployed to /etc/uhm/
 ```
@@ -438,6 +442,7 @@ uhm/                      # as cloned -- see note above
         <li><b>Site name</b>: if your admin renamed the UniFi site from <code>default</code>, you must update <code>UNIFI_SITE</code> in <code>/etc/uhm/uhm.env</code> accordingly.</li>
         <li><b>If the controller host has two NICs</b> (WAN + LAN), set <code>system_ip</code> in <code>/var/lib/unifi/system.properties</code> to the LAN IP and restart UniFi.</li>
         <li><b>Wi-Fi 7 APs</b>: disable <i>MLO (Multi-Link Operation)</i> on the guest SSID. IEEE 802.11be defines a Multi-Link Device (MLD) address separate from each physical link's own MAC address — since <code>UHM</code> tracks and authorizes clients strictly by MAC (DHCP static reservations, UniFi API, iptables/ipset), an MLO client could be seen inconsistently across those layers. This is a Wi-Fi 7 standard characteristic, not a UniFi-specific bug.</li>
+        <li><b>If you use Squid Proxy with Proxymon</b>: there is no need to configure bandwidth or data limits on the vouchers issued by UniFi. Squid and <code>bandata</code> do that job more efficiently and with finer granularity. For more information visit <a href="https://github.com/maravento/proxymon#bandata">Proxymon: Bandata</a>.</li>
       </ol>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -467,6 +472,7 @@ uhm/                      # as cloned -- see note above
         <li><b>Nombre del sitio</b>: si el admin renombró el sitio UniFi desde <code>default</code>, debe actualizar <code>UNIFI_SITE</code> en <code>/etc/uhm/uhm.env</code>.</li>
         <li><b>Si el host del controlador tiene dos NICs</b> (WAN + LAN), defina <code>system_ip</code> en <code>/var/lib/unifi/system.properties</code> con la IP LAN y reinicie UniFi.</li>
         <li><b>APs Wi-Fi 7</b>: desactivar <i>MLO (Multi-Link Operation)</i> en el SSID de invitados. El estándar IEEE 802.11be define una dirección Multi-Link Device (MLD) distinta de la MAC propia de cada enlace físico — como <code>UHM</code> rastrea y autoriza clientes estrictamente por MAC (reservas DHCP estáticas, API de UniFi, iptables/ipset), un cliente MLO podría verse de forma inconsistente entre esas capas. Es una característica del estándar Wi-Fi 7, no un bug específico de UniFi.</li>
+        <li><b>Si usa Squid Proxy con Proxymon</b>: no es necesario configurar límites de ancho de banda o de datos en los vouchers expedidos por UniFi. Squid y <code>bandata</code> hacen ese trabajo de forma más eficiente y granular. Para mayor información visite <a href="https://github.com/maravento/proxymon#bandata">Proxymon: Bandata</a>.</li>
       </ol>
     </td>
   </tr>
@@ -477,7 +483,7 @@ uhm/                      # as cloned -- see note above
 ---
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmremote.png" width="50%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmremote.png" width="50%"></a>
 </p>
 <p align="center"><i>Remote Access via unifi.ui.com</i></p>
 <p align="center"><i>Acceso remoto vía unifi.ui.com</i></p>
@@ -720,7 +726,7 @@ sudo bash uhmsetup.sh --remove
 | `CLEANUP_INTERVAL` | pydhcp's own value -- DHCP pool lease time in seconds, read from `pydhcp.env` at runtime (default `60`) | Valor propio de pydhcp -- tiempo de lease del pool DHCP en segundos, leída desde `pydhcp.env` en cada ejecución (default `60`) |
 | `AUTHORIZED_LEASE_TIME` | pydhcp's own value -- DHCP lease time for authorized clients in seconds, read from `pydhcp.env` at runtime (default `2592000` = 30 days) | Valor propio de pydhcp -- tiempo de lease DHCP para clientes autorizados en segundos, leída desde `pydhcp.env` en cada ejecución (default `2592000` = 30 días) |
 | `QUARANTINE_DURATION` | pydhcp's own value -- seconds an IP is held out of the pool after a DHCPDECLINE or `ping-check` conflict, read from `pydhcp.env` at runtime; written into `pydhcpd.conf` as `abandon-lease-time` (default `60`) | Valor propio de pydhcp -- segundos que una IP se aparta del pool tras un DHCPDECLINE o un conflicto de `ping-check`, leída desde `pydhcp.env` en cada ejecución; escrito en `pydhcpd.conf` como `abandon-lease-time` (default `60`) |
-| `BLOCKDHCP_GRACE_SECONDS` | Grace period before unknown MACs are blocked (default `86400` = 24h) | Período de gracia antes de bloquear MACs desconocidas (default `86400` = 24h) |
+| `BLOCKDHCP_GRACE_SECONDS` | Grace period before unknown MACs are blocked (default `86400` = 24h). When this timer expires the MAC does not move to `blockdhcp.txt` right away: expiry changes no file, so it is applied on the next reload -- either an ACL change or `RELOAD_SAFETY_INTERVAL_SECONDS` (default 3600) since the last one | Período de gracia antes de bloquear MACs desconocidas (default `86400` = 24h). Al expirar este contador la MAC no pasa directo a `blockdhcp.txt`: la expiración no cambia ningún archivo, así que se aplica en el siguiente reload -- un cambio en las ACL o `RELOAD_SAFETY_INTERVAL_SECONDS` (default 3600) desde el anterior |
 | `WPAD_ENABLED` | pydhcp's own value -- `true` to enable WPAD/PAC via DHCP option 252, requires Apache2 serving `wpad.pac` on `WPAD_PORT`, read from `pydhcp.env` at runtime (default `false`) | Valor propio de pydhcp -- `true` para habilitar WPAD/PAC vía la opción DHCP 252, requiere Apache2 sirviendo `wpad.pac` en `WPAD_PORT`, leída desde `pydhcp.env` en cada ejecución (default `false`) |
 | `WPAD_PORT` | pydhcp's own value -- TCP port of the Apache VirtualHost serving `wpad.pac`, read from `pydhcp.env` at runtime (default `18100`). The full example firewall reads it too, for the rules that allow PAC access per ACL group | Valor propio de pydhcp -- puerto TCP del VirtualHost de Apache que sirve `wpad.pac`, leída desde `pydhcp.env` en cada ejecución (default `18100`). Si lo cambia, El ejemplo completo del firewall también la lee, para las reglas que permiten el acceso al PAC por grupo ACL |
 | `PING_CHECK_ENABLED` | pydhcp's own value -- `false` to disable pydhcpd ping-check before OFFER, set if ICMP is blocked, read from `pydhcp.env` at runtime (default `true`) | Valor propio de pydhcp -- `false` para deshabilitar el ping-check de pydhcpd antes del OFFER, usar si ICMP está bloqueado, leída desde `pydhcp.env` en cada ejecución (default `true`) |
@@ -869,7 +875,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 </table>
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb.png" width="100%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb.png" width="100%"></a>
 </p>
 <p align="center"><i>Panel header and tab bar</i></p>
 
@@ -908,7 +914,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 ##### LogView
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-logview.png" width="100%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb-logview.png" width="100%"></a>
 </p>
 <p align="center"><i>LogView — real-time viewer for uhmd</i></p>
 
@@ -926,18 +932,32 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 | Feature | Description | Descripción |
 |---------|--------------|-------------|
 | **Live polling** | AJAX polling by byte offset (1s–30s configurable). Never stalls on log rotation. | Polling AJAX por byte offset (1s–30s configurable). No se atasca con la rotación de logs. |
-| **Dark / Light mode** | Toggle with moon/sun button in the panel header. Preference saved in `localStorage` and shared by the three tabs. | Alternancia con botón luna/sol en la cabecera del panel. Preferencia guardada en `localStorage` y compartida por las tres pestañas. |
 | **Level badges** | Color-coded badges, one distinctive color per level: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). | Badges con color, un color distintivo por nivel: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). |
-| **Full-log grep** | Searches the entire log file via `grep -Fia`. Results highlighted inline. | Busca en el archivo completo vía `grep -Fia`. Resultados resaltados inline. |
 | **Cycle stats bar** | Parses the last stats line and shows Vouchers, Authorized, Grace, New Auth, Revoked as pills. | Parsea la última línea de stats y muestra Vouchers, Authorized, Grace, New Auth, Revoked como pills. |
 | **Service status** | Shows PID, uptime, and memory from `systemctl status uhmd`. | Muestra PID, uptime y memoria desde `systemctl status uhmd`. |
-| **Text filter** | Live filter on visible rows (plain substring match, case-insensitive). | Filtro en vivo sobre filas visibles (coincidencia de subcadena literal, sin distinguir mayúsculas/minúsculas). |
-| **Level filter** | Dropdown to show only INFO / WARNING / ERROR / ALERT / FIX / STATUS. | Dropdown para mostrar solo INFO / WARNING / ERROR / ALERT / FIX / STATUS. |
+
+###### Controls
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmcontrols.png" width="100%"></a>
+</p>
+<p align="center"><i>LogView toolbar — search box, Full log, filters, interval, Reload and LIVE indicator</i></p>
+
+| Control | Description | Descripción |
+|---------|-------------|-------------|
+| <img src="./img/uhmbutton-dark.png" width="150"> <img src="./img/uhmbutton-light.png" width="150"><br> **Dark / Light mode** | Toggle with moon/sun button in the panel header. Preference saved in `localStorage` and shared by the three tabs. | Alternancia con botón luna/sol en la cabecera del panel. Preferencia guardada en `localStorage` y compartida por las tres pestañas. |
+| <img src="./img/uhmbutton-searchbar.png" width="150"> **Search box** | Live filter on the rows already loaded. Plain substring match, case-insensitive. | Filtro en vivo sobre las filas ya cargadas. Coincidencia de subcadena literal, sin distinguir mayúsculas/minúsculas. |
+| <img src="./img/uhmbutton-fulllog.png" width="150"> <img src="./img/uhmbutton-livemode.png" width="150"><br> **Full log / Live mode** | Displays the complete log file. In **Live mode**, the viewer polls the tail of the log. Type a term in the search box and the button turns blue; press it to search the whole file via `grep -Fia`, with results highlighted inline. The button then turns orange and reads **Live mode**; press it again to return to the log view. With an empty search box, the search action stays grey and disabled. | Muestra el archivo de log completo. En **Live mode**, el visor consulta el final del log. Escriba un término en la caja de búsqueda y el botón se pone azul; púlselo para buscar en el archivo completo mediante `grep -Fia`, con resultados resaltados inline. El botón pasa a naranja y dice **Live mode**; púlselo otra vez para volver a la vista del log. Con la caja de búsqueda vacía, la acción de búsqueda permanece gris e inactiva. |
+| <img src="./img/uhmbutton-level.png" width="150">  **Level** | Filters by log level: All levels, INFO, WARNING, ERROR, ALERT, FIX, STATUS. Default: All levels. | Filtra por nivel de log: All levels, INFO, WARNING, ERROR, ALERT, FIX, STATUS. Por defecto: All levels. |
+| <img src="./img/uhmbutton-last.png" width="150"> **Last** | Number of lines read from the end of the log: 200, 500, 1000 or 2000. Default: 200. | Cantidad de líneas leídas desde el final del log: 200, 500, 1000 o 2000. Por defecto: 200. |
+| <img src="./img/uhmbutton-interval.png" width="150"> **Interval** | Polling interval for new bytes: 1s, 3s, 5s, 10s or 30s. Default: 1s. | Intervalo de sondeo de bytes nuevos: 1s, 3s, 5s, 10s o 30s. Por defecto: 1s. |
+| <img src="./img/uhmbutton-reload.png" width="150"> **Reload** | Discards what is on screen and reads the log again. | Descarta lo que hay en pantalla y vuelve a leer el log. |
+| <img src="./img/uhmbutton-live.png" width="150"> **LIVE / PAUSED** | Click to pause the polling and click again to resume. Paused freezes the view; no line is lost. | Se pulsa para pausar el polling y se pulsa otra vez para reanudar. En pausa la vista se congela; no se pierde ninguna línea. |
 
 ##### ACLView
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-aclview.png" width="100%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb-aclview.png" width="100%"></a>
 </p>
 <p align="center"><i>ACLView — editor for the ACL lists</i></p>
 
@@ -955,7 +975,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 ##### ToolView
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-toolview.png" width="100%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb-toolview.png" width="100%"></a>
 </p>
 <p align="center"><i>ToolView — local ACL and UniFi reports</i></p>
 
@@ -971,7 +991,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 </table>
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmweb-toolviewmenu.png" width="20%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb-toolviewmenu.png" width="20%"></a>
 </p>
 <p align="center"><i>Report selector</i></p>
 
@@ -1206,9 +1226,9 @@ sudo bash uhmsetup.sh
 </table>
 
 ```text
-2026-07-12 21:41:10 INFO: UniFi login failed (HTTP 000), retry in grace
-2026-07-12 21:41:20 INFO: UniFi login failed (HTTP 000), retry in grace
-2026-07-12 21:41:30 INFO: UniFi login failed (HTTP 000), retry in grace
+2026-07-12 21:41:10 INFO: UniFi login failed (HTTP 000) in grace -- skip
+2026-07-12 21:41:20 INFO: UniFi login failed (HTTP 000) in grace -- skip
+2026-07-12 21:41:30 INFO: UniFi login failed (HTTP 000) in grace -- skip
 2026-07-12 21:41:50 INFO: UniFi login OK
 2026-07-12 21:41:51 INFO: Could not load vouchers (rc=empty) -- skip
 2026-07-12 21:41:56 INFO: sessions step, stat/guest unavailable -- skip
@@ -1458,7 +1478,7 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 | `UHM_MACAUTH` | /etc/uhm/acl/uhm-auth.txt | Hotspot authorized -- UHM's own | Autorizados del hotspot -- propia de UHM |
 | `ACL_BLOCK_FILE` | *(from pydhcp.env)* | Blocked clients | Clientes bloqueados |
 | `UHM_GRACE` | /etc/uhm/acl/uhm-grace.txt | Grace period clients -- UHM's own | Clientes en período de gracia -- propia de UHM |
-| `BLOCKDHCP_GRACE_SECONDS` | 86400 | Grace period duration (seconds, 24h) | Duración del período de gracia (segundos, 24h) |
+| `BLOCKDHCP_GRACE_SECONDS` | 86400 | Grace period duration (seconds, 24h). On expiry the MAC moves to `blockdhcp.txt` on the next reload, not at the instant the timer runs out | Duración del período de gracia (segundos, 24h). Al expirar, la MAC pasa a `blockdhcp.txt` en el siguiente reload, no en el instante en que vence el contador |
 | *(derived)* | `AUTHORIZED_LEASE_TIME` / 60 | `authorize-guest` duration in minutes for `mac-*.txt` MACs UniFi reports unauthorized -- taken from pydhcp's own lease time, not a separate UHM value | Duración de `authorize-guest` en minutos para MACs de `mac-*.txt` que UniFi reporta sin autorizar -- tomada del propio lease time de pydhcp, no es un valor aparte de UHM |
 | `CLEANUP_INTERVAL` | *(from pydhcp.env)* | Cleanup frequency and pool lease time (seconds) | Frecuencia de limpieza y tiempo de lease del pool (segundos) |
 | `AUTHORIZED_LEASE_TIME` | *(from pydhcp.env)* | Lease duration for authorized clients (30 days) | Duración del lease para clientes autorizados (30 días) |
@@ -1922,7 +1942,7 @@ Same option, this time for a managed (`mac-*.txt`) device -- the UniFi query is 
 </table>
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmalert.png" width="50%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmalert.png" width="50%"></a>
 </p>
 <p align="center"><i>Push notifications via ntfy.sh — See Real Example</i></p>
 <p align="center"><i>Notificaciones push vía ntfy.sh — Ver sección Real Example</i></p>
@@ -2084,14 +2104,14 @@ Installed. First run happens on the next minute mark.
 `uhmwatch.sh` is silent on a healthy run -- nothing is logged unless a check finds a problem or takes a fix action. Example of what a detected-and-fixed failure looks like in `/var/log/uhm.log` / `uhmwatch.sh` es silencioso en una corrida sana -- no registra nada a menos que un chequeo encuentre un problema o tome una acción de arreglo. Ejemplo de cómo se ve una falla detectada y corregida en `/var/log/uhm.log`:
 
 ```text
-2026-07-29 21:18:18 WARNING: uhmd OFFLINE
-2026-07-29 21:18:18 FIX: uhmd restarted
+2026-07-29 21:18:18 WARNING: uhmd OFFLINE -- alert
+2026-07-29 21:18:18 FIX: uhmd restarted -- alert
 ```
 
 If `uhmalert.sh` is also installed, both lines reach your phone as separate push notifications — `uhmalert.sh` alerts on any `WARNING:`/`ERROR:` line (the problem) as well as any `FIX:` line (confirmation it was resolved), from any of the services `uhmwatch.sh` manages, not just `uhmd`. `uhmwatch.sh` and `uhmalert.sh` are independent, but this is what having both installed together looks like in practice / Si `uhmalert.sh` también está instalado, ambas líneas te llegan al teléfono como notificaciones push separadas — `uhmalert.sh` alerta ante cualquier línea `WARNING:`/`ERROR:` (el problema) y también ante cualquier línea `FIX:` (confirmación de que se resolvió), de cualquiera de los servicios que gestiona `uhmwatch.sh`, no solo `uhmd`. `uhmwatch.sh` y `uhmalert.sh` son independientes, pero así se ve en la práctica tenerlos instalados juntos:
 
 <p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="https://raw.githubusercontent.com/maravento/uhm/master/img/uhmalertwatch.png" width="50%"></a>
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmalertwatch.png" width="50%"></a>
 </p>
 <p align="center"><i>uhmwatch fixing a downed service, relayed to your phone by uhmalert</i></p>
 <p align="center"><i>uhmwatch arreglando un servicio caído, retransmitido a tu teléfono por uhmalert</i></p>
@@ -2128,10 +2148,10 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 ```text
 # from uhmd.sh, repeating every 10s during its own startup retry loop:
-2026-07-31 23:57:13 INFO: UniFi login failed (HTTP 429), retry in grace
-2026-07-31 23:57:23 INFO: UniFi login failed (HTTP 429), retry in grace
+2026-07-31 23:57:13 INFO: UniFi login failed (HTTP 429) in grace -- skip
+2026-07-31 23:57:23 INFO: UniFi login failed (HTTP 429) in grace -- skip
 ...
-2026-07-31 23:59:04 INFO: UniFi login failed (HTTP 429), retry in grace
+2026-07-31 23:59:04 INFO: UniFi login failed (HTTP 429) in grace -- skip
 2026-07-31 23:59:04 ERROR: no UniFi login in 120s -- abort
 
 # from uhmwatch.sh, on its next check:
@@ -2218,7 +2238,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 | `WARNING: ... -- fallback` | The documented default is used | Se usa el valor por defecto documentado | `no CLEANUP_INTERVAL in pydhcp.env -- fallback` |
 | `WARNING: ... -- alert` | Repaired automatically | Reparado automáticamente | `uhm.env perms fixed -- alert` |
 | `WARNING: ... -- alert` | The MACs stay queued and are harmlessly reprocessed next cycle -- never a permissions issue (runs as root); check free space, a read-only mount, or the immutable attribute (`lsattr`, cleared with `chattr -i`) | Los MACs quedan en cola y se reprocesan sin efecto en el siguiente ciclo -- nunca es un problema de permisos (corre como root); revise espacio libre, montaje de solo lectura, o el atributo de inmodificable (`lsattr`, se quita con `chattr -i`) | `cannot empty uhm-queue.txt -- alert` |
-| `WARNING: ... -- alert` | The previous config is restored; the next cycle retries | Se restaura la configuración anterior; el siguiente ciclo reintenta | `uhmreload.sh failed (code 1), backing off -- alert` |
+| `WARNING: ... -- alert` | The previous config is restored; the next cycle retries | Se restaura la configuración anterior; el siguiente ciclo reintenta | `uhmreload failed (code 1), back off -- alert` |
 | `WARNING: ... -- alert` | `uhmwatch.sh` found the service down | `uhmwatch.sh` encontró el servicio caído | `pydhcpd OFFLINE` · `uhmd restart FAILED -- alert` |
 | `FIX:` | Closes out the `WARNING:` that reported it | Cierra el `WARNING:` que lo reportó | `pydhcpd restarted` |
 | `ALERT:` | A push notification was sent or withheld | Se envió o se retuvo una notificación push | `sent -- WARNING: ...` · `dup alert suppressed` |
@@ -2228,7 +2248,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 ```text
 --------------------------------------------------------------------------------
 2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10 -> grace
-2026-07-01 06:47:35 INFO: ip=192.168.0.231 host=no_name_fde07d34be
+2026-07-01 06:47:35 INFO: ip=192.168.0.231 hostname=no_name_fde07d34be
 2026-07-01 06:47:35 INFO: added 1 new client(s) to uhm-grace
 2026-07-01 06:47:35 INFO: uhm-grace.txt changed
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
@@ -2238,11 +2258,11 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 2026-07-01 06:47:36 INFO: add 02:00:00:aa:bb:11 to blockdhcp
 2026-07-01 06:47:36 INFO: queued removal for 02:00:00:aa:bb:11
 2026-07-01 06:47:40 blockdhcp=67|limited=105|unlimited=35|hotspot=17|grace=8
-2026-07-01 06:47:40 uhmleases done at: Wed Jul  1 06:47:40 -05 2026
+2026-07-01 06:47:40 uhmleases done at: 2026-07-01 06:47:40
 2026-07-01 06:47:40 uhmiptables start...
-2026-07-01 06:47:42 uhmiptables done at: Wed Jul  1 06:47:42 -05 2026
-2026-07-01 06:47:42 uhmreload done at: Wed Jul  1 06:47:42 -05 2026
-2026-07-01 06:47:42 vouchers=3|auth=17|grace=8|new_auth=0|revoked=0
+2026-07-01 06:47:42 uhmiptables done at: 2026-07-01 06:47:42
+2026-07-01 06:47:42 uhmreload done at: 2026-07-01 06:47:42
+2026-07-01 06:47:42 vouchers=3|auth=17|grace=8|newauth=0|revoked=0
 ```
 
 > When no client connects, no voucher is redeemed, and no grace entry expires, the log between two cycles is simply empty -- nothing is written.
@@ -2269,8 +2289,8 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 </table>
 
 ```text
-2026-07-27 20:45:28 WARNING: uhmreload.sh failed (code 1), backing off -- alert
-2026-07-27 20:45:29 ALERT: WARNING: uhmreload.sh failed (code 1), backin -- sent
+2026-07-27 20:45:28 WARNING: uhmreload failed (code 1), back off -- alert
+2026-07-27 20:45:29 ALERT: WARNING: uhmreload failed (code 1), back off -- sent
 ```
 
 | Field | Type | Description | Descripción |
@@ -2278,7 +2298,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 | `vouchers` | total | Vouchers currently in UniFi (`stat/voucher`) | Vouchers presentes en UniFi |
 | `auth` | total | MACs in `uhm-auth.txt` at end of cycle | MACs en `uhm-auth.txt` al final del ciclo |
 | `grace` | total | MACs in `uhm-grace.txt` at end of cycle | MACs en `uhm-grace.txt` al final del ciclo |
-| `new_auth` | delta | MACs processed by the sessions step this cycle: new promotions to `uhm-auth.txt` **and** voucher renewals of MACs already in it (only new promotions get kicked — see step 10) | MACs procesadas por el paso de sesiones en este ciclo: promociones nuevas a `uhm-auth.txt` **y** renovaciones de voucher de MACs ya presentes en él (solo las promociones nuevas reciben kick — ver paso 10) |
+| `newauth` | delta | MACs processed by the sessions step this cycle: new promotions to `uhm-auth.txt` **and** voucher renewals of MACs already in it (only new promotions get kicked — see step 10) | MACs procesadas por el paso de sesiones en este ciclo: promociones nuevas a `uhm-auth.txt` **y** renovaciones de voucher de MACs ya presentes en él (solo las promociones nuevas reciben kick — ver paso 10) |
 | `revoked` | delta | MACs removed from `uhm-auth.txt` this cycle (`authorized=false` in UniFi) | MACs eliminadas de `uhm-auth.txt` en este ciclo |
 
 <table>

@@ -70,7 +70,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 .uh-search input::placeholder{color:#607d8b}
 .uh-search input:focus{border-color:#3498db}
 .uh-search input[disabled]{opacity:.4}
-.uh-btn{padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:none;white-space:nowrap;background:#1565c0;color:#fff}
+.uh-btn{padding:6px 30px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;white-space:nowrap;background:#1565c0;color:#fff}
 .uh-btn:hover{background:#1976d2}
 .uh-btn[disabled]{opacity:.45;cursor:default}
 
@@ -180,6 +180,7 @@ var COLUMNS={
     {key:'host',label:'Hostname'},
     {key:'code',label:'Voucher',cls:'mono'},
     {key:'status',label:'Status',type:'tag'},
+    {key:'expires',label:'Expires',cls:'mono'},
     {key:'online',label:'On',type:'mark'}
   ],
   'unifi:vouchers':[

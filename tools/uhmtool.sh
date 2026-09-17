@@ -80,7 +80,7 @@ UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5
 uhm_log_file="/var/log/uhm.log"
 pydhcp_conf="/etc/pydhcp/pydhcp.env"
 uhm_conf="/etc/uhm/uhm.env"
-acl_lock="/var/lock/uhmtool-acl.lock"
+cycle_lock="/var/lock/uhmd-cycle.lock"
 max_grep_lines=3000
 max_upload_bytes=1048576
 
@@ -418,15 +418,17 @@ acl_write() {
         printf '%s\n' "$acl_line" >> "$tmp_file"
     done <<< "$new_content"
 
-    (umask 077; : >> "$acl_lock")
-    exec 200>"$acl_lock"
-    flock -w 10 200 || { json_error "ACL file busy"; return 0; }
+    # Same lock the daemon takes while it mutates the ACL files, on the same
+    # descriptor 201, so a web save and a cycle never overlap.
+    (umask 077; : >> "$cycle_lock")
+    exec 201>"$cycle_lock"
+    flock -w 10 201 || { json_error "ACL file busy"; return 0; }
 
     cp -f "$acl_file" "${acl_file}.bak"
     cat "$tmp_file" > "$acl_file"
     chown root:root "$acl_file"
     chmod 600 "$acl_file"
-    flock -u 200
+    flock -u 201
 
     line_number=$(grep -c '' "$acl_file" 2>/dev/null || echo 0)
     jq -cn --arg name "$acl_name" --argjson lines "$line_number" \
@@ -759,14 +761,24 @@ managed_macs() {
 
 unifi_status() {
     local sta_json guest_json voucher_json
+    local sta_file guest_file voucher_file
 
     sta_json=$(unifi_fetch "stat/sta")
     guest_json=$(unifi_fetch "stat/guest")
     voucher_json=$(unifi_fetch "stat/voucher")
 
-    jq -cn --argjson sta "$sta_json" --argjson guest "$guest_json" --argjson voucher "$voucher_json" \
+    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    temp_files+=("$sta_file" "$guest_file" "$voucher_file")
+    printf '%s' "$sta_json" > "$sta_file"
+    printf '%s' "$guest_json" > "$guest_file"
+    printf '%s' "$voucher_json" > "$voucher_file"
+
+    jq -cn --slurpfile sta "$sta_file" --slurpfile guest "$guest_file" --slurpfile voucher "$voucher_file" \
         --arg url "$UNIFI_CONTROLLER_URL" --arg site "$UNIFI_SITE" --arg type "$UNIFI_TYPE" \
-        '{controller: $url, site: $site, type: $type,
+        '$sta[0] as $sta | $guest[0] as $guest | $voucher[0] as $voucher |
+         {controller: $url, site: $site, type: $type,
           rows: [{endpoint: "stat/sta", rc: ($sta.meta.rc // "error"), entries: ($sta.data|length)},
                  {endpoint: "stat/guest", rc: ($guest.meta.rc // "error"), entries: ($guest.data|length)},
                  {endpoint: "stat/voucher", rc: ($voucher.meta.rc // "error"), entries: ($voucher.data|length)}]}'
@@ -777,30 +789,40 @@ unifi_status() {
 # and stat/guest only as a fallback for a client still connected.
 unifi_authorized() {
     local sta_json guest_json voucher_json auth_file
+    local sta_file guest_file voucher_file
 
     sta_json=$(unifi_fetch "stat/sta")
     guest_json=$(unifi_fetch "stat/guest")
     voucher_json=$(unifi_fetch "stat/voucher")
 
     auth_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    temp_files+=("$auth_file")
-    awk -F';' '$1=="a"{print tolower($2)"\t"$3"\t"$4}' "$UHM_MACAUTH" > "$auth_file"
+    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    temp_files+=("$auth_file" "$sta_file" "$guest_file" "$voucher_file")
+    awk -F';' '$1=="a"{print tolower($2)"\t"$3"\t"$4"\t"$5}' "$UHM_MACAUTH" > "$auth_file"
+    printf '%s' "$sta_json" > "$sta_file"
+    printf '%s' "$guest_json" > "$guest_file"
+    printf '%s' "$voucher_json" > "$voucher_file"
 
-    jq -Rsc --argjson sta "$sta_json" --argjson guest "$guest_json" --argjson voucher "$voucher_json" '
-        ($voucher.data // []) as $vouchers |
-        ($guest.data // []) as $guests |
-        ($sta.data // []) as $stations |
+    jq -Rsc --slurpfile sta "$sta_file" --slurpfile guest "$guest_file" --slurpfile voucher "$voucher_file" '
+        ($voucher[0].data // []) as $vouchers |
+        ($guest[0].data // []) as $guests |
+        ($sta[0].data // []) as $stations |
         {rows: [split("\n")[] | select(length > 0) | split("\t") |
-            .[0] as $mac | .[1] as $ip | .[2] as $host |
-            ($host | capture("-(?<code>[0-9]+)$") | .code // "") as $hostcode |
-            ($guests[] | select((.mac // "" | ascii_downcase) == $mac) | .voucher_code // empty) as $guestcode |
-            (if $hostcode != "" then $hostcode else ($guestcode // "") end) as $code |
-            ($vouchers[] | select(.code == $code)) as $found |
+            .[0] as $mac | .[1] as $ip | .[2] as $host | (.[3] // "") as $end |
+            (($host | capture("-(?<code>[0-9]+)$") | .code) // "") as $hostcode |
+            (first($guests[] | select((.mac // "" | ascii_downcase) == $mac) | .voucher_code) // "") as $guestcode |
+            (if $hostcode != "" then $hostcode else $guestcode end) as $code |
+            (first($vouchers[] | select(.code == $code)) // null) as $found |
             {mac: $mac, ip: $ip, host: $host, code: $code,
              status: (if $code == "" then "NO-VOUCHER"
                       elif $found == null then "CONSUMED"
-                      elif ($found.quota // 0) == 0 then "MULTI"
-                      else "VALID" end),
+                      else ($found.status // "N/A"
+                            | sub("USED_MULTIPLE"; "MULTI")
+                            | sub("VALID_MULTI"; "MULTI")
+                            | sub("VALID_ONE"; "VALID")) end),
+             expires: (try ($end | tonumber | localtime | strftime("%Y-%m-%d %H:%M:%S")) catch "N/A"),
              online: ([$stations[] | select((.mac // "" | ascii_downcase) == $mac)] | length > 0)}]}
     ' < "$auth_file"
 }
@@ -817,17 +839,19 @@ unifi_vouchers() {
 # never by authorized_by, so a real anomaly is not buried under the
 # routine mac-*.txt traffic.
 unifi_guests() {
-    local guest_json managed_file
+    local guest_json managed_file guest_file
 
     guest_json=$(unifi_fetch "stat/guest")
     managed_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    temp_files+=("$managed_file")
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    temp_files+=("$managed_file" "$guest_file")
     managed_macs | sort -u > "$managed_file"
+    printf '%s' "$guest_json" > "$guest_file"
 
-    jq -Rsc --argjson guest "$guest_json" --rawfile authfile "$UHM_MACAUTH" '
+    jq -Rsc --slurpfile guest "$guest_file" --rawfile authfile "$UHM_MACAUTH" '
         (split("\n") | map(select(length > 0))) as $managed |
         ($authfile | split("\n") | map(select(startswith("a;")) | split(";")[1] | ascii_downcase)) as $authorized |
-        {rows: [($guest.data // [])[] |
+        {rows: [($guest[0].data // [])[] |
             (.mac // "" | ascii_downcase) as $mac |
             {mac: $mac, hostname: (.hostname // ""), authorized_by: (.authorized_by // ""),
              code: (.voucher_code // ""),

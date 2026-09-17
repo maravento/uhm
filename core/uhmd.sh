@@ -289,7 +289,7 @@ cleanup_temp() {
     # whatever was last logged instead of opening a delimiter block of its
     # own -- a raya must mark the start of a cycle/session, never a shutdown.
     if (( exit_code != 1 )) && declare -F log_raw &>/dev/null; then
-        log_raw "uhmd done at: $(date)"
+        log_raw "uhmd done at: $(date '+%Y-%m-%d %H:%M:%S')"
     fi
 }
 trap cleanup_temp EXIT
@@ -362,9 +362,10 @@ last_reload_epoch=0
 # Canonical parser, identical in every script of the project: a malformed
 # line aborts.
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
@@ -1184,12 +1185,14 @@ add_mac_to_acl() {
         queue_lease_removal "$mac_addr"
         echo "$new_line" >> "$UHM_MACAUTH"
         local exp_human
-        exp_human=$(date -d "@$end_time" 2>/dev/null || echo "$end_time")
+        exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
         log "INFO: Authorized $mac_addr"
         log "INFO: ip=$client_ip"
         log "INFO: hostname=${client_name:0:30}"
         log "INFO: expires=$exp_human"
     fi
+
+    return 0
 }
 
 expire_from_hotspot() {
@@ -1252,7 +1255,7 @@ clean_expired_macs() {
         elif (( now_epoch <= end_time )); then
             echo "$env_line" >> "$tmp_file"
         else
-            log "INFO: Expired $mac_addr at $(date -d "@$end_time" 2>/dev/null || echo "$end_time")"
+            log "INFO: Expired $mac_addr at $(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")"
             if ! expire_from_hotspot "$mac_addr"; then
                 log "INFO: keeping $mac_addr, will retry -- skip"
                 echo "$env_line" >> "$tmp_file"
@@ -1647,7 +1650,7 @@ check_and_reload_if_changed() {
             # safety-net cadence. ACL-change-triggered reloads are unaffected:
             # they fire on the next real diff, not on this timer.
             last_reload_epoch=$now_epoch
-            log "WARNING: uhmreload.sh failed (code $exit_code), backing off -- alert"
+            log "WARNING: uhmreload failed (code $exit_code), back off -- alert"
         fi
         flock -n 201 || log "INFO: cycle lock not reacquired after reload -- skip"
     else
@@ -1787,7 +1790,7 @@ run_cycle() {
         authorized_total=$(( ${authorized_total:-0} + 0 ))
         grace_total=$(grep -c "^a;" "$UHM_GRACE" 2>/dev/null || true)
         grace_total=$(( ${grace_total:-0} + 0 ))
-        log "vouchers=$voucher_count|auth=$authorized_total|grace=$grace_total|new_auth=$sessions_authorized|revoked_count=$revoked_total"
+        log "vouchers=$voucher_count|auth=$authorized_total|grace=$grace_total|newauth=$sessions_authorized|revoked=$revoked_total"
 
         if [[ "$reload_ok" == "1" && ${#newly_authorized_macs[@]} -gt 0 ]]; then
             kick_newly_authorized "$sta_data"

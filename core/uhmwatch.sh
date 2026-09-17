@@ -191,6 +191,9 @@ target_path="/etc/uhm/core/uhmwatch.sh"
 # pointing there instead of leaving it stale (see below).
 legacy_target_path="/etc/uhm/tools/uhmwatch.sh"
 
+# validation -- integer only; use directly with =~
+UH_UINT='^(0|[1-9][0-9]*)$'
+
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
@@ -272,20 +275,11 @@ esac
 # Load UNIFI_TYPE from uhm.env. Safe key=value parsing - file is never
 # sourced to prevent code execution.
 uhm_conf="/etc/uhm/uhm.env"
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
-    [[ ! -f "$conf_file" ]] && { log "WARNING: uhm.env not found -- fallback"; return 1; }
-    local file_owner file_perms
-    file_owner=$(stat -c '%U' "$conf_file" 2>/dev/null)
-    file_perms=$(stat -c '%a' "$conf_file" 2>/dev/null)
-    if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-        if chown root:root "$conf_file" 2>/dev/null && chmod 600 "$conf_file" 2>/dev/null; then
-            log "WARNING: uhm.env perms fixed -- alert"
-        else
-            log "ERROR: cannot fix uhm.env perms -- abort"
-            return 1
-        fi
-    fi
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
@@ -304,9 +298,22 @@ load_conf() {
         esac
     done < "$conf_file"
 }
+
+if [[ -f "$uhm_conf" ]]; then
+    env_owner=$(stat -c '%U' "$uhm_conf" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
+    if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
+        if chown root:root "$uhm_conf" 2>/dev/null && chmod 600 "$uhm_conf" 2>/dev/null; then
+            log "WARNING: uhm.env perms fixed -- alert"
+        else
+            log "ERROR: cannot fix uhm.env perms -- abort"
+            exit 1
+        fi
+    fi
+    unset env_owner env_perms
+fi
 load_conf "$uhm_conf"
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-UH_UINT='^(0|[1-9][0-9]*)$'
 RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
 if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
     log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- fallback"
@@ -340,7 +347,7 @@ check_uhmd() {
     if systemctl is-active --quiet uhmd.service; then
         clear_recovery_attempt "uhmd.service"
     else
-        log "WARNING: uhmd OFFLINE"
+        log "WARNING: uhmd OFFLINE -- alert"
         if recovery_on_cooldown "uhmd.service"; then
             log "INFO: uhmd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
@@ -348,7 +355,7 @@ check_uhmd() {
         mark_recovery_attempt "uhmd.service"
         systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
-            log "FIX: uhmd restarted"
+            log "FIX: uhmd restarted -- alert"
             clear_recovery_attempt "uhmd.service"
         else
             log "WARNING: uhmd restart FAILED -- alert"
@@ -365,7 +372,7 @@ check_ualert() {
     if systemctl is-active --quiet uhmalert.service; then
         clear_recovery_attempt "uhmalert.service"
     else
-        log "WARNING: uhmalert OFFLINE"
+        log "WARNING: uhmalert OFFLINE -- alert"
         if recovery_on_cooldown "uhmalert.service"; then
             log "INFO: uhmalert recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
@@ -373,7 +380,7 @@ check_ualert() {
         mark_recovery_attempt "uhmalert.service"
         systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
-            log "FIX: uhmalert restarted"
+            log "FIX: uhmalert restarted -- alert"
             clear_recovery_attempt "uhmalert.service"
         else
             log "WARNING: uhmalert restart FAILED -- alert"
@@ -396,7 +403,7 @@ check_pydhcpd() {
             log "INFO: pydhcpd down mid-reload (uhmleases.sh) -- skip"
             return
         fi
-        log "WARNING: pydhcpd OFFLINE"
+        log "WARNING: pydhcpd OFFLINE -- alert"
         if recovery_on_cooldown "pydhcpd.service"; then
             log "INFO: pydhcpd recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
@@ -404,7 +411,7 @@ check_pydhcpd() {
         mark_recovery_attempt "pydhcpd.service"
         systemctl reset-failed pydhcpd.service 2>/dev/null || true
         if systemctl restart pydhcpd.service; then
-            log "FIX: pydhcpd restarted"
+            log "FIX: pydhcpd restarted -- alert"
             clear_recovery_attempt "pydhcpd.service"
         else
             log "WARNING: pydhcpd restart FAILED -- alert"
@@ -463,7 +470,7 @@ check_uosserver() {
     # architecture, and restarting uosserver.service would not fix an
     # unrelated host-level Mongo issue.
     if ! systemctl is-active --quiet uosserver.service; then
-        log "WARNING: UOS OFFLINE"
+        log "WARNING: UOS OFFLINE -- alert"
         if recovery_on_cooldown "uosserver.service"; then
             log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
@@ -471,7 +478,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
-            log "FIX: uosserver started"
+            log "FIX: uosserver started -- alert"
             clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver start FAILED -- alert"
@@ -491,7 +498,7 @@ check_uosserver() {
         log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':11443\b'; then
-            log "WARNING: UOS BROKEN_PORTS"
+            log "WARNING: UOS BROKEN_PORTS -- alert"
             if recently_restarted "uosserver.service"; then
                 log "INFO: uosserver restarted recently -- skip"
                 return
@@ -503,7 +510,7 @@ check_uosserver() {
             mark_recovery_attempt "uosserver.service"
             systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
-                log "FIX: uosserver restarted"
+                log "FIX: uosserver restarted -- alert"
                 clear_recovery_attempt "uosserver.service"
             else
                 log "WARNING: uosserver restart FAILED -- alert"
@@ -534,7 +541,7 @@ check_uosserver() {
             log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
-        log "WARNING: UniFi login attempt failed (HTTP $http_code)"
+        log "WARNING: UniFi login attempt failed (HTTP $http_code) -- alert"
         if recently_restarted "uosserver.service"; then
             log "INFO: uosserver restarted recently -- skip"
             return
@@ -546,7 +553,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
-            log "FIX: uosserver restarted (login failed)"
+            log "FIX: uosserver restarted (login failed) -- alert"
             clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver restart FAILED -- alert"
@@ -562,7 +569,7 @@ check_uosserver() {
 
 check_unifi_classic() {
     if ! systemctl is-active --quiet unifi.service; then
-        log "WARNING: UniFi (classic) OFFLINE"
+        log "WARNING: UniFi (classic) OFFLINE -- alert"
         if recovery_on_cooldown "unifi.service"; then
             log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -- skip"
             return
@@ -570,7 +577,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
-            log "FIX: unifi started"
+            log "FIX: unifi started -- alert"
             clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service start FAILED -- alert"
@@ -586,7 +593,7 @@ check_unifi_classic() {
         log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"
         # Fall back to a port check so this isn't a total no-op.
         if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
-            log "WARNING: UniFi (classic) BROKEN_PORTS"
+            log "WARNING: UniFi (classic) BROKEN_PORTS -- alert"
             if recently_restarted "unifi.service"; then
                 log "INFO: unifi restarted recently -- skip"
                 return
@@ -598,7 +605,7 @@ check_unifi_classic() {
             mark_recovery_attempt "unifi.service"
             systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
-                log "FIX: unifi restarted"
+                log "FIX: unifi restarted -- alert"
                 clear_recovery_attempt "unifi.service"
             else
                 log "WARNING: unifi.service restart FAILED -- alert"
@@ -629,7 +636,7 @@ check_unifi_classic() {
             log "INFO: UniFi login failed (HTTP $http_code) in grace -- skip"
             return
         fi
-        log "WARNING: UniFi login attempt failed (HTTP $http_code)"
+        log "WARNING: UniFi login attempt failed (HTTP $http_code) -- alert"
         if recently_restarted "unifi.service"; then
             log "INFO: unifi restarted recently -- skip"
             return
@@ -641,7 +648,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
-            log "FIX: unifi restarted (login failed)"
+            log "FIX: unifi restarted (login failed) -- alert"
             clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service restart FAILED -- alert"
@@ -678,4 +685,4 @@ else
 fi
 
 # end
-echo "uhmwatch done at: $(date)"
+echo "uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"

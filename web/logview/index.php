@@ -97,6 +97,8 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 .uh-bgrep:hover{background:#1976d2}
 .uh-bgrep.grep-on{background:#e65100;animation:uhP 2s infinite}
 .uh-bgrep.grep-on:hover{background:#bf360c}
+.uh-bgrep[disabled]{background:#37474f;color:#78909c;cursor:default}
+.uh-bgrep[disabled]:hover{background:#37474f}
 @keyframes uhP{0%,100%{box-shadow:0 0 0 2px #ffb74d}50%{box-shadow:0 0 0 4px rgba(230,81,0,.3)}}
 .uh-toolbar select{background:#253545;border:1px solid #3a4f63;color:#e6eef8;padding:7px 8px;border-radius:6px;font-size:11px;outline:none;cursor:pointer}
 .uh-toolbar select option{background:#1e2a35}
@@ -198,12 +200,12 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
   <div class="title"><span class="icon">&#9685;</span> uhmd</div>
   <div class="uh-search">
     <span class="sicon">&#128269;</span>
-    <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." onkeydown="if(event.key==='Enter')uhGS()">
-    <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Search entire log file">Full log</button>
+    <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." oninput="uhBS()" onkeydown="if(event.key==='Enter')uhGS()">
+    <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Type a term first, then search the entire log file" disabled>Full log</button>
   </div>
   <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="ALERT">ALERT</option><option value="FIX">FIX</option><option value="STATUS">STATUS</option></select>
-  <select id="uhLn" onchange="uhRL()"><option value="200">Last 200</option><option value="500" selected>Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
-  <select id="uhIv" onchange="uhCI()"><option value="1000">1s</option><option value="3000">3s</option><option value="5000" selected>5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
+  <select id="uhLn" onchange="uhRL()"><option value="200" selected>Last 200</option><option value="500">Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
+  <select id="uhIv" onchange="uhCI()"><option value="1000" selected>1s</option><option value="3000">3s</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
   <button class="uh-btn" onclick="uhRL()" title="Reload log">Reload</button>
   <div class="uh-live" id="uhLB" onclick="uhTL()" title="Click to pause/resume"><span class="dot pulse" id="uhDt"></span><span id="uhLL">LIVE</span></div>
 </div>
@@ -229,7 +231,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 (function(){
 var API='../api.php';
 var ALL=[],CUR=[],fOff=0,live=true,pTmr=null,grep=false,loading=false,nrc=0;
-var PI=5000,MR=5000,RC=1000;
+var PI=1000,MR=5000,RC=1000;
 
 // Theme follows the panel shell: the stored key on load, a postMessage
 // afterwards, so switching theme never reloads the module.
@@ -245,7 +247,7 @@ window.addEventListener('message',function(ev){
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function hl(t,q){if(!q)return esc(t);try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return esc(t).replace(r,'<span class="hl">$1</span>')}catch(e){return esc(t)}}
 var UH_MAC_RE=/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi;
-function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|new_auth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
+function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|newauth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
 function mf(r){var lv=document.getElementById('uhLv').value;if(lv&&r.level!==lv)return false;var q=(document.getElementById('uhQ').value||'').toLowerCase().trim();if(!grep&&q&&r._i.indexOf(q)===-1)return false;return true}
 
@@ -275,7 +277,7 @@ function rt(q,an){
 function ucs(){
   var bar=document.getElementById('uhCB');
   for(var i=0;i<ALL.length;i++){
-    var m=ALL[i].msg.match(/vouchers=(\d+)\|auth=(\d+)\|grace=(\d+)\|new_auth=(\d+)\|revoked=(\d+)/);
+    var m=ALL[i].msg.match(/vouchers=(\d+)\|auth=(\d+)\|grace=(\d+)\|newauth=(\d+)\|revoked=(\d+)/);
     if(m){bar.innerHTML='<span class="uh-cp uh-cp-i">Vouchers '+m[1]+'</span><span class="uh-cp uh-cp-ok">Authorized '+m[2]+'</span><span class="uh-cp uh-cp-w">Grace '+m[3]+'</span><span class="uh-cp uh-cp-ok">New Auth '+m[4]+'</span><span class="uh-cp '+(parseInt(m[5])>0?'uh-cp-w':'uh-cp-d')+'">Revoked '+m[5]+'</span>';return}
   }
 }
@@ -314,7 +316,7 @@ window.uhTG=function(){if(grep)uhCG(false);else uhGS()};
 window.uhGS=function(){
   var q=document.getElementById('uhQ').value.trim();if(!q){uhRL();return}
   if(loading)return;loading=true;cP();ALL=[];CUR=[];nrc=0;grep=true;
-  var btn=document.getElementById('uhBG');btn.innerHTML='<span class="uh-sp"></span> Searching...';
+  var btn=document.getElementById('uhBG');btn.disabled=true;btn.innerHTML='<span class="uh-sp"></span> Searching...';
   document.getElementById('uhTB').innerHTML='<tr><td colspan="3" style="text-align:center;padding:40px;color:#90a4ae">Searching entire log...</td></tr>';
   fetch(API+'?g=log&a=grep&q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(d){
     if(d.error){loading=false;rgB();return}ALL=bi(d.rows||[]).reverse();fOff=d.offset||0;
@@ -322,8 +324,12 @@ window.uhGS=function(){
     document.getElementById('uhGB').style.display='flex';uhAF();ucs();loading=false;sgB();
   }).catch(function(){loading=false;rgB();grep=false});
 };
-function sgB(){var b=document.getElementById('uhBG');b.classList.add('grep-on');b.innerHTML='&#10005; Live mode'}
-function rgB(){var b=document.getElementById('uhBG');b.classList.remove('grep-on');b.innerHTML='Full log'}
+function sgB(){var b=document.getElementById('uhBG');b.classList.add('grep-on');b.disabled=false;b.title='Back to live mode';b.innerHTML='&#10005; Live mode'}
+function rgB(){var b=document.getElementById('uhBG');b.classList.remove('grep-on');b.innerHTML='Full log';b.title='Type a term first, then search the entire log file';uhBS()}
+
+// The button only works with a search term, so it stays disabled while the
+// box is empty instead of looking active and doing nothing.
+window.uhBS=function(){var b=document.getElementById('uhBG');if(grep)return;b.disabled=document.getElementById('uhQ').value.trim()===''};
 window.uhCG=function(s){grep=false;document.getElementById('uhGB').style.display='none';rgB();if(!s)uhRL()};
 window.uhJT=function(){nrc=0;uhAF(0);requestAnimationFrame(function(){document.getElementById('uhTW').scrollTop=0;document.getElementById('uhNB').style.display='none'})};
 
@@ -339,7 +345,7 @@ function pS(){
 document.getElementById('uhQ').addEventListener('input',function(){if(!grep)uhAF()});
 document.getElementById('uhLv').addEventListener('change',function(){uhAF()});
 
-pS();setInterval(pS,30000);uhRL();
+pS();setInterval(pS,30000);uhBS();uhRL();
 })();
 </script>
 </body>

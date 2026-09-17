@@ -29,16 +29,22 @@ set -uo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# logging
+log_file="/var/log/uhm.log"
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+}
+
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "uhmiptables.sh: ERROR: this script must be run as root -- abort" >&2
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
 
 # dependencies
 for dep_pkg in iptables procps iproute2; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        echo "uhmiptables.sh: ERROR: missing dependency '$dep_pkg' -- abort" >&2
+        log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
     fi
 done
@@ -48,7 +54,15 @@ done
 # ------------------------------------------------------------------------------
 
 # validation -- one variable per thing validated; use directly with =~
+UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
+UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
+UH_MAC="^${UH_MAC_RE}$"
 UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # Load all configuration from pydhcp.env/uhm.env (network, paths, interfaces).
@@ -66,18 +80,20 @@ uhm_conf="/etc/uhm/uhm.env"
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
 load_conf() {
     local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { echo "uhmiptables.sh: WARNING: $conf_file not found -- fallback" >&2; return 1; }
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%=*}"
+        env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            echo "uhmiptables.sh: ERROR: malformed line in $conf_file: '$env_line' -- abort" >&2
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
             exit 1
         fi
         case "$env_key" in
@@ -91,7 +107,7 @@ load_conf() {
 }
 
 if [ ! -r "$pydhcp_conf" ]; then
-    echo "uhmiptables.sh: ERROR: cannot read $pydhcp_conf -- abort" >&2
+    log "ERROR: cannot read $pydhcp_conf -- abort"
     exit 1
 fi
 load_conf "$pydhcp_conf" || true
@@ -106,12 +122,12 @@ SERVER_IP="${SERVER_IP:-192.168.0.10}"
 SERV_DNS="${SERV_DNS:-$SERVER_IP}"
 WPAD_PORT="${WPAD_PORT:-18100}"
 [[ "$WPAD_PORT" =~ $UH_UINT ]] && (( WPAD_PORT >= 1 && WPAD_PORT <= 65535 )) \
-    || { echo "uhmiptables.sh: ERROR: WPAD_PORT is not a valid port -- abort" >&2; exit 1; }
+    || { log "ERROR: WPAD_PORT is not a valid port -- abort"; exit 1; }
 SERV_MASK="${SERV_MASK:-255.255.255.0}"
 if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
     netmask_int="${BASH_REMATCH[1]}"
 else
-    echo "uhmiptables.sh: ERROR: SERV_MASK is not a valid netmask -- abort" >&2
+    log "ERROR: SERV_MASK is not a valid netmask -- abort"
     exit 1
 fi
 acl_path="${ACL_MAC_PATH:-/etc/acl/mac}"
@@ -122,9 +138,11 @@ UHM_PATH="${UHM_PATH:-/etc/uhm}"
 UHM_GRACE="${UHM_GRACE:-${UHM_PATH}/acl/uhm-grace.txt}"
 
 ip link show "$wan_iface" >/dev/null 2>&1 || {
-    echo "uhmiptables.sh: ERROR: interface '$wan_iface' does not exist -- abort" >&2
+    log "ERROR: interface '$wan_iface' does not exist -- abort"
     exit 1
 }
+
+log "uhmiptables start..."
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 # Not a tuning value: without forwarding this host stops routing, and LAN
@@ -132,13 +150,13 @@ sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 # state, not by sysctl's exit code, so a value already set by another
 # means is accepted.
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
-    echo "uhmiptables.sh: ERROR: IPv4 forwarding is off, LAN cannot route -- abort" >&2
+    log "ERROR: IPv4 forwarding is off, LAN cannot route -- abort"
     exit 1
 fi
 
 # A rule that fails here leaves the LAN without NAT, so every step below
 # reports it instead of letting the script exit 0 and pass as a good reload.
-fail() { echo "uhmiptables.sh: ERROR: $1 -- abort" >&2; exit 1; }
+fail() { log "ERROR: $1 -- abort"; exit 1; }
 
 iptables -t nat -N UHM_NAT 2>/dev/null || true
 iptables -t nat -F UHM_NAT || fail "cannot flush UHM_NAT"
@@ -147,3 +165,9 @@ iptables -t nat -C POSTROUTING -j UHM_NAT 2>/dev/null \
     || fail "cannot hook UHM_NAT into POSTROUTING"
 iptables -t nat -A UHM_NAT -o "$wan_iface" -j MASQUERADE \
     || fail "cannot add MASQUERADE on $wan_iface"
+
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
+
+log "uhmiptables done at: $(date '+%Y-%m-%d %H:%M:%S')"
