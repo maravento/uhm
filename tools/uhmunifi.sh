@@ -125,6 +125,17 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# prevent overlapping runs
+# Taken before the log is truncated: a second instance must not wipe the
+# log of the session already running, so it reports on stderr instead.
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
+if ! flock -n 200; then
+    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
+    exit 1
+fi
+
 if ! : > "$log_file" 2>/dev/null; then
     echo "ERROR: cannot write $log_file -- abort" >&2
     exit 1
@@ -146,15 +157,6 @@ case "$log_stat" in
         ;;
 esac
 unset log_stat
-
-# prevent overlapping runs
-script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
-exec 200>"$script_lock"
-if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -- abort"
-    exit 1
-fi
 
 # dependencies
 for dep_pkg in curl jq bsdextrautils mawk coreutils util-linux grep sed; do
@@ -188,8 +190,11 @@ log "uhmunifi start..."
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
@@ -482,7 +487,7 @@ print_authorized() {
             local authorized_by is_connected
 
             expires_at="N/A"
-            [ -n "$end_time" ] && expires_at=$(date -d "@$end_time" '+%m-%d %H:%M' 2>/dev/null || echo "$end_time")
+            [ -n "$end_time" ] && expires_at=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
 
             # Step 1: extract code from hostname (guest{n}-{code})
             voucher_field=$(echo "$client_name" | sed -n 's/^guest[0-9]*-\([A-Za-z0-9._-]*\)$/\1/p')
@@ -545,7 +550,7 @@ print_voucher() {
         printf "CODE|STATUS|DURATION|QUOTA|USED|EXPIRES\n"
         echo "$voucher_json" | jq -r '
             .data[]
-            | [.code//"N/A", (.status//"N/A"), (((.duration//0)/60|floor|tostring) + "h"), (.quota//0|tostring), (.used//0|tostring), (if .end_time then (.end_time|strftime("%m-%d %H:%M")) else "N/A" end)]
+            | [.code//"N/A", (.status//"N/A"), (((.duration//0)/60|floor|tostring) + "h"), (.quota//0|tostring), (.used//0|tostring), (if .end_time then (.end_time|strftime("%Y-%m-%d %H:%M:%S")) else "N/A" end)]
             | join("|")
         ' 2>/dev/null
     } | column -t -s '|'
@@ -594,7 +599,7 @@ print_guest_sessions() {
     done < <(echo "$guest_json" | jq -r --argjson now "$now_epoch" '
         .data[]
         | select(.end != null and .end > $now)
-        | [(.mac|ascii_downcase), (.authorized_by//"none"), (.voucher_code//""), (.end|strftime("%m-%d %H:%M"))]
+        | [(.mac|ascii_downcase), (.authorized_by//"none"), (.voucher_code//""), (.end|strftime("%Y-%m-%d %H:%M:%S"))]
         | join("|")
     ' 2>/dev/null | sort -t'|' -k2,2 -k1,1)
 
@@ -689,7 +694,7 @@ interactive_delete_unused() {
                 (.code // "N/A"),
                 (((.duration // 0) / 60 | floor | tostring) + "h"),
                 ("quota=" + ((.quota // 0) | tostring)),
-                (if .create_time then (.create_time | strftime("%Y-%m-%d")) else "N/A" end)
+                (if .create_time then (.create_time | strftime("%Y-%m-%d %H:%M:%S")) else "N/A" end)
               ]
             | join(" ")
         ' 2>/dev/null)
@@ -709,7 +714,7 @@ interactive_delete_unused() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "WARNING: Failed to delete voucher: $voucher_code"
+            || log "WARNING: Failed to delete voucher: $voucher_code -- skip"
     done
 
     log "INFO: Done."
@@ -737,7 +742,7 @@ interactive_forget_no_voucher() {
     local all_users_rc
     all_users_rc=$(echo "$all_users_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
     if [ "$all_users_rc" != "ok" ]; then
-        log "WARNING: Could not fetch rest/user (rc=$all_users_rc)"
+        log "WARNING: Could not fetch rest/user (rc=$all_users_rc) -- skip"
         return
     fi
 
@@ -780,7 +785,7 @@ interactive_forget_no_voucher() {
         ' 2>/dev/null | head -1)
         last_seen=$(echo "$all_users_json" | jq -r --arg m "$mac_addr" '
             .data[] | select((.mac | ascii_downcase) == $m)
-            | if .last_seen then (.last_seen | strftime("%Y-%m-%d %H:%M")) else "N/A" end
+            | if .last_seen then (.last_seen | strftime("%Y-%m-%d %H:%M:%S")) else "N/A" end
         ' 2>/dev/null | head -1)
         printf " %-20s %-25s last_seen=%s\n" "$mac_addr" "$client_name" "$last_seen"
     done
@@ -797,7 +802,7 @@ interactive_forget_no_voucher() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr"
+            || log "WARNING: Failed to forget: $mac_addr -- skip"
     done
 
     log "INFO: Done."
@@ -849,7 +854,7 @@ interactive_delete_expired() {
                 (.code // "N/A"),
                 (((.duration // 0) / 60 | floor | tostring) + "h"),
                 ("used=" + ((.used // 0) | tostring)),
-                (if .end_time then (.end_time | strftime("%Y-%m-%d %H:%M")) else "N/A" end)
+                (if .end_time then (.end_time | strftime("%Y-%m-%d %H:%M:%S")) else "N/A" end)
               ]
             | join(" ")
         ' 2>/dev/null)
@@ -884,7 +889,7 @@ interactive_delete_expired() {
                 "{\"cmd\":\"unauthorize-guest\",\"mac\":\"${mac_addr}\"}" \
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$unauth_rc" = "ok" ] \
-                && log "INFO: Unauthorized: $mac_addr" \
+                && log "INFO: Revoked: $mac_addr" \
                 || log "INFO: no active session: $mac_addr"
         done < <(echo "$sta_json" | jq -r --arg code "$voucher_code" '
             .data[]
@@ -901,7 +906,7 @@ interactive_delete_expired() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$forget_rc" = "ok" ] \
                 && log "INFO: Forgotten: $mac_addr" \
-                || log "WARNING: Failed to forget: $mac_addr"
+                || log "WARNING: Failed to forget: $mac_addr -- skip"
         done < <(echo "$guest_json" | jq -r --arg code "$voucher_code" '
             .data[]
             | select(.voucher_code == $code)
@@ -992,7 +997,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $target_code" \
-            || log "WARNING: Failed to delete voucher from stat/voucher (rc=$delete_rc)"
+            || log "WARNING: delete voucher failed: (rc=$delete_rc) -- skip"
     else
         log "INFO: voucher $target_code not found, proceeding with cleanup"
     fi
@@ -1050,8 +1055,8 @@ interactive_revoke_by_code() {
                 "{\"cmd\":\"unauthorize-guest\",\"mac\":\"${mac_addr}\"}" \
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$unauth_rc" = "ok" ] \
-                && log "INFO: Unauthorized: $mac_addr" \
-                || log "WARNING: Failed to unauthorize: $mac_addr (rc=$unauth_rc)"
+                && log "INFO: Revoked: $mac_addr" \
+                || log "WARNING: revoke failed: $mac_addr (rc=$unauth_rc) -- skip"
         fi
 
         local forget_rc
@@ -1060,7 +1065,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr (rc=$forget_rc)"
+            || log "WARNING: forget failed: $mac_addr (rc=$forget_rc) -- skip"
     done
 
     log "INFO: revocation complete for code: $target_code"
@@ -1131,7 +1136,7 @@ interactive_forget_flagged() {
             "{\"cmd\":\"unauthorize-guest\",\"mac\":\"${mac_addr}\"}" \
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$unauth_rc" = "ok" ] \
-            && log "INFO: Unauthorized: $mac_addr" \
+            && log "INFO: Revoked: $mac_addr" \
             || log "INFO: no active session: $mac_addr"
 
         local forget_rc
@@ -1140,7 +1145,7 @@ interactive_forget_flagged() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr"
+            || log "WARNING: Failed to forget: $mac_addr -- skip"
     done
 
     log "INFO: Done."
@@ -1207,7 +1212,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "WARNING: Failed to delete voucher: $voucher_code"
+            || log "WARNING: Failed to delete voucher: $voucher_code -- skip"
     done < <(echo "$voucher_json" | jq -r '.data[] | ._id' 2>/dev/null)
 
     local mac_addr unauth_rc
@@ -1218,7 +1223,7 @@ interactive_purge_all() {
             "{\"cmd\":\"unauthorize-guest\",\"mac\":\"${mac_addr}\"}" \
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$unauth_rc" = "ok" ] \
-            && log "INFO: Unauthorized: $mac_addr" \
+            && log "INFO: Revoked: $mac_addr" \
             || log "INFO: no active session: $mac_addr"
     done < <(echo "$sta_json" | jq -r '.data[] | (.mac | ascii_downcase)' 2>/dev/null | sort -u)
 
@@ -1231,7 +1236,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr"
+            || log "WARNING: Failed to forget: $mac_addr -- skip"
     done < <(echo "$guest_json" | jq -r '.data[] | (.mac | ascii_downcase)' 2>/dev/null | sort -u)
 
     log "INFO: Purge complete."
@@ -1341,4 +1346,4 @@ main_menu() {
 main_menu
 
 # end
-log "uhmunifi done at: $(date)"
+log "uhmunifi done at: $(date '+%Y-%m-%d %H:%M:%S')"

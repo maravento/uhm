@@ -72,7 +72,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 .uh-toolbar select option{background:#1e2a35}
 .uh-btn{padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:none;white-space:nowrap;background:#37474f;color:#e6eef8}
 .uh-btn:hover{background:#455a64}
-.uh-btn.save{background:#1565c0;margin-left:auto}
+.uh-btn.save{background:#1565c0;margin-left:auto;padding:6px 30px;font-size:14px}
 .uh-btn.save:hover{background:#1976d2}
 .uh-btn[disabled]{opacity:.45;cursor:default}
 

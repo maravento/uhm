@@ -281,6 +281,31 @@ detect_dhcp_backend() {
 # ENV
 # ------------------------------------------------------------------------------
 
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            SERVER_IP|SERV_MASK|SERV_SUBNET|SERV_BROADCAST|SERV_DNS|\
+            SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+        esac
+    done < "$conf_file"
+}
+
 # Reads pydhcp's own network values (server IP, mask, subnet, broadcast, DNS,
 # blockdhcp pool range) from pydhcp_env instead of asking for them again --
 # pysetup.sh already collected and persisted them. Only the keys this
@@ -290,7 +315,7 @@ detect_dhcp_backend() {
 # Sets SERVER_IP, SERV_MASK, SERV_SUBNET, SERV_BROADCAST,
 # SERV_DNS, SERV_INI_RANGE_BLOCK, SERV_END_RANGE_BLOCK for
 # run_setup_wizard.
-load_conf() {
+load_pydhcp_conf() {
     [ -f "$pydhcp_env" ] \
         || { err "$pydhcp_env not found"; abort "install pydhcp first, see its README -- abort"; }
 
@@ -306,25 +331,7 @@ load_conf() {
 
     # Load only these known keys instead of sourcing the whole file, so a
     # tampered pydhcp.env cannot execute code.
-    local env_line env_key env_value
-    while IFS= read -r env_line || [ -n "$env_line" ]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $pydhcp_env: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_MASK|SERV_SUBNET|SERV_BROADCAST|SERV_DNS|\
-            SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$pydhcp_env"
+    load_conf "$pydhcp_env"
 
     local check_var
     for check_var in SERVER_IP SERV_SUBNET SERV_BROADCAST \
@@ -1384,21 +1391,21 @@ main() {
         ""|install)
             check_apt_deps
             detect_dhcp_backend
-            load_conf
+            load_pydhcp_conf
             do_install
-            log "uhmsetup done at: $(date)"
+            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
             exit 0
             ;;
         --update|update)
             check_apt_deps
             detect_dhcp_backend
             do_update
-            log "uhmsetup done at: $(date)"
+            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
             exit 0
             ;;
         --remove|remove|--uninstall|uninstall)
             do_remove
-            log "uhmsetup done at: $(date)"
+            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
             exit 0
             ;;
         *)

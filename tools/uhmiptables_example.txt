@@ -85,8 +85,8 @@ load_conf() {
     [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$    ]] && continue
-        env_key="${env_line%=*}"
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
@@ -1004,4 +1004,4 @@ iptables -A FORWARD -m hashlimit --hashlimit-name forward-drop --hashlimit-above
 iptables -A FORWARD -j DROP
 
 # end
-log "uhmiptables done at: $(date)"
+log "uhmiptables done at: $(date '+%Y-%m-%d %H:%M:%S')"

@@ -142,6 +142,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
+# validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
 
 target_path="/etc/uhm/tools/uhmalert.sh"
@@ -319,9 +320,10 @@ fi
 # maliciously replaced config file cannot execute code. Canonical parser,
 # identical in every script of the project: a malformed line aborts.
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
@@ -462,7 +464,7 @@ while true; do
         if (( is_connectivity == 0 )) && { [[ "$log_msg" == ERROR:* ]] || [[ "$log_msg" == WARNING:* ]] || [[ "$log_msg" == FIX:* ]]; }; then
             now_epoch=$(date +%s)
             if [[ "$log_msg" == "$last_generic_msg" ]] && (( now_epoch - last_generic_time < dedup_window )); then
-                log "INFO: dup alert suppressed (${dedup_window}s): ${log_msg:0:25}"
+                log "INFO: dup alert (${dedup_window}s): ${log_msg:0:25} -- skip"
                 continue
             fi
             last_generic_msg="$log_msg"
@@ -490,7 +492,7 @@ while true; do
         if (( fail_streak == fail_threshold )) && (( alert_sent == 0 )); then
             uhmd_start=$(uhmd_started_at)
             if (( uhmd_start > 0 )) && (( line_epoch - uhmd_start < quiet_period )); then
-                log "INFO: $fail_streak failures within startup grace, suppressed"
+                log "INFO: $fail_streak failures within startup grace -- skip"
                 fail_streak=0
             else
                 notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $line_ts)"

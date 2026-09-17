@@ -167,7 +167,7 @@ UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
-# CYCLE_LOCK is the mechanism lock, distinct from SCRIPT_LOCK above (which
+# CYCLE_LOCK is the mechanism lock, distinct from script_lock above (which
 # only prevents a second copy of this same script). It is acquired here
 # unconditionally, whoever invoked this script -- the daemon cycle, its
 # startup reload, uhmreload.sh, or a manual run -- because the protection
@@ -191,7 +191,7 @@ cycle_lock="/var/lock/uhmd-cycle.lock"
 exec 201>"$cycle_lock"
 if ! flock -w 10 201; then
     log "INFO: mechanism busy -- skip"
-    log "uhmleases done at: $(date)"
+    log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
     exit 0
 fi
 
@@ -239,9 +239,10 @@ unset env_owner env_perms
 # Load only known KEY=VALUE pairs from ENV_FILE instead of sourcing it,
 # so a tampered or maliciously replaced env file cannot execute code.
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
-    while IFS= read -r env_line || [ -n "$env_line" ]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
@@ -1321,7 +1322,7 @@ log "blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$ACL_MA
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmleases done at: $(date)"
+log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
 
 if (( pydhcpd_start_failed )); then
     log "ERROR: pydhcpd is down -- abort"

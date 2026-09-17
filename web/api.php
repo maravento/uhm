@@ -32,14 +32,23 @@ $actions = [
     'unifi'  => ['status', 'authorized', 'vouchers', 'guests', 'unauthorized'],
 ];
 
+// Every query parameter is read through this: PHP turns ?g[]=x into an array,
+// and an array reaching isset($actions[$group]) is a fatal TypeError, not a
+// clean JSON error. A non-string parameter becomes '' and falls through the
+// same validation as any other bad value.
+function get_param(string $name, string $default = ''): string {
+    $value = $_GET[$name] ?? null;
+    return is_string($value) ? $value : $default;
+}
+
 function fail(string $message, int $code = 400): void {
     http_response_code($code);
     echo json_encode(['error' => $message]);
     exit;
 }
 
-$group  = $_GET['g'] ?? '';
-$action = $_GET['a'] ?? '';
+$group  = get_param('g');
+$action = get_param('a');
 
 if (!isset($actions[$group]) || !in_array($action, $actions[$group], true)) {
     fail('unknown action');
@@ -52,10 +61,10 @@ $body = null;
 
 switch ($group . ':' . $action) {
     case 'log:tail':
-        $pos   = $_GET['pos'] ?? '0';
-        $lines = $_GET['lines'] ?? '200';
-        if (!ctype_digit((string) $pos))   { $pos = '0'; }
-        if (!ctype_digit((string) $lines)) { $lines = '200'; }
+        $pos   = get_param('pos', '0');
+        $lines = get_param('lines', '200');
+        if (!ctype_digit($pos))   { $pos = '0'; }
+        if (!ctype_digit($lines)) { $lines = '200'; }
         $args[] = $pos;
         $args[] = $lines;
         break;
@@ -63,7 +72,7 @@ switch ($group . ':' . $action) {
     case 'log:grep':
     case 'report:mac':
     case 'report:search':
-        $query = trim((string) ($_GET['q'] ?? ''));
+        $query = trim(get_param('q'));
         if ($query === '') {
             fail('empty search term');
         }
@@ -71,7 +80,7 @@ switch ($group . ':' . $action) {
         break;
 
     case 'acl:read':
-        $args[] = (string) ($_GET['name'] ?? '');
+        $args[] = get_param('name');
         break;
 
     case 'acl:write':
@@ -85,19 +94,18 @@ switch ($group . ':' . $action) {
         if (strlen($body) > MAX_BODY_BYTES) {
             fail('content too large', 413);
         }
-        $args[] = (string) ($_GET['name'] ?? '');
+        $args[] = get_param('name');
         break;
 }
 
-$command = 'sudo -n ' . escapeshellcmd(UHM_TOOL);
-foreach ($args as $arg) {
-    $command .= ' ' . escapeshellarg($arg);
-}
+$command = array_merge(['sudo', '-n', UHM_TOOL], $args);
 
+// stderr goes to /dev/null: nothing here reads it, and an unread pipe would
+// deadlock the request as soon as the child wrote more than its 64 KiB buffer.
 $descriptors = [
     0 => ['pipe', 'r'],
     1 => ['pipe', 'w'],
-    2 => ['pipe', 'w'],
+    2 => ['file', '/dev/null', 'w'],
 ];
 $process = proc_open($command, $descriptors, $pipes);
 if (!is_resource($process)) {
@@ -111,7 +119,6 @@ fclose($pipes[0]);
 
 $stdout = stream_get_contents($pipes[1]);
 fclose($pipes[1]);
-fclose($pipes[2]);
 proc_close($process);
 
 $stdout = trim((string) $stdout);

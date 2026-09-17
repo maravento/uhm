@@ -91,79 +91,36 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
+# validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
-
-# ------------------------------------------------------------------------------
-# ENV
-# ------------------------------------------------------------------------------
-
-config_file="/etc/uhm/uhm.env"
-if [[ ! -f "$config_file" ]]; then
-    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
-    exit 1
-fi
-env_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
-env_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
-if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
-    if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "WARNING: uhm.env perms fixed -- alert"
-    else
-        log "ERROR: cannot fix uhm.env perms -- abort"
-        exit 1
-    fi
-fi
-unset env_owner env_perms
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
-UHM_LEASES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_LEASES_TIMEOUT_SECONDS=' "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set -- fallback"
-    UHM_LEASES_TIMEOUT_SECONDS=120
-fi
-if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS invalid -- fallback"
-    UHM_LEASES_TIMEOUT_SECONDS=120
-fi
-
-UHM_IPTABLES_TIMEOUT_SECONDS=$(grep -m1 '^UHM_IPTABLES_TIMEOUT_SECONDS=' "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UHM_IPTABLES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set -- fallback"
-    UHM_IPTABLES_TIMEOUT_SECONDS=60
-fi
-if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS invalid -- fallback"
-    UHM_IPTABLES_TIMEOUT_SECONDS=60
-fi
-
-UHM_LEASES=$(grep -m1 '^UHM_LEASES=' "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UHM_LEASES" ]]; then
-    log "WARNING: UHM_LEASES not set -- fallback"
-    UHM_LEASES="/etc/uhm/core/uhmleases.sh"
-fi
-
-UHM_IPTABLES=$(grep -m1 '^UHM_IPTABLES=' "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-if [[ -z "$UHM_IPTABLES" ]]; then
-    log "WARNING: UHM_IPTABLES not set -- fallback"
-    UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
-fi
-
-# No mechanism lock is taken here. This script is a convenience wrapper that
-# invokes uhmleases.sh and uhmiptables.sh in order, and could be replaced by
-# two direct invocations at any time. The guard belongs to the script that
-# writes: uhmleases.sh acquires cycle_lock itself, with its own descriptor,
-# whoever invoked it -- so nothing is lost if this wrapper goes away.
-
-# start
-log "uhmreload start..."
-
-# Abort if uhmd isn't active -- nothing downstream should run blindly.
-if ! systemctl is-active --quiet uhmd; then
-    log "ERROR: uhmd not active -- abort"
-    exit 1
-fi
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS|UHM_LEASES|UHM_IPTABLES)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+        esac
+    done < "$conf_file"
+}
 
 ensure_executable() {
     local script_path="$1" script_name="$2" expected_mode="$3"
@@ -228,6 +185,80 @@ run_step() {
     rm -f "$trace_file" 2>/dev/null || true
 }
 
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+config_file="/etc/uhm/uhm.env"
+if [[ ! -f "$config_file" ]]; then
+    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
+    exit 1
+fi
+env_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
+env_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
+if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
+    if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
+        log "WARNING: uhm.env perms fixed -- alert"
+    else
+        log "ERROR: cannot fix uhm.env perms -- abort"
+        exit 1
+    fi
+fi
+unset env_owner env_perms
+
+load_conf "$config_file" || true
+
+UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-}"
+if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
+    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set -- fallback"
+    UHM_LEASES_TIMEOUT_SECONDS=120
+fi
+if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
+    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS invalid -- fallback"
+    UHM_LEASES_TIMEOUT_SECONDS=120
+fi
+
+UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-}"
+if [[ -z "$UHM_IPTABLES_TIMEOUT_SECONDS" ]]; then
+    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set -- fallback"
+    UHM_IPTABLES_TIMEOUT_SECONDS=60
+fi
+if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
+    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS invalid -- fallback"
+    UHM_IPTABLES_TIMEOUT_SECONDS=60
+fi
+
+UHM_LEASES="${UHM_LEASES:-}"
+if [[ -z "$UHM_LEASES" ]]; then
+    log "WARNING: UHM_LEASES not set -- fallback"
+    UHM_LEASES="/etc/uhm/core/uhmleases.sh"
+fi
+
+UHM_IPTABLES="${UHM_IPTABLES:-}"
+if [[ -z "$UHM_IPTABLES" ]]; then
+    log "WARNING: UHM_IPTABLES not set -- fallback"
+    UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
+fi
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
+# No mechanism lock is taken here. This script is a convenience wrapper that
+# invokes uhmleases.sh and uhmiptables.sh in order, and could be replaced by
+# two direct invocations at any time. The guard belongs to the script that
+# writes: uhmleases.sh acquires cycle_lock itself, with its own descriptor,
+# whoever invoked it -- so nothing is lost if this wrapper goes away.
+
+# start
+log "uhmreload start..."
+
+# Abort if uhmd isn't active -- nothing downstream should run blindly.
+if ! systemctl is-active --quiet uhmd; then
+    log "ERROR: uhmd not active -- abort"
+    exit 1
+fi
+
 run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 755
 
 # uhmsetup.sh deploys uhmiptables.sh as a minimal but working template, so a
@@ -246,4 +277,4 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmreload done at: $(date)"
+log "uhmreload done at: $(date '+%Y-%m-%d %H:%M:%S')"
