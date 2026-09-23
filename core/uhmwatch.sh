@@ -202,6 +202,24 @@ UH_UINT='^(0|[1-9][0-9]*)$'
 # INSTALL
 # ------------------------------------------------------------------------------
 
+# CRON_D
+# Add or replace one line in the project's single cron.d file
+cron_d_set() {
+    local match="$1" line="$2"
+    local cron_file="/etc/cron.d/uhm"
+    local cron_tmp
+
+    cron_tmp=$(mktemp)
+    [ -f "$cron_file" ] && { grep -vF "$match" "$cron_file" > "$cron_tmp" || true; }
+    [ -n "$line" ] && printf '%s\n' "$line" >> "$cron_tmp"
+    if [ -s "$cron_tmp" ]; then
+        install -m 644 -o root -g root "$cron_tmp" "$cron_file"
+    else
+        rm -f "$cron_file"
+    fi
+    rm -f "$cron_tmp"
+}
+
 install_module() {
     echo ""
     echo "==========================================="
@@ -217,20 +235,13 @@ install_module() {
         install -m 755 -o root -g root "$self_path" "$target_path"
     fi
 
-    local cron_entry="* * * * * $target_path"
-    local current_crontab
-    current_crontab=$(crontab -l 2>/dev/null || true)
-    if echo "$current_crontab" | grep -qF "$legacy_target_path"; then
-        current_crontab=$(echo "$current_crontab" | grep -vF "$legacy_target_path")
-        crontab - <<< "$current_crontab"
-        echo "Removed stale cron entry pointing to legacy path $legacy_target_path"
-    fi
-    if echo "$current_crontab" | grep -vE '^\s*#' | grep -qF "$target_path"; then
-        echo "Cron entry already present -- leaving it untouched."
-    else
-        { printf '%s\n%s\n' "$current_crontab" "$cron_entry"; } | crontab -
-        echo "Cron entry registered: $cron_entry"
-    fi
+    cron_d_set "$target_path" "* * * * * root $target_path"
+    echo "Cron entry registered: * * * * * root $target_path"
+
+    # legacy entries in root's crontab, from versions before /etc/cron.d
+    for legacy_path in "$target_path" "$legacy_target_path"; do
+        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
+    done
     rm -f "$legacy_target_path"
 
     echo ""
@@ -245,12 +256,13 @@ install_module() {
 
 uninstall_module() {
     echo "Removing uhmwatch cron entry..."
-    if crontab -l 2>/dev/null | grep -qF -e "$target_path" -e "$legacy_target_path"; then
-        crontab -l 2>/dev/null | grep -vF -e "$target_path" -e "$legacy_target_path" | crontab -
-        echo "Cron entry removed. The uhmwatch.sh script was not deleted."
-    else
-        echo "No cron entry found for $target_path."
-    fi
+    cron_d_set "$target_path" ""
+    echo "Cron entry removed. The uhmwatch.sh script was not deleted."
+
+    # legacy entries in root's crontab, from versions before /etc/cron.d
+    for legacy_path in "$target_path" "$legacy_target_path"; do
+        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
+    done
 }
 
 # ------------------------------------------------------------------------------

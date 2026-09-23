@@ -20,7 +20,6 @@
 # ./core/uhmleases.sh
 # ./core/uhmwatch.sh
 # ./tools/uhmunifi.sh
-# ./tools/uhmacl.sh
 # ./tools/uhmtool.sh
 # ./tools/uhmalert.sh
 # ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
@@ -50,10 +49,10 @@
 # DEPENDENCIES:
 # Hard dependencies (checked before anything else; aborts if any is missing --
 # none of these are auto-installed):
-#     curl, jq, iptables, ipset, python3, openssl, bsdextrautils (column),
-#     mawk (awk), coreutils, util-linux (flock), iproute2 (ip), cron,
-#     grep, sed, systemd, ncurses-bin, libc-bin (getent), findutils (find),
-#     procps (sysctl, used by uhmiptables.sh), logrotate
+#     curl, jq, iptables, ipset, python3, openssl, mawk (awk), coreutils,
+#     util-linux (flock), iproute2 (ip), cron, grep, sed, systemd,
+#     libc-bin (getent), findutils (find), procps (sysctl, used by
+#     uhmiptables.sh), logrotate
 #
 # Hard dependency NOT an apt package (aborts if missing):
 #     pydhcpd must be installed and running, with pydhcp.env present and
@@ -149,7 +148,7 @@ tools_dir="${hotspot_dir}/tools"
 acl_dir="${hotspot_dir}/acl"
 config_file="${hotspot_dir}/uhm.env"
 pydhcp_env="/etc/pydhcp/pydhcp.env"
-bkstack_script="/etc/pydhcp/tools/bkstack.sh"
+uhmbk_script="${tools_dir}/uhmbk.sh"
 log_file="${script_dir}/uhmsetup.log"
 { > "$log_file"; } 2>/dev/null || true
 uhm_log_file="/var/log/uhm.log"
@@ -174,8 +173,8 @@ repo_web="${script_dir}/web"
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
-# uhmacl, uhmunifi or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl bsdextrautils mawk coreutils util-linux iproute2 cron grep sed systemd ncurses-bin libc-bin findutils procps logrotate)
+# uhmunifi or uhmiptables.
+apt_deps=(curl jq iptables ipset python3 openssl mawk coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate)
 
 # Discovered runtime values (filled during install)
 
@@ -972,7 +971,7 @@ deregister_cron() {
     local ureload_path_new="${hotspot_dir}/core/uhmreload.sh"
     local ureload_path_old="${hotspot_dir}/tools/uhmreload.sh"
     if crontab -l 2>/dev/null | grep -qF -e "$ureload_path_new" -e "$ureload_path_old"; then
-        crontab -l 2>/dev/null | grep -vF -e "$ureload_path_new" -e "$ureload_path_old" | crontab - || true
+        crontab -l 2>/dev/null | { grep -vF -e "$ureload_path_new" -e "$ureload_path_old" || true; } | crontab - || true
         info "Removed stale @hourly uhmreload.sh cron entry"
         info "  (now handled by uhmd.sh internally)"
     fi
@@ -1048,6 +1047,11 @@ do_install() {
     # precisely so this step can never fail here.
     bash "${core_dir}/uhmwatch.sh" install
 
+    step "uhmbk"
+    if [[ -x "$uhmbk_script" ]]; then
+        "$uhmbk_script" install || warn "cron entry not registered -- alert"
+    fi
+
     step "Optional components"
     if confirm "Install uhmalert (ntfy push notifications on connectivity loss)?" "n"; then
         bash "${tools_dir}/uhmalert.sh" install
@@ -1099,10 +1103,10 @@ do_update() {
     fi
 
     step "Backup"
-    if [[ -x "$bkstack_script" ]]; then
-        "$bkstack_script" || warn "backup failed, continuing -- alert"
+    if [[ -x "$uhmbk_script" ]]; then
+        "$uhmbk_script" || warn "backup failed, continuing -- alert"
     else
-        warn "$bkstack_script not found, no backup taken -- alert"
+        warn "$uhmbk_script not found, no backup taken -- alert"
     fi
 
     step "Pause services"
@@ -1118,7 +1122,9 @@ do_update() {
     if [[ -f /etc/systemd/system/uhmalert.service ]]; then
         systemctl is-active --quiet uhmalert 2>/dev/null && ualert_was_active=1
     fi
-    if crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v pl="$uwatch_path_legacy" \
+    if grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null; then
+        uwatch_was_active=1
+    elif crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v pl="$uwatch_path_legacy" \
         '((index($0,p)>0 || index($0,pl)>0) && substr($0,1,1)!="#"){found_entry=1} END{exit !found_entry}'; then
         uwatch_was_active=1
     fi
@@ -1136,7 +1142,7 @@ do_update() {
         # path via `uhmwatch.sh install`, which also self-migrates away
         # any stale legacy-path entry. Simpler and correct across the
         # core/-relocation than trying to text-surgery two possible paths.
-        crontab -l 2>/dev/null | { grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" || true; } | crontab -
+        bash "${core_dir}/uhmwatch.sh" uninstall >/dev/null 2>&1 || true
         info "uhmwatch cron entry removed for update"
         info "  (re-registered on resume)"
     fi
@@ -1199,7 +1205,8 @@ do_update() {
         # above already removed the one this run knew was active.
         bash "${core_dir}/uhmwatch.sh" install
         info "uhmwatch cron entry restored"
-    elif ! crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
+    elif ! grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null \
+        && ! crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
         # No entry at all (active or commented) -- this install predates
         # uhmwatch becoming mandatory. Install it now rather than leaving
         # an update-in-place without it.
@@ -1252,7 +1259,7 @@ do_remove() {
     warn "  - ${logrotate_file}"
     warn "  - ${hotspot_dir}"
     warn "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
-    warn "    Run ${bkstack_script} first if you want a backup"
+    warn "    Run ${uhmbk_script} first if you want a backup"
     warn "  - ${uhm_log_file}, rotated logs"
     warn "  - uhmunifi.log and reload failure traces"
     warn "/etc/bak is NOT touched."
@@ -1300,12 +1307,14 @@ perform_remove() {
     # tools/uhmreload.sh path.
     local ureload_path="${hotspot_dir}/core/uhmreload.sh"
     local ureload_path_old="${hotspot_dir}/tools/uhmreload.sh"
-    if crontab -l 2>/dev/null | grep -qF -e "$ureload_path" -e "$ureload_path_old"; then
-        crontab -l 2>/dev/null | grep -vF -e "$ureload_path" -e "$ureload_path_old" | crontab - || true
-        info "Cron entries removed"
-    else
-        info "No cron entries found"
-    fi
+    rm -f /etc/cron.d/uhm
+    info "Cron entries removed"
+
+    # legacy entries in root's crontab, from versions before /etc/cron.d
+    for legacy_path in "$ureload_path" "$ureload_path_old" "$uwatch_path" "$uwatch_path_legacy"; do
+        [ -n "$legacy_path" ] || continue
+        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
+    done
 
     # uhmalert (optional component)
     step "uhmalert"
@@ -1343,12 +1352,18 @@ perform_remove() {
         info "No logrotate config found"
     fi
 
+    # uhmbk cron entry
+    step "uhmbk"
+    if [[ -x "$uhmbk_script" ]]; then
+        "$uhmbk_script" uninstall || true
+    fi
+
     # /etc/uhm
     step "$hotspot_dir"
     if [[ -d "$hotspot_dir" ]]; then
         # Everything under hotspot_dir goes, including uhm.env, the ACL
         # lists and uhmiptables.sh: uninstalling means removing the project.
-        # bkstack.sh keeps a copy in /etc/bak, out of reach of this removal.
+        # uhmbk.sh keeps a copy in /etc/bak, out of reach of this removal.
         rm -rf "$hotspot_dir"
         info "Removed $hotspot_dir"
     else

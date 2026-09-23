@@ -620,19 +620,19 @@ report_search() {
     temp_files+=("$tmp_file" "$rows_file")
 
     for acl_file in "$UHM_MACAUTH" "$UHM_GRACE" "$ACL_BLOCK_FILE"; do
-        grep -iF "$search_query" "$acl_file" \
+        grep -iF -- "$search_query" "$acl_file" \
             | awk -F';' '$1=="a"{print tolower($2)}' >> "$tmp_file"
     done
 
     shopt -s nullglob
     for acl_file in "$ACL_MAC_PATH"/mac-*.txt; do
-        grep -hiF "$search_query" "$acl_file" \
+        grep -hiF -- "$search_query" "$acl_file" \
             | grep -ioE "^#?a;$UH_MAC_RE" | cut -d';' -f2 \
             | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
     done
     shopt -u nullglob
 
-    grep -iF "$search_query" "$PYDHCPD_LEASES" \
+    grep -iF -- "$search_query" "$PYDHCPD_LEASES" \
         | grep -ioE "$UH_MAC_RE" \
         | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
 

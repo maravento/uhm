@@ -6,52 +6,27 @@
 # uhmunifi - UniFi Network Hotspot - Full Client Audit & Management Tool
 #
 # DESCRIPTION:
-# Audits what the UniFi controller itself reports (sessions, authorizations,
-# vouchers) against uhm-auth.txt, and offers actions to act on the API
-# directly.
+# Offers actions to act on the UniFi API directly (delete/revoke vouchers,
+# forget clients), and looks up a single MAC's live state. The read-only
+# reports this script used to print (connection status, authorized against
+# uhm-auth.txt, vouchers, guest sessions, unauthorized) are now shown by the
+# web interface's ToolView tab instead, backed by tools/uhmtool.sh -- see
+# uhm's README.
 #
 # USAGE:
 # sudo bash uhmunifi.sh
 #
-# MENU: [1] Reports, [2] Actions, [q] Quit. Two submenus so the top level
-# stays short:
+# MENU: [1] Check MAC, [2] Actions, [q] Quit.
 #
-# REPORTS SUBMENU
-# [1] Connection status - login + fetch summary for stat/sta, stat/guest
-#     and stat/voucher (rc and entry count for each)
-# [2] Authorized - uhm-auth.txt enriched with voucher code and status.
-#     Voucher code is extracted from the hostname field
-#     (format: guest{n}-{code}) and verified against stat/voucher.
-#     STATUS values: MULTI (USED_MULTIPLE), VALID (VALID_ONE),
-#     CONSUMED (quota exhausted, auto-purged by UniFi),
-#     NO-VOUCHER(origin) (no code in the hostname and UniFi
-#     reports the session as authorized_by != voucher, i.e.
-#     an authorization granted outside the voucher flow).
-#     ON column: YES if client is currently connected to the AP.
-# [3] Vouchers - full voucher list from stat/voucher with usage stats
-# [4] Guest sessions - every active session UniFi reports in stat/guest,
-#     split into three mutually exclusive categories by where the MAC
-#     lives, not by authorized_by -- so a genuine anomaly is never
-#     buried under the routine mac-*.txt noise:
-#       - SYSADMIN MANAGED: MAC is in mac-*.txt. Authorized via
-#         authorize-guest by design (see authorize_managed_macs in
-#         uhmd.sh), no voucher involved. Never touched by any action.
-#       - VOUCHER AUTHORIZED: not managed, MAC has a line in
-#         uhm-auth.txt (has a voucher on record).
-#       - UNKNOWN (warning): not managed, not in uhm-auth.txt --
-#         everything else. The one to verify and, if illegitimate,
-#         delete.
-#     Every row is also self-labeled in the ORIGIN column, independent
-#     of which section it's under: "(managed)" in SYSADMIN MANAGED,
-#     "(!)" in VOUCHER AUTHORIZED/UNKNOWN for an unknown record -- so a
-#     row read in isolation (e.g. copied out for a manual command) is
-#     never ambiguous.
-# [5] Unauthorized - clients connected to the hotspot ESSID that stat/sta
-#     reports as NOT authorized
+# [1] Check MAC - live UniFi state for one MAC: essid, authorized, is_guest
+#     (from stat/sta) and voucher_code (from stat/guest, if present).
+#     Independent of the local ACL files -- see uhmtool.sh for those
+#     (mac-*.txt, uhm-auth.txt, uhm-grace.txt, blockdhcp.txt,
+#     pydhcpd.leases).
 #
 # ACTIONS SUBMENU -- none of these ever touch a mac-*.txt MAC (see
-# is_managed_mac() below); only the VOUCHER AUTHORIZED/UNKNOWN
-# categories above are ever eligible.
+# is_managed_mac() below); only the VOUCHER/UNKNOWN categories from
+# ToolView's Guest sessions report are ever eligible.
 # [1] Delete unused vouchers - delete vouchers never activated (used=0)
 # [2] Forget clients no voucher - forget guests who connected to the
 #     portal but never submitted a voucher code. Excludes clients
@@ -67,7 +42,7 @@
 #     (community.ui.com/31faff3e)
 # [5] Forget sessions marked (!) - unauthorize + forget every active
 #     session whose authorized_by is not "voucher" and is not a
-#     mac-*.txt device (see report [4]'s UNKNOWN category)
+#     mac-*.txt device (see ToolView's Guest sessions UNKNOWN category)
 # [6] Purge everything - DELETE all vouchers and client history
 #     (DESTRUCTIVE -- requires typing YES)
 #
@@ -83,8 +58,7 @@
 #     unreadable or incomplete configuration, unreadable or malformed
 #     data file, failed login, or failed UniFi query
 #
-# DEPENDENCIES : curl, jq, bsdextrautils, mawk, coreutils, util-linux,
-#                grep, sed
+# DEPENDENCIES : curl, jq, mawk, coreutils, util-linux, grep, sed
 # CONFIG       : /etc/uhm/uhm.env
 # LOG          : /var/log/uhmunifi.log
 #
@@ -96,7 +70,7 @@
 # - Manual/interactive script, not a daemon: the log file is truncated
 #   at the start of every run, so it always reflects only the latest
 #   session. It records the login/fetch summary and every action taken;
-#   report tables (options 1-5) are terminal-only, on demand.
+#   Check MAC is terminal-only, on demand, same as an action's own tables.
 #   No rotation is needed or installed for this file.
 #
 ################################################################################
@@ -112,9 +86,9 @@ log_file="/var/log/uhmunifi.log"
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
 }
-# File-only variant -- for the startup fetch summary, which would otherwise
-# scroll off screen before the menu is ever shown (see main_menu()'s status
-# line, which displays this same data on every redraw instead).
+# File-only variant -- the startup fetch summary is recorded here without
+# also echoing to the terminal, since it happens before the menu is shown
+# and would just scroll away.
 log_only() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$log_file" 2>/dev/null || true
 }
@@ -159,7 +133,7 @@ esac
 unset log_stat
 
 # dependencies
-for dep_pkg in curl jq bsdextrautils mawk coreutils util-linux grep sed; do
+for dep_pkg in curl jq mawk coreutils util-linux grep sed; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -169,6 +143,10 @@ done
 # ------------------------------------------------------------------------------
 # VARIABLES
 # ------------------------------------------------------------------------------
+
+# validation -- one variable per thing validated; use directly with =~
+UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
+UH_MAC="^${UH_MAC_RE}$"
 
 pydhcp_conf="/etc/pydhcp/pydhcp.env"
 uhm_conf="/etc/uhm/uhm.env"
@@ -448,223 +426,62 @@ press_enter() {
     read -rp " Press ENTER to continue..." _
 }
 
-# REPORT [2]: AUTHORIZED CLIENTS
-# Cross-references uhm-auth.txt with stat/guest and stat/sta
-# VOUCHER RESOLUTION STRATEGY:
-# 1. Extract voucher code from hostname field in uhm-auth.txt
-#    (format: guest{n}-{voucher_code}, e.g. guest3-7708162928)
-#    This is always available even when the client is disconnected,
-#    because uhmd.sh writes it at authorization time.
-# 2. Verify the code exists in stat/voucher (API) and enrich with status.
-#    If found: show as CODE(STATUS) e.g. 7708162928(USED_MULTIPLE)
-#    If not found in stat/voucher: quota exhausted and auto-purged by
-#    UniFi, show as CODE(CONSUMED)
-# 3. Fallback: if hostname has no voucher code, query stat/guest by MAC.
-#    This covers clients still connected whose session is in stat/guest.
-# 4. If neither source yields a code: show N/A, and check authorized_by
-#    in that MAC's stat/guest session. Anything other than "voucher"
-#    (typically "api", a cmd/stamgr authorize-guest) means the entry
-#    never came from the voucher flow at all, and is reported as
-#    NO-VOUCHER(origin) instead of a plain N/A status.
-print_authorized() {
-    echo ""
-    echo "============================================================================"
-    echo "AUTHORIZED -- uhm-auth.txt"
-    echo "============================================================================"
+# CHECK MAC
+# Live UniFi state for one MAC: essid, authorized, is_guest (from stat/sta)
+# and voucher_code (from stat/guest, if present). Direct source of truth for
+# whether the AP holds this client at the captive portal -- independent of
+# the local ACL files (see the MANAGED MACS note in uhmd.sh).
+print_mac_status() {
+    local mac_addr="$1"
+    local sta_row
+    sta_row=$(echo "$sta_json" | jq -r --arg m "$mac_addr" '
+        .data[] | select((.mac // "" | ascii_downcase) == ($m|ascii_downcase))
+        | [(.essid // "n/a"), (.authorized|tostring), (.is_guest|tostring), (.ip // "n/a"), (.hostname // "n/a")]
+        | @tsv
+    ' 2>/dev/null | head -1)
 
-    local sta_map
-    sta_map=$(echo "$sta_json" | jq -r --arg essid "$UHM_ESSID" '
-        .data[]
-        | select(.essid == $essid)
-        | (.mac | ascii_downcase)
-    ' 2>/dev/null)
+    if [[ -z "$sta_row" ]]; then
+        echo "MAC not associated to any AP (no live session)"
+        return
+    fi
 
-    {
-        printf "MAC|IP|CODE|STATUS|EXPIRES|ON\n"
-        while IFS=';' read -r acl_status mac_addr client_ip client_name end_time _; do
-            [ "$acl_status" != "a" ] && continue
-            local expires_at voucher_field voucher_code voucher_status
-            local authorized_by is_connected
+    local sta_essid sta_authorized is_guest client_ip client_name
+    IFS=$'\t' read -r sta_essid sta_authorized is_guest client_ip client_name <<< "$sta_row"
+    echo "connected"
+    printf "  essid=%s\n" "$sta_essid"
+    printf "  authorized=%s\n" "$sta_authorized"
+    printf "  is_guest=%s\n" "$is_guest"
+    printf "  ip=%s\n" "$client_ip"
+    printf "  hostname=%s\n" "$client_name"
 
-            expires_at="N/A"
-            [ -n "$end_time" ] && expires_at=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
-
-            # Step 1: extract code from hostname (guest{n}-{code})
-            voucher_field=$(echo "$client_name" | sed -n 's/^guest[0-9]*-\([A-Za-z0-9._-]*\)$/\1/p')
-
-            # Step 2: verify against stat/voucher API and get status
-            voucher_code=""
-            voucher_status=""
-            if [ -n "$voucher_field" ]; then
-                voucher_code="$voucher_field"
-                voucher_status=$(echo "$voucher_json" | jq -r --arg code "$voucher_field" '
-                    .data[] | select(.code == $code) | .status // ""
-                ' 2>/dev/null | head -1)
-                [ -z "$voucher_status" ] && voucher_status="CONSUMED"
-            else
-                # Step 3: fallback to stat/guest by MAC
-                voucher_code=$(echo "$guest_json" | jq -r --arg m "$mac_addr" '
-                    .data[]
-                    | select((.mac | ascii_downcase) == $m)
-                    | .voucher_code // ""
-                ' 2>/dev/null | head -1)
-                if [ -n "$voucher_code" ]; then
-                    voucher_status=$(echo "$voucher_json" | jq -r --arg code "$voucher_code" '
-                        .data[] | select(.code == $code) | .status // ""
-                    ' 2>/dev/null | head -1)
-                    [ -z "$voucher_status" ] && voucher_status="CONSUMED"
-                fi
-            fi
-
-            # Step 4: nothing found -- flag an entry UniFi did not authorize
-            # through the voucher flow (authorized_by != voucher)
-            if [ -z "$voucher_code" ]; then
-                authorized_by=$(echo "$guest_json" | jq -r --arg m "$mac_addr" '
-                    .data[]
-                    | select((.mac | ascii_downcase) == $m)
-                    | .authorized_by // ""
-                ' 2>/dev/null | head -1)
-                voucher_code="N/A"
-                [ -n "$authorized_by" ] && [ "$authorized_by" != "voucher" ] && voucher_status="NO-VOUCHER($authorized_by)"
-            fi
-            [ -z "$voucher_status" ] && voucher_status="N/A"
-            voucher_status=$(echo "$voucher_status" | sed 's/USED_MULTIPLE/MULTI/;s/VALID_ONE/VALID/;s/VALID_MULTI/MULTI/')
-
-            is_connected=$(echo "$sta_map" | awk -v mac_addr="${mac_addr}" 'tolower($1) == tolower(mac_addr) {print "YES"; exit}')
-            [ -z "$is_connected" ] && is_connected="NO"
-
-            echo "$mac_addr|$client_ip|$voucher_code|$voucher_status|$expires_at|$is_connected"
-        done < "$UHM_MACAUTH"
-    } | column -t -s '|'
-    echo ""
-}
-
-# REPORT [3]: VOUCHERS
-# Lists every voucher known to the controller
-print_voucher() {
-    echo ""
-    echo "============================================================================"
-    echo "VOUCHERS -- stat/voucher"
-    echo "============================================================================"
-    {
-        printf "CODE|STATUS|DURATION|QUOTA|USED|EXPIRES\n"
-        echo "$voucher_json" | jq -r '
-            .data[]
-            | [.code//"N/A", (.status//"N/A"), (((.duration//0)/60|floor|tostring) + "h"), (.quota//0|tostring), (.used//0|tostring), (if .end_time then (.end_time|strftime("%Y-%m-%d %H:%M:%S")) else "N/A" end)]
-            | join("|")
-        ' 2>/dev/null
-    } | column -t -s '|'
-    echo ""
-}
-
-# REPORT [4]: GUEST SESSIONS
-# Lists the portal sessions the controller holds
-# Reports [1]/[2] audit what is already in uhm-auth.txt or in the voucher
-# inventory. This one audits the source UniFi itself reports, so an
-# authorization that never came from a voucher -- and therefore never
-# reaches uhm-auth.txt -- is still visible instead of going unnoticed.
-# ORIGIN is UniFi's own authorized_by. IN-LIST tells whether that MAC has a
-# line in uhm-auth.txt: an "api" origin is expected for mac-*.txt devices
-# (authorize_managed_macs in uhmd.sh) and must show IN-LIST=no; an "api"
-# origin with IN-LIST=yes is a leftover from before uhmd.sh filtered by
-# origin (see uhmd.sh's SESSIONS step).
-print_guest_sessions() {
-    local now_epoch
-    now_epoch=$(date +%s)
-
-    local managed_rows="" authorized_rows="" other_rows=""
-    local guest_mac guest_origin guest_code guest_end guest_online
-
-    while IFS='|' read -r guest_mac guest_origin guest_code guest_end; do
-        [ -z "$guest_mac" ] && continue
-
-        guest_online=$(echo "$sta_json" | jq -r --arg m "$guest_mac" '
-            .data[] | select((.mac|ascii_downcase) == $m) | "YES"
+    if [[ "$guest_rc" != "ok" ]]; then
+        echo "stat/guest unavailable, voucher_code not shown -- skip"
+    else
+        local voucher_code
+        voucher_code=$(echo "$guest_json" | jq -r --arg m "$mac_addr" '
+            .data[] | select((.mac // "" | ascii_downcase) == ($m|ascii_downcase)) | .voucher_code // empty
         ' 2>/dev/null | head -1)
-        [ -z "$guest_online" ] && guest_online="NO"
-        [ -z "$guest_code" ] && guest_code="N/A"
-
-        if is_managed_mac "$guest_mac"; then
-            managed_rows+="$guest_mac|${guest_origin}(managed)|$guest_code|$guest_end|$guest_online
-"
-        elif grep -qiE "^#?a;${guest_mac};" "$UHM_MACAUTH"; then
-            [ "$guest_origin" != "voucher" ] && guest_origin="${guest_origin}(!)"
-            authorized_rows+="$guest_mac|$guest_origin|$guest_code|$guest_end|$guest_online
-"
-        else
-            [ "$guest_origin" != "voucher" ] && guest_origin="${guest_origin}(!)"
-            other_rows+="$guest_mac|$guest_origin|$guest_code|$guest_end|$guest_online
-"
-        fi
-    done < <(echo "$guest_json" | jq -r --argjson now "$now_epoch" '
-        .data[]
-        | select(.end != null and .end > $now)
-        | [(.mac|ascii_downcase), (.authorized_by//"none"), (.voucher_code//""), (.end|strftime("%Y-%m-%d %H:%M:%S"))]
-        | join("|")
-    ' 2>/dev/null | sort -t'|' -k2,2 -k1,1)
-
-    echo ""
-    echo "============================================================================"
-    echo "GUEST SESSIONS -- SYSADMIN MANAGED (mac-*.txt)"
-    echo "============================================================================"
-    if [ -z "$managed_rows" ]; then
-        echo " None."
-    else
-        { printf "MAC|ORIGIN|CODE|EXPIRES|ON\n"; printf '%s' "$managed_rows"; } | column -t -s '|'
+        [[ -n "$voucher_code" ]] && printf "  voucher_code=%s\n" "$voucher_code"
     fi
 
-    echo ""
-    echo "============================================================================"
-    echo "GUEST SESSIONS -- VOUCHER AUTHORIZED (uhm-auth.txt)"
-    echo "============================================================================"
-    if [ -z "$authorized_rows" ]; then
-        echo " None."
-    else
-        { printf "MAC|ORIGIN|CODE|EXPIRES|ON\n"; printf '%s' "$authorized_rows"; } | column -t -s '|'
+    if [[ "$sta_authorized" == "false" && "$is_guest" == "true" ]]; then
+        echo "WARNING: UniFi reports this MAC unauthorized on a Guest WLAN"
+        echo "WARNING: the AP holds it at the captive portal regardless of local ACL/DHCP state"
     fi
-
-    echo ""
-    echo "============================================================================"
-    echo "GUEST SESSIONS -- UNKNOWN (warning)"
-    echo "============================================================================"
-    if [ -z "$other_rows" ]; then
-        echo " None."
-    else
-        { printf "MAC|ORIGIN|CODE|EXPIRES|ON\n"; printf '%s' "$other_rows"; } | column -t -s '|'
-    fi
-    echo ""
-    echo "LEGEND:"
-    echo "  (managed) mac-*.txt, never touched"
-    echo "  (!) unknown record, verify and delete"
-    echo ""
 }
 
-# REPORT [5]: UNAUTHORIZED CLIENTS
-# Lists clients on the ESSID with no authorization
-print_unauthorized() {
+check_mac_menu() {
     echo ""
-    echo "============================================================================"
-    printf "UNAUTHORIZED -- stat/sta, clients on %s NOT authorized by UniFi\n" "$UHM_ESSID"
-    echo "============================================================================"
-
-    local sta_rows
-    sta_rows=$(echo "$sta_json" | jq -r --arg essid "$UHM_ESSID" '
-        .data[]
-        | select(.essid == $essid)
-        | select(.authorized == false)
-        | [(.mac), (.hostname // "no-hostname"), (.ip // "no-ip"), (.last_seen // "n/a")]
-        | join("|")
-    ' 2>/dev/null)
-
-    if [ -z "$sta_rows" ]; then
-        echo " None -- all clients on $UHM_ESSID are authorized"
-    else
-        {
-            printf "MAC|HOSTNAME|IP|LAST_SEEN\n"
-            echo "$sta_rows"
-        } | column -t -s '|'
+    local mac_addr
+    read -rp " Enter MAC address (XX:XX:XX:XX:XX:XX, empty to cancel): " mac_addr
+    mac_addr="${mac_addr,,}"
+    [[ -z "$mac_addr" ]] && return
+    if ! [[ "$mac_addr" =~ $UH_MAC ]]; then
+        echo "Invalid MAC format"
+        return
     fi
     echo ""
+    print_mac_status "$mac_addr"
 }
 
 # ACTION [1]: DELETE UNUSED VOUCHERS
@@ -1072,8 +889,8 @@ interactive_revoke_by_code() {
 }
 
 # ACTION [5]: FORGET FLAGGED SESSIONS
-# Removes the sessions report [4] marks with (!)
-# Same criterion as print_guest_sessions: active session (end > now) whose
+# Removes the sessions ToolView's Guest sessions report marks with (!)
+# Same criterion as uhmtool.sh's unifi_guests: active session (end > now) whose
 # authorized_by is not "voucher", excluding mac-*.txt devices -- those are
 # authorized via authorize-guest by design (authorize_managed_macs in
 # uhmd.sh) and must never be unauthorized/forgotten here. Independent of
@@ -1241,50 +1058,6 @@ interactive_purge_all() {
 
     log "INFO: Purge complete."
 }
-
-# REPORT [1]: CONNECTION STATUS
-# Shows what the controller answered for each endpoint
-print_connection_status() {
-    echo ""
-    echo "============================================================================"
-    echo "CONNECTION STATUS -- login + fetch summary"
-    echo "============================================================================"
-    printf "stat/sta      -> %-6s (%s entries)\n" "$sta_rc" "$sta_count"
-    printf "stat/guest    -> %-6s (%s entries)\n" "$guest_rc" "$guest_count"
-    printf "stat/voucher  -> %-6s (%s entries)\n" "$voucher_rc" "$voucher_count"
-    echo ""
-}
-
-# SUBMENU: REPORTS
-# Read-only options, none of them writes to the controller
-reports_menu() {
-    local menu_option
-    while true; do
-        echo ""
-        echo "============================================================================"
-        echo "REPORTS"
-        echo "============================================================================"
-        printf "%-5s%-26s- %s\n" "[1]" "Connection status" "login + fetch summary"
-        printf "%-5s%-26s- %s\n" "[2]" "Authorized" "uhm-auth.txt"
-        printf "%-5s%-26s- %s\n" "[3]" "Vouchers" "stat/voucher"
-        printf "%-5s%-26s- %s\n" "[4]" "Guest sessions" "stat/guest, by category"
-        printf "%-5s%-26s- %s\n" "[5]" "Unauthorized" "stat/sta, authorized=false"
-        echo "[b] Back"
-        echo ""
-        read -rp " Select option [b]: " menu_option
-        menu_option="${menu_option:-b}"
-        case "$menu_option" in
-            1) print_connection_status; press_enter ;;
-            2) print_authorized; press_enter ;;
-            3) print_voucher; press_enter ;;
-            4) print_guest_sessions; press_enter ;;
-            5) print_unauthorized; press_enter ;;
-            b|B) break ;;
-            *) echo "Invalid option"; sleep 1 ;;
-        esac
-    done
-}
-
 # SUBMENU: ACTIONS
 # Options that modify vouchers or client history
 actions_menu() {
@@ -1328,14 +1101,14 @@ main_menu() {
         echo "============================================================================"
         echo "AVAILABLE OPTIONS"
         echo "============================================================================"
-        echo "[1] Reports"
+        echo "[1] Check MAC"
         echo "[2] Actions"
         echo "[q] Quit"
         echo ""
         read -rp " Select option [q]: " menu_option
         menu_option="${menu_option:-q}"
         case "$menu_option" in
-            1) reports_menu ;;
+            1) check_mac_menu ;;
             2) actions_menu ;;
             q|Q) log "INFO: Exiting."; break ;;
             *) echo "Invalid option"; sleep 1 ;;
