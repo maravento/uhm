@@ -49,7 +49,7 @@
 # DEPENDENCIES:
 # Hard dependencies (checked before anything else; aborts if any is missing --
 # none of these are auto-installed):
-#     curl, jq, iptables, ipset, python3, openssl, mawk (awk), coreutils,
+#     curl, jq, iptables, ipset, python3, openssl, coreutils,
 #     util-linux (flock), iproute2 (ip), cron, grep, sed, systemd,
 #     libc-bin (getent), findutils (find), procps (sysctl, used by
 #     uhmiptables.sh), logrotate
@@ -174,7 +174,7 @@ repo_web="${script_dir}/web"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmunifi or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl mawk coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate)
+apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate)
 
 # Discovered runtime values (filled during install)
 

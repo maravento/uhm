@@ -62,7 +62,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhm.log perms fixed -- alert"
+            log "INFO: uhm.log perms fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -130,7 +130,7 @@ ensure_executable() {
     file_perms=$(stat -c '%a' "$script_path" 2>/dev/null)
     if [[ "$file_owner" != "root" || "$file_perms" != "$expected_mode" ]]; then
         if chown root:root "$script_path" 2>/dev/null && chmod "$expected_mode" "$script_path" 2>/dev/null; then
-            log "WARNING: $script_name perms fixed -- alert"
+            log "INFO: $script_name perms fixed"
         else
             log "WARNING: cannot fix $script_name perms -- alert"
         fi
@@ -198,7 +198,7 @@ env_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
 env_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
 if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
     if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "WARNING: uhm.env perms fixed -- alert"
+        log "INFO: uhm.env perms fixed"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
         exit 1

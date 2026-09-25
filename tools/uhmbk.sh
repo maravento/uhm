@@ -143,8 +143,8 @@ case "${1:-}" in
     "")
         ;;
     *)
-        log "ERROR: unknown action '$1' -- abort"
         log "ERROR: use no argument, 'install' or 'uninstall'"
+        log "ERROR: unknown action '$1' -- abort"
         exit 1
         ;;
 esac

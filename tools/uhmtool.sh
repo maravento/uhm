@@ -45,7 +45,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # dependencies
-for dep_pkg in curl jq mawk coreutils util-linux grep sed systemd; do
+for dep_pkg in curl jq coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         printf '{"error":"missing dependency %s"}\n' "$dep_pkg"
         exit 1
