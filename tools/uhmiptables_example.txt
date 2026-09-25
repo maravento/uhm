@@ -227,7 +227,7 @@ mac_set() {
         fi
     done
     if [ "$invalid_count" -gt 0 ]; then
-        log "WARNING: $invalid_count invalid MACs in $(basename "$src_file") -- skip"
+        log "WARNING: $invalid_count invalid MACs in $(basename "$src_file") -- alert"
     fi
     return 0
 }
@@ -706,7 +706,7 @@ if [ -n "$mac2ip_rules" ]; then
             { arptables -A INPUT -i "$INTERFACESv4" --source-ip "$arp_ip" ! --source-mac "$arp_mac" -j DROP || true; }
     done
 else
-    log "WARNING: no static DHCP entries in $dhcp_conf -- skip"
+    log "WARNING: no static DHCP entries in $dhcp_conf -- alert"
 fi
 
 # ------------------------------------------------------------------------------
@@ -738,7 +738,7 @@ done
 #    if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$bogons_file" "$bogons_url"; then
 #        chown root:root "$bogons_file"
 #    else
-#        log "WARNING: cannot download $bogons_file -- skip"
+#        log "WARNING: cannot download $bogons_file -- alert"
 #    fi
 #fi
 
@@ -752,7 +752,7 @@ done
 #        ipset add bogons "$bogons_cidr" -exist
 #    done
 #else
-#    log "WARNING: $bogons_file not found, bogons -- skip"
+#    log "WARNING: $bogons_file not found, bogons -- alert"
 #fi
 
 # Allow 255.255.255.0/24 before BOGONS DROP
@@ -806,7 +806,7 @@ if [ ! -f "$blockports_file" ]; then
     if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
         chown root:root "$blockports_file"
     else
-        log "WARNING: cannot download $blockports_file -- skip"
+        log "WARNING: cannot download $blockports_file -- alert"
     fi
 fi
 

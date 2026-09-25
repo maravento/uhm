@@ -28,7 +28,7 @@
   </tr>
 </table>
 
-### Architecture
+## Architecture
 
 📐 [Runtime Architecture Diagram](https://htmlpreview.github.io/?https://raw.githubusercontent.com/maravento/uhm/master/docs/uhm-architecture.html) — visual walkthrough of the UniFi/DHCP/firewall reload pipeline.
 
@@ -174,7 +174,7 @@
 | **bash**, **curl**, **jq** | `uhmd`, `uhmunifi.sh`, `uhmleases.sh` | Script runtime, UniFi API, JSON parsing | Runtime de scripts, API de UniFi, parseo de JSON |
 | **openssl** | `uhmsetup.sh` (install time only) | Computes `UNIFI_CERT_PIN` from the controller's TLS certificate | Calcula `UNIFI_CERT_PIN` a partir del certificado TLS del controlador |
 | **python3** | `uhmleases.sh` (runtime), `uhmsetup.sh` (install time) | Range arithmetic: checks that `SERVER_IP` does not fall inside the block pool or the hotspot range, and that the hotspot range is inside the network and does not overlap pydhcp's pool | Aritmética de rangos: verifica que `SERVER_IP` no caiga dentro del pool de bloqueo ni del rango del hotspot, y que el rango del hotspot esté dentro de la red y no se solape con el pool de pydhcp |
-| **mawk** (`awk`), **coreutils**, **grep** | all bash scripts in the project | Text/field parsing (MAC/IP/ACL lines, DHCP config, logs) | Parseo de texto/campos (líneas MAC/IP/ACL, config DHCP, logs) |
+| **coreutils**, **grep** | all bash scripts in the project | Text/field parsing (MAC/IP/ACL lines, DHCP config, logs) | Parseo de texto/campos (líneas MAC/IP/ACL, config DHCP, logs) |
 | **sed** | `uhmd.sh`, `uhmleases.sh`, `uhmwatch.sh`, `uhmunifi.sh` | In-place ACL/config file edits | Edición in-place de archivos ACL/config |
 | **util-linux** (`flock`) | all bash scripts in the project | Per-script instance locking, prevents overlapping runs | Bloqueo de instancia por script, evita ejecuciones superpuestas |
 | **iproute2** (`ip`) | `uhmsetup.sh` (install time only) | Detects network interfaces during the setup wizard | Detecta interfaces de red durante el wizard de instalación |
@@ -195,7 +195,7 @@
 ```bash
 # Required packages
 sudo apt update
-sudo apt install -y bash curl jq iptables ipset cron python3 openssl mawk coreutils util-linux iproute2 grep sed systemd libc-bin findutils procps
+sudo apt install -y bash curl jq iptables ipset cron python3 openssl coreutils util-linux iproute2 grep sed systemd libc-bin findutils procps
 
 # DHCP backend — install pydhcp:
 #   • pydhcp — https://github.com/maravento/pydhcp
@@ -720,7 +720,7 @@ sudo bash uhmsetup.sh
   <tr>
     <td style="width: 50%; vertical-align: top;">
       The installer checks the required APT dependencies:
-      <code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>libc-bin</code>, <code>findutils</code>, <code>procps</code> and <code>logrotate</code>. <br>
+      <code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>libc-bin</code>, <code>findutils</code>, <code>procps</code> and <code>logrotate</code>. <br>
       <br>
       If any of them is missing, the installation aborts. No dependency is installed automatically. The installation also aborts if <code>pydhcp</code> is not active. <br>
       <br>
@@ -739,7 +739,7 @@ sudo bash uhmsetup.sh
     </td>
     <td style="width: 50%; vertical-align: top;">
       El instalador verifica las dependencias APT requeridas:
-      <code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>mawk</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>libc-bin</code>, <code>findutils</code>, <code>procps</code> y <code>logrotate</code>. <br>
+      <code>curl</code>, <code>jq</code>, <code>iptables</code>, <code>ipset</code>, <code>python3</code>, <code>openssl</code>, <code>coreutils</code>, <code>util-linux</code>, <code>iproute2</code>, <code>cron</code>, <code>grep</code>, <code>sed</code>, <code>systemd</code>, <code>libc-bin</code>, <code>findutils</code>, <code>procps</code> y <code>logrotate</code>. <br>
       <br>
       Si falta alguna, la instalación se aborta. Ninguna dependencia se instala automáticamente. También se aborta la instalación si <code>pydhcp</code> no está activo. <br>
       <br>
@@ -1410,7 +1410,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 | Feature | Description | Descripción |
 |---------|--------------|-------------|
 | **Live polling** | AJAX polling by byte offset (1s–30s configurable). Never stalls on log rotation. | Polling AJAX por byte offset (1s–30s configurable). No se atasca con la rotación de logs. |
-| **Level badges** | Color-coded badges, one distinctive color per level: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). | Badges con color, un color distintivo por nivel: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), FIX (`#d4edda`/`#155724`), ALERT (`#e2d9f3`/`#432874`), STATUS (`#e2e3e5`/`#383d41`). |
+| **Level badges** | Color-coded badges, one distinctive color per level: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), STATUS (`#e2e3e5`/`#383d41`). | Badges con color, un color distintivo por nivel: INFO (`#d1ecf1`/`#0c5460`), WARNING (`#fff3cd`/`#856404`), ERROR (`#f8d7da`/`#721c24`), STATUS (`#e2e3e5`/`#383d41`). |
 | **Cycle stats bar** | Parses the last stats line and shows Vouchers, Authorized, Grace, New Auth, Revoked as pills. | Parsea la última línea de stats y muestra Vouchers, Authorized, Grace, New Auth, Revoked como pills. |
 | **Service status** | Shows PID, uptime, and memory from `systemctl status uhmd`. | Muestra PID, uptime y memoria desde `systemctl status uhmd`. |
 
@@ -1426,7 +1426,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 | <img src="./img/uhmbutton-dark.png" width="150"> <img src="./img/uhmbutton-light.png" width="150"><br> **Dark / Light mode** | Toggle with moon/sun button in the panel header. Preference saved in `localStorage` and shared by the three tabs. | Alternancia con botón luna/sol en la cabecera del panel. Preferencia guardada en `localStorage` y compartida por las tres pestañas. |
 | <img src="./img/uhmbutton-searchbar.png" width="150"> **Search box** | Live filter on the rows already loaded. Plain substring match, case-insensitive. | Filtro en vivo sobre las filas ya cargadas. Coincidencia de subcadena literal, sin distinguir mayúsculas/minúsculas. |
 | <img src="./img/uhmbutton-fulllog.png" width="150"> <img src="./img/uhmbutton-livemode.png" width="150"><br> **Full log / Live mode** | Displays the complete log file. In **Live mode**, the viewer polls the tail of the log. Type a term in the search box and the button turns blue; press it to search the whole file via `grep -Fia`, with results highlighted inline. The button then turns orange and reads **Live mode**; press it again to return to the log view. With an empty search box, the search action stays grey and disabled. | Muestra el archivo de log completo. En **Live mode**, el visor consulta el final del log. Escriba un término en la caja de búsqueda y el botón se pone azul; púlselo para buscar en el archivo completo mediante `grep -Fia`, con resultados resaltados inline. El botón pasa a naranja y dice **Live mode**; púlselo otra vez para volver a la vista del log. Con la caja de búsqueda vacía, la acción de búsqueda permanece gris e inactiva. |
-| <img src="./img/uhmbutton-level.png" width="150">  **Level** | Filters by log level: All levels, INFO, WARNING, ERROR, ALERT, FIX, STATUS. Default: All levels. | Filtra por nivel de log: All levels, INFO, WARNING, ERROR, ALERT, FIX, STATUS. Por defecto: All levels. |
+| <img src="./img/uhmbutton-level.png" width="150">  **Level** | Filters by log level: All levels, INFO, WARNING, ERROR, STATUS. Default: All levels. | Filtra por nivel de log: All levels, INFO, WARNING, ERROR, STATUS. Por defecto: All levels. |
 | <img src="./img/uhmbutton-last.png" width="150"> **Last** | Number of lines read from the end of the log: 200, 500, 1000 or 2000. Default: 200. | Cantidad de líneas leídas desde el final del log: 200, 500, 1000 o 2000. Por defecto: 200. |
 | <img src="./img/uhmbutton-interval.png" width="150"> **Interval** | Polling interval for new bytes: 1s, 3s, 5s, 10s or 30s. Default: 1s. | Intervalo de sondeo de bytes nuevos: 1s, 3s, 5s, 10s o 30s. Por defecto: 1s. |
 | <img src="./img/uhmbutton-reload.png" width="150"> **Reload** | Discards what is on screen and reads the log again. | Descarta lo que hay en pantalla y vuelve a leer el log. |
@@ -2189,8 +2189,19 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 | Comparison | On the value alone — a commented (`#a;`) line counts the same as an active one. | Solo por el valor — una línea comentada (`#a;`) cuenta igual que una activa. |
 
 ```text
-2026-07-18 20:32:50 ERROR: duplicate IP 192.168.0.198
-2026-07-18 20:32:50 ERROR: mac-*.txt duplicate entry -- abort
+2026-09-25 13:43:38	INFO	trace: uhmleases-failure.trace
+2026-09-25 13:43:38	WARNING	uhmreload failed (code 1), back off -- alert
+2026-09-25 13:43:38	INFO	uhmleases.sh failed (exit 1)
+2026-09-25 13:43:38	ERROR	trace: uhmleases-failure.trace -- abort
+2026-09-25 13:43:38	ERROR	uhmleases.sh failed (exit 1)
+2026-09-25 13:43:38	INFO	mac-*.txt duplicate entry
+2026-09-25 13:43:38	INFO	duplicate hostname foo1
+2026-09-25 13:43:38	ERROR	mac-*.txt duplicate entry -- abort
+2026-09-25 13:43:38	ERROR	duplicate hostname P-10
+2026-09-25 13:43:38	INFO	duplicate IP 192.168.0.166
+2026-09-25 13:43:38	ERROR	duplicate IP 192.168.0.166
+2026-09-25 13:43:38	INFO	duplicate MAC dc:62:79:d1:aa:bb
+2026-09-25 13:43:38	ERROR	duplicate MAC dc:62:79:d1:aa:bb
 ```
 
 ```text
@@ -2300,7 +2311,7 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
   </tr>
 </table>
 
-##### Check MAC details
+#### Check MAC details
 
 <table>
   <tr>
@@ -2335,7 +2346,7 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
   </tr>
 </table>
 
-##### Action details
+#### Action details
 
 | Action | Description | Descripción |
 |---|---|---|
@@ -2411,12 +2422,16 @@ ACTIONS
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmalert.sh</b> is an <b>optional</b>, standalone alert watcher. It tails <code>/var/log/uhm.log</code> in real time and sends a push notification via <a href="https://ntfy.sh">ntfy.sh</a> on three kinds of events: (1) loss of connectivity to the UniFi controller, after <code>UHM_API_FAIL_THRESHOLD</code> consecutive cycles (default 3), followed by a recovery notice once it's back; (2) any other <code>ERROR</code> or <code>WARNING</code> line in the shared log (from <code>uhmd.sh</code> or the <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code> chain) — fires immediately, no threshold; and (3) any <code>FIX:</code> line, written only by <code>uhmwatch.sh</code> (installed by default) when it successfully recovers a service — closes out the corresponding <code>WARNING</code> alert with confirmation it was resolved.
+      <b>uhmalert.sh</b> is an <b>optional</b>, standalone alert watcher. It tails <code>/var/log/uhm.log</code> in real time and sends a push notification via <a href="https://ntfy.sh">ntfy.sh</a> on two kinds of events: (1) loss of connectivity to the UniFi controller, after <code>UHM_API_FAIL_THRESHOLD</code> consecutive cycles (default 3), followed by a recovery notice once it's back; and (2) any other <code>ERROR</code> or <code>WARNING</code> line in the shared log (from <code>uhmd.sh</code> or the <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code> chain) — fires immediately, no threshold.
+      <br><br>
+      <code>pydhcpd</code>, <code>uhm</code>'s DHCP backend, mirrors a single failure of its own into <code>/var/log/uhm.log</code>: being unable to open its own log file. This lets <code>uhmalert.sh</code> detect and notify it. This is necessary because <code>pydhcpd</code> is an essential component of <code>uhm</code> and has no push-notification system of its own, only log records.
       <br><br>
       Runs as its own systemd service (<code>uhmalert.service</code>), independent of <code>uhmd.sh</code> — it never reads or modifies the daemon or its source, only tails the log file it already writes. <code>uhmd.sh</code> stays byte-identical to upstream whether <code>uhmalert</code> is installed or not, and the daemon runs the same with or without it.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhmalert.sh</b> es un vigilante de alertas <b>opcional</b> e independiente. Sigue <code>/var/log/uhm.log</code> en tiempo real y envia una notificacion push via <a href="https://ntfy.sh">ntfy.sh</a> ante tres tipos de eventos: (1) perdida de conectividad con el controlador UniFi, tras <code>UHM_API_FAIL_THRESHOLD</code> ciclos consecutivos (default 3), seguido de un aviso de recuperacion cuando vuelve; (2) cualquier otra linea <code>ERROR</code> o <code>WARNING</code> en el log compartido (de <code>uhmd.sh</code> o la cadena <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code>) -- dispara de inmediato, sin umbral; y (3) cualquier linea <code>FIX:</code>, escrita solo por <code>uhmwatch.sh</code> (instalado por defecto) cuando recupera un servicio con éxito -- cierra la alerta <code>WARNING</code> correspondiente confirmando que se resolvió.
+      <b>uhmalert.sh</b> es un vigilante de alertas <b>opcional</b> e independiente. Sigue <code>/var/log/uhm.log</code> en tiempo real y envia una notificacion push via <a href="https://ntfy.sh">ntfy.sh</a> ante dos tipos de eventos: (1) perdida de conectividad con el controlador UniFi, tras <code>UHM_API_FAIL_THRESHOLD</code> ciclos consecutivos (default 3), seguido de un aviso de recuperacion cuando vuelve; y (2) cualquier otra linea <code>ERROR</code> o <code>WARNING</code> en el log compartido (de <code>uhmd.sh</code> o la cadena <code>uhmreload.sh</code>/<code>uhmleases.sh</code>/<code>uhmiptables.sh</code>) -- dispara de inmediato, sin umbral.
+      <br><br>
+      <code>pydhcpd</code>, el backend DHCP de <code>uhm</code>, refleja en <code>/var/log/uhm.log</code> un único fallo propio: no poder abrir su propio log. De esta forma, <code>uhmalert.sh</code> puede detectarlo y notificarlo. Esto es necesario porque <code>pydhcpd</code> es un componente esencial de <code>uhm</code> y no dispone de un sistema propio de alertas para dispositivos móviles, sino únicamente de registro en log.
       <br><br>
       Corre como su propio servicio systemd (<code>uhmalert.service</code>), independiente de <code>uhmd.sh</code> -- nunca lee ni modifica el daemon ni su codigo fuente, solo sigue el archivo de log que ya escribe. <code>uhmd.sh</code> se mantiene identico al original este o no instalado <code>uhmalert</code>, y el daemon funciona igual con o sin el.
     </td>
@@ -2509,12 +2524,18 @@ sudo /etc/uhm/tools/uhmalert.sh uninstall
 2026-07-12 00:40:29 INFO: revoke step, stat/sta unavailable -- skip
 [... cycles keep failing every ~POLL_INTERVAL, same pattern ...]
 2026-07-12 00:41:11 INFO: Could not load vouchers (rc=empty) -- skip
-2026-07-12 00:41:11 ALERT: 3 consecutive cycle failures -- sent
-2026-07-12 00:41:11 ALERT: latest at 2026-07-12 00:41:11
+2026-07-12 00:41:11 INFO: 3 consecutive cycle failures
+2026-07-12 00:41:11 INFO: latest at 2026-07-12 00:41:11
 [... failures continue while the controller is still down ...]
-2026-07-12 00:42:43 INFO: session expired, re-authenticating
-2026-07-12 00:42:43 INFO: UniFi login OK
-2026-07-12 00:43:13 ALERT: recovery notice (no new failures) -- sent
+2026-07-12 00:43:13 INFO: recovery notice (no new failures)
+2026-09-25 19:41:46	INFO	UniFi login OK
+2026-09-25 19:41:46	INFO	session expired, re-authenticating
+2026-09-25 19:33:20	STATUS	vouchers=6|auth=27|grace=8|newauth=0|revoked=0
+2026-09-25 19:33:20	STATUS	uhmreload done at: 2026-09-25 19:33:20
+2026-09-25 19:33:20	STATUS	uhmiptables done at: 2026-09-25 19:33:20
+2026-09-25 19:33:11	STATUS	uhmiptables start...
+2026-09-25 19:33:10	STATUS	uhmleases done at: 2026-09-25 19:33:10
+2026-09-25 19:33:10	STATUS	blockdhcp=473|limited=97|unlimited=34|hotspot=27|grace=8
 ```
 
 <table>
@@ -2583,20 +2604,14 @@ Installed. First run happens on the next minute mark.
   Check the log with: tail -f /var/log/uhm.log
 ```
 
-`uhmwatch.sh` is silent on a healthy run -- nothing is logged unless a check finds a problem or takes a fix action. Example of what a detected-and-fixed failure looks like in `/var/log/uhm.log` / `uhmwatch.sh` es silencioso en una corrida sana -- no registra nada a menos que un chequeo encuentre un problema o tome una acción de arreglo. Ejemplo de cómo se ve una falla detectada y corregida en `/var/log/uhm.log`:
+`uhmwatch.sh` is silent on a healthy run -- nothing is logged unless a check finds a problem. Example of what a detected-and-fixed failure looks like in `/var/log/uhm.log` / `uhmwatch.sh` es silencioso en una corrida sana -- no registra nada a menos que un chequeo encuentre un problema. Ejemplo de cómo se ve una falla detectada y corregida en `/var/log/uhm.log`:
 
 ```text
 2026-07-29 21:18:18 WARNING: uhmd OFFLINE -- alert
-2026-07-29 21:18:18 FIX: uhmd restarted -- alert
+2026-07-29 21:18:18 INFO: uhmd restarted
 ```
 
-If `uhmalert.sh` is also installed, both lines reach your phone as separate push notifications — `uhmalert.sh` alerts on any `WARNING:`/`ERROR:` line (the problem) as well as any `FIX:` line (confirmation it was resolved), from any of the services `uhmwatch.sh` manages, not just `uhmd`. `uhmwatch.sh` and `uhmalert.sh` are independent, but this is what having both installed together looks like in practice / Si `uhmalert.sh` también está instalado, ambas líneas te llegan al teléfono como notificaciones push separadas — `uhmalert.sh` alerta ante cualquier línea `WARNING:`/`ERROR:` (el problema) y también ante cualquier línea `FIX:` (confirmación de que se resolvió), de cualquiera de los servicios que gestiona `uhmwatch.sh`, no solo `uhmd`. `uhmwatch.sh` y `uhmalert.sh` son independientes, pero así se ve en la práctica tenerlos instalados juntos:
-
-<p align="center">
-  <a href="https://github.com/maravento/uhm"><img src="./img/uhmalertwatch.png" width="50%"></a>
-</p>
-<p align="center"><i>uhmwatch fixing a downed service, relayed to your phone by uhmalert</i></p>
-<p align="center"><i>uhmwatch arreglando un servicio caído, retransmitido a tu teléfono por uhmalert</i></p>
+If `uhmalert.sh` is also installed, the `WARNING:` line reaches your phone as a push notification — the `INFO:` recovery line does not, `uhmalert.sh` only forwards `ERROR:`/`WARNING:` lines. `uhmwatch.sh` and `uhmalert.sh` are independent, but this is what having both installed together looks like in practice / Si `uhmalert.sh` también está instalado, la línea `WARNING:` te llega al teléfono como notificación push — la línea `INFO:` de recuperación no, `uhmalert.sh` solo reenvía líneas `ERROR:`/`WARNING:`. `uhmwatch.sh` y `uhmalert.sh` son independientes, pero así se ve en la práctica tenerlos instalados juntos:
 
 > The notification app may not display messages in chronological order (it can group same-minute notifications arbitrarily). Since it's only a notification, the recommendation is to check `/var/log/uhm.log` for the actual event order.
 >
@@ -2623,7 +2638,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 ```text
 2026-07-15 17:21:03 WARNING: credentials rejected (HTTP 403)
-2026-07-15 17:21:03 Check uhm.env - UOS itself is responding
+2026-07-15 17:21:03 WARNING: check uhm.env, UOS is responding -- alert
 ```
 
 **Controller lockout (HTTP 429) / Bloqueo del controlador (HTTP 429):**
@@ -2638,7 +2653,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 
 # from uhmwatch.sh, on its next check:
 2026-07-31 23:59:15 WARNING: rate limited (HTTP 429), not a credentials issue
-2026-07-31 23:59:15 Stop uhmd+uhmwatch cron before restarting (see README)
+2026-07-31 23:59:15 WARNING: stop uhmd and uhmwatch cron -- alert
 ```
 
 <table>
@@ -2685,10 +2700,10 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. Every component classifies every line as <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code>, or (for <code>uhmalert.sh</code>) <code>ALERT:</code> — including continuation lines, since a message split across two physical lines to respect the 80-column limit always carries the same level on both. The LogView tab of the web interface groups the few genuinely level-less lines (the compact <code>field=value|field=value</code> counters, and each sub-script's own <code>"&lt;name&gt; start..."</code>/<code>"&lt;name&gt; done"</code> boundary markers) under a generic <code>STATUS</code> level. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
+      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log follows one rule throughout: <b>stay silent on no-op cycles, log once when something actually changes, always log errors and warnings</b>. Idle cycles (no ACL change) produce zero lines. Every component classifies every line as <code>INFO:</code>, <code>WARNING:</code>, or <code>ERROR:</code> — including continuation lines, since a message split across two physical lines to respect the 80-column limit always carries the same level on both. The LogView tab of the web interface groups the few genuinely level-less lines (the compact <code>field=value|field=value</code> counters, and each sub-script's own <code>"&lt;name&gt; start..."</code>/<code>"&lt;name&gt; done"</code> boundary markers) under a generic <code>STATUS</code> level. <code>uhmd</code>'s own <code>log()</code> also writes an 80-dash delimiter line as the very first line of any cycle that logs anything at all (idle cycles still produce none), so consecutive active cycles are visually separated in the file.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. Cada componente clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code>, <code>ERROR:</code> o (en <code>uhmalert.sh</code>) <code>ALERT:</code> — incluidas las líneas de continuación, ya que un mensaje partido en dos líneas físicas por el límite de 80 columnas siempre lleva el mismo nivel en ambas. La pestaña LogView de la interfaz web agrupa las pocas líneas genuinamente sin nivel (los contadores compactos <code>campo=valor|campo=valor</code>, y las marcas de inicio/cierre <code>"&lt;nombre&gt; start..."</code>/<code>"&lt;nombre&gt; done"</code> de cada sub-script) bajo un nivel genérico <code>STATUS</code>. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
+      <b>uhm.log</b> — Toda la salida de cada componente (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) se unifica en <code>/var/log/uhm.log</code> y se rota vía <code>/etc/logrotate.d/uhm</code> (diario, 7 rotaciones, comprimido). El log sigue una sola regla: <b>silencio en ciclos sin cambios, un registro cuando algo realmente cambia, y siempre errores y advertencias</b>. Los ciclos inactivos (sin cambio de ACL) no producen ninguna línea. Cada componente clasifica cada línea como <code>INFO:</code>, <code>WARNING:</code> o <code>ERROR:</code> — incluidas las líneas de continuación, ya que un mensaje partido en dos líneas físicas por el límite de 80 columnas siempre lleva el mismo nivel en ambas. La pestaña LogView de la interfaz web agrupa las pocas líneas genuinamente sin nivel (los contadores compactos <code>campo=valor|campo=valor</code>, y las marcas de inicio/cierre <code>"&lt;nombre&gt; start..."</code>/<code>"&lt;nombre&gt; done"</code> de cada sub-script) bajo un nivel genérico <code>STATUS</code>. El propio <code>log()</code> de <code>uhmd</code> también escribe una línea separadora de 80 guiones como primera línea de cualquier ciclo que registre algo (los ciclos inactivos siguen sin producir ninguna), para separar visualmente ciclos activos consecutivos en el archivo.
     </td>
   </tr>
 </table>
@@ -2699,14 +2714,12 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 |---|---|---|
 | `ERROR:` | Exclusively for a message that aborts the current flow -- the script or the calling function stops right there, nothing after it runs. Always paired with the `-- abort` suffix. | Exclusivo para un mensaje que aborta el flujo actual -- el script o la función que lo invoca se detiene ahí mismo, nada después corre. Siempre acompañado del sufijo `-- abort`. |
 | `WARNING:` | Something is seriously wrong and needs the administrator's immediate attention, but execution does not abort. Paired with `-- alert` (a live condition needing supervision, e.g. a possible attack or resource saturation) or `-- fallback` (the administrator supplied a bad/out-of-range value in the config, and the script used a built-in default instead -- the value must be corrected). | Algo anda mal y requiere atención inmediata del administrador, pero la ejecución no aborta. Acompañado de `-- alert` (una condición en vivo que amerita supervisión, ej. un posible ataque o saturación de recursos) o `-- fallback` (el administrador puso un valor malo o fuera de rango en la configuración, y el script usó un valor por defecto en su lugar -- ese valor debe corregirse). |
-| `INFO:` | Routine state changes and notifications -- everything else, including anything skipped or defaulted without needing administrator attention. Paired with `-- skip` (an action was discarded, for any reason) or `-- degraded` (a system/environment limitation -- not a bad config value -- left the script running without an optimization or protection it would normally have; nothing for the administrator to fix). | Cambios de estado rutinarios y notificaciones -- todo lo demás, incluyendo lo omitido o resuelto con un valor por defecto sin necesitar atención del administrador. Acompañado de `-- skip` (se descartó una acción, por cualquier razón) o `-- degraded` (una limitación del sistema/entorno -- no un valor malo de configuración -- dejó el script funcionando sin una optimización o protección que normalmente tendría; no hay nada que el administrador deba corregir). |
-| `ALERT:` | `uhmalert.sh` only -- confirms a push notification was actually sent for an `ERROR:`/`WARNING:`/`FIX:` line it picked up. | Exclusivo de `uhmalert.sh` -- confirma que se envió una notificación push por una línea `ERROR:`/`WARNING:`/`FIX:` detectada. |
-| `FIX:` | A prior problem (`ERROR:`/`WARNING:`) is now confirmed resolved -- e.g. a service `uhmwatch.sh` restarted came back healthy. | Un problema previo (`ERROR:`/`WARNING:`) ya se confirmó resuelto -- ej. un servicio que `uhmwatch.sh` reinició volvió a estar sano. |
+| `INFO:` | Routine state changes and notifications -- everything else, including anything skipped, defaulted, or self-healed without needing administrator attention. Flag is optional: `-- skip`, `-- degraded`, `-- retry`, `-- fixed`, or none. | Cambios de estado rutinarios y notificaciones -- todo lo demás, incluyendo lo omitido, resuelto con un valor por defecto, o auto-reparado sin necesitar atención del administrador. El flag es opcional: `-- skip`, `-- degraded`, `-- retry`, `-- fixed`, o ninguno. |
 | `STATUS` (no prefix) | Level-less lines: each script's own `"<name> start..."`/`"<name> done"` boundary markers, and the compact `field=value\|field=value` counters -- grouped under this generic label only by the LogView tab of the web interface, not written as `STATUS:` in the log itself. | Líneas sin nivel: las marcas de inicio/cierre `"<nombre> start..."`/`"<nombre> done"` de cada script, y los contadores compactos `campo=valor\|campo=valor` -- agrupadas bajo esta etiqueta genérica solo por la pestaña LogView de la interfaz web, no se escriben como `STATUS:` en el log real. |
 
-> `uhmalert.sh` sends push notifications only for `ERROR:`/`WARNING:`/`FIX:` lines. For pydhcp's own log format and levels, see [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
+> `uhmalert.sh` sends push notifications only for `ERROR:`/`WARNING:` lines. For pydhcp's own log format and levels, see [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
 >
-> `uhmalert.sh` envía notificaciones push solo para líneas `ERROR:`/`WARNING:`/`FIX:`.Para el formato y niveles de log propios de pydhcp, ver [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
+> `uhmalert.sh` envía notificaciones push solo para líneas `ERROR:`/`WARNING:`. Para el formato y niveles de log propios de pydhcp, ver [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
 
 #### Message reference
 
@@ -2717,12 +2730,10 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 | `INFO: ... -- skip` | The step is skipped and retried next cycle | El paso se salta y se reintenta en el siguiente ciclo | `API GET stat/sta -> HTTP 000 -- skip` |
 | `INFO:` | Logged once, when all three endpoints answer together | Se registra una vez, cuando los tres endpoints responden juntos | `UniFi backend ready (voucher/guest/sta OK)` |
 | `WARNING: ... -- fallback` | The documented default is used | Se usa el valor por defecto documentado | `no CLEANUP_INTERVAL in pydhcp.env -- fallback` |
-| `WARNING: ... -- alert` | Repaired automatically | Reparado automáticamente | `uhm.env perms fixed -- alert` |
+| `INFO:` | Self-healed, nothing for the admin to do | Auto-reparado, nada que el administrador deba hacer | `uhm.env perms fixed` |
 | `WARNING: ... -- alert` | The MACs stay queued and are harmlessly reprocessed next cycle -- never a permissions issue (runs as root); check free space, a read-only mount, or the immutable attribute (`lsattr`, cleared with `chattr -i`) | Los MACs quedan en cola y se reprocesan sin efecto en el siguiente ciclo -- nunca es un problema de permisos (corre como root); revise espacio libre, montaje de solo lectura, o el atributo de inmodificable (`lsattr`, se quita con `chattr -i`) | `cannot empty uhm-queue.txt -- alert` |
 | `WARNING: ... -- alert` | The previous config is restored; the next cycle retries | Se restaura la configuración anterior; el siguiente ciclo reintenta | `uhmreload failed (code 1), back off -- alert` |
 | `WARNING: ... -- alert` | `uhmwatch.sh` found the service down | `uhmwatch.sh` encontró el servicio caído | `pydhcpd OFFLINE` · `uhmd restart FAILED -- alert` |
-| `FIX:` | Closes out the `WARNING:` that reported it | Cierra el `WARNING:` que lo reportó | `pydhcpd restarted` |
-| `ALERT:` | A push notification was sent or withheld | Se envió o se retuvo una notificación push | `sent -- WARNING: ...` · `dup alert suppressed` |
 | `ERROR: ... -- abort` | The script stops before touching anything | El script se detiene antes de tocar nada | `missing dependency 'jq' -- abort` · `uhm.env not found -- abort` |
 | `ERROR: ... -- abort` | Every offending entry is listed before aborting | Se listan todas las entradas implicadas antes de abortar | `mac-*.txt IP conflict -- abort` |
 
@@ -2761,17 +2772,17 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
   </tr>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      A safety backoff against an error in some line of the scripts <code>uhmreload.sh</code> invokes (especially <code>uhmiptables.sh</code>, which is outside the scope of this project). If <code>UHM_RELOAD</code> (<code>uhmreload.sh</code>) fails or times out, <code>uhmd</code> logs the failure and switches to <b>"backing off to safety-net cadence"</b>: it will not retry on the next cycle (every <code>POLL_INTERVAL</code>) — it waits the full <code>RELOAD_SAFETY_INTERVAL_SECONDS</code> (default 3600s = 1h) before invoking the reload chain again, so a persistent failure does not spam the log or re-alert every cycle. The same backoff also fires if <code>UHM_RELOAD</code> is missing. Any line prefixed <code>WARNING:</code> or <code>ERROR:</code> in <code>uhm.log</code> is picked up by <code>uhmalert.sh</code> (see uhmalert), which forwards it as a push notification prefixed with <code>ALERT: sent -- </code> followed by the original line — that prefix is <code>uhmalert.sh</code> confirming it already notified you, not a separate problem.
+      A safety backoff against an error in some line of the scripts <code>uhmreload.sh</code> invokes (especially <code>uhmiptables.sh</code>, which is outside the scope of this project). If <code>UHM_RELOAD</code> (<code>uhmreload.sh</code>) fails or times out, <code>uhmd</code> logs the failure and switches to <b>"backing off to safety-net cadence"</b>: it will not retry on the next cycle (every <code>POLL_INTERVAL</code>) — it waits the full <code>RELOAD_SAFETY_INTERVAL_SECONDS</code> (default 3600s = 1h) before invoking the reload chain again, so a persistent failure does not spam the log or re-alert every cycle. The same backoff also fires if <code>UHM_RELOAD</code> is missing. Any line prefixed <code>WARNING:</code> or <code>ERROR:</code> in <code>uhm.log</code> is picked up by <code>uhmalert.sh</code> (see uhmalert), which sends it as a push notification and writes its own <code>INFO:</code> line to the log, stripped of the original label and action, confirming it already notified you.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Un backoff de seguridad ante un error en alguna línea de los scripts que invoca <code>uhmreload.sh</code> (especialmente <code>uhmiptables.sh</code>, que está fuera del alcance de este proyecto). Si <code>UHM_RELOAD</code> (<code>uhmreload.sh</code>) falla o hace timeout, <code>uhmd</code> registra el fallo y pasa a <b>"backing off to safety-net cadence"</b>: no reintenta en el siguiente ciclo (cada <code>POLL_INTERVAL</code>) — espera el <code>RELOAD_SAFETY_INTERVAL_SECONDS</code> completo (default 3600s = 1h) antes de invocar de nuevo la cadena de reload, para que un fallo persistente no sature el log ni vuelva a alertar en cada ciclo. El mismo backoff también ocurre si <code>UHM_RELOAD</code> falta. Cualquier línea con prefijo <code>WARNING:</code> o <code>ERROR:</code> en <code>uhm.log</code> es detectada por <code>uhmalert.sh</code> (ver uhmalert), que la reenvía como notificación push con el prefijo <code>ALERT: sent -- </code> seguido de la línea original — ese prefijo es <code>uhmalert.sh</code> confirmando que ya te avisó, no un problema aparte.
+      Un backoff de seguridad ante un error en alguna línea de los scripts que invoca <code>uhmreload.sh</code> (especialmente <code>uhmiptables.sh</code>, que está fuera del alcance de este proyecto). Si <code>UHM_RELOAD</code> (<code>uhmreload.sh</code>) falla o hace timeout, <code>uhmd</code> registra el fallo y pasa a <b>"backing off to safety-net cadence"</b>: no reintenta en el siguiente ciclo (cada <code>POLL_INTERVAL</code>) — espera el <code>RELOAD_SAFETY_INTERVAL_SECONDS</code> completo (default 3600s = 1h) antes de invocar de nuevo la cadena de reload, para que un fallo persistente no sature el log ni vuelva a alertar en cada ciclo. El mismo backoff también ocurre si <code>UHM_RELOAD</code> falta. Cualquier línea con prefijo <code>WARNING:</code> o <code>ERROR:</code> en <code>uhm.log</code> es detectada por <code>uhmalert.sh</code> (ver uhmalert), que la envía como notificación push y escribe su propia línea <code>INFO:</code> en el log, sin la etiqueta ni la acción original, confirmando que ya te avisó.
     </td>
   </tr>
 </table>
 
 ```text
 2026-07-27 20:45:28 WARNING: uhmreload failed (code 1), back off -- alert
-2026-07-27 20:45:29 ALERT: WARNING: uhmreload failed (code 1), back off -- sent
+2026-07-27 20:45:29 INFO: uhmreload failed (code 1), back off
 ```
 
 | Field | Type | Description | Descripción |
@@ -2931,7 +2942,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 |------------|------------|-----|-----|
 | **`stat/guest` doesn't distinguish deleted vs. quota-exhausted vouchers** | When a voucher is deleted manually from the UniFi UI, `stat/guest` still retains session records tagged with that `voucher_code`, indistinguishable from a voucher whose quota simply ran out. This lets affected clients reconnect without re-entering a code. Reported to Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigated in `uhmunifi.sh` by **Revoke by voucher code** (action 4), which cleans `stat/guest`/`stat/sta` directly instead of relying on `stat/voucher` state. | **`stat/guest` no distingue vouchers eliminados de vouchers con cuota agotada** | Cuando un voucher se elimina manualmente desde la UI de UniFi, `stat/guest` sigue reteniendo registros de sesión con ese `voucher_code`, indistinguibles de un voucher cuya cuota simplemente se agotó. Esto permite que los clientes afectados se reconecten sin volver a ingresar un código. Reportado a Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigado en `uhmunifi.sh` mediante **Revoke by voucher code** (acción 4), que limpia `stat/guest`/`stat/sta` directamente sin depender del estado de `stat/voucher`. |
 | **`stat/voucher` has no historical record of expired vouchers** | UniFi does not retain a voucher in `stat/voucher` once it expires or its quota is fully consumed; the entry disappears entirely instead of being marked expired. Verified directly against a live controller: five vouchers confirmed issued and consumed via `/var/log/uhm.log` (`Authorized`/`Expired` lines) returned zero matches when queried by code against `stat/voucher` after expiry. As a result, `uhmunifi.sh`'s Vouchers section and **Delete expired vouchers** (action 3) can only ever act on what the controller still tracks at query time — they cannot produce a historical report of all vouchers ever issued. The only durable record of past voucher activity is `/var/log/uhm.log`. | **`stat/voucher` no tiene registro histórico de vouchers expirados** | UniFi no retiene un voucher en `stat/voucher` una vez que expira o su cuota se consume por completo; la entrada desaparece por completo en vez de marcarse como expirada. Verificado directamente contra un controlador en vivo: cinco vouchers confirmados como emitidos y consumidos vía `/var/log/uhm.log` (líneas `Authorized`/`Expired`) devolvieron cero coincidencias al consultarlos por código contra `stat/voucher` después de expirar. Como consecuencia, la sección Vouchers de `uhmunifi.sh` y **Delete expired vouchers** (acción 3) solo pueden actuar sobre lo que el controlador todavía rastrea al momento de la consulta — no pueden producir un reporte histórico de todos los vouchers emitidos alguna vez. El único registro duradero de actividad histórica de vouchers es `/var/log/uhm.log`. |
-| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; both log lines are written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `WARNING: failed to kick` / `WARNING: 02:00:00:aa:bb:20 (HTTP 400)` followed by `WARNING: client may keep its stale IP` / `WARNING: until its own DHCP renewal` (each logged as two lines, per the 80-column limit on log messages). The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; ambas líneas de log las escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `WARNING: failed to kick` / `WARNING: 02:00:00:aa:bb:20 (HTTP 400)` seguido de `WARNING: client may keep its stale IP` / `WARNING: until its own DHCP renewal` (cada uno logueado en dos líneas, por el límite de 80 columnas en mensajes de log). El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
+| **`kick-sta` can fail with HTTP 400 right after a successful authorization** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; the log line is written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `INFO: failed to kick 02:00:00:aa:bb:20 (HTTP 400) -- skip`. The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; la línea de log la escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `INFO: failed to kick 02:00:00:aa:bb:20 (HTTP 400) -- skip`. El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
 
 ### MongoDB - UniFi Controller Database
 

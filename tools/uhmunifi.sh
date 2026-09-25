@@ -58,7 +58,7 @@
 #     unreadable or incomplete configuration, unreadable or malformed
 #     data file, failed login, or failed UniFi query
 #
-# DEPENDENCIES : curl, jq, mawk, coreutils, util-linux, grep, sed
+# DEPENDENCIES : curl, jq, coreutils, util-linux, grep, sed
 # CONFIG       : /etc/uhm/uhm.env
 # LOG          : /var/log/uhmunifi.log
 #
@@ -124,7 +124,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhmunifi.log perms fixed -- alert"
+            log "INFO: uhmunifi.log perms fixed"
         else
             log "WARNING: cannot fix uhmunifi.log perms -- alert"
         fi
@@ -133,7 +133,7 @@ esac
 unset log_stat
 
 # dependencies
-for dep_pkg in curl jq mawk coreutils util-linux grep sed; do
+for dep_pkg in curl jq coreutils util-linux grep sed; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -194,8 +194,8 @@ load_conf() {
 # pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
 # own keys win if a name ever collides.
 if [ ! -r "$pydhcp_conf" ]; then
-    log "ERROR: cannot read $pydhcp_conf -- abort"
     log "ERROR: uhm reads ACL_MAC_PATH from it"
+    log "ERROR: cannot read $pydhcp_conf -- abort"
     exit 1
 fi
 load_conf "$pydhcp_conf"
@@ -261,9 +261,8 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$auth_token" ]; then
+            log "ERROR: check credentials/URL in uhm.env, or controller down"
             log "ERROR: UniFi login failed -- abort"
-            log "ERROR: check credentials and URL in uhm.env"
-            log "ERROR: controller may be unavailable, try again later"
             exit 1
         fi
         session_cookie="TOKEN=${auth_token}"
@@ -286,9 +285,8 @@ do_login() {
     fi
 
     if [ -z "$session_cookie" ]; then
+        log "ERROR: check credentials/URL in uhm.env, or controller down"
         log "ERROR: UniFi login failed -- abort"
-        log "ERROR: check credentials and URL in uhm.env"
-        log "ERROR: controller may be unavailable, try again later"
         exit 1
     fi
 }
@@ -382,8 +380,8 @@ voucher_rc=$(echo "$voucher_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 # no results rather than an error.
 for endpoint_rc in "stat/sta:$sta_rc" "stat/guest:$guest_rc" "stat/voucher:$voucher_rc"; do
     if [[ "${endpoint_rc#*:}" != "ok" ]]; then
-        log "ERROR: ${endpoint_rc%%:*} query failed -- abort"
         log "ERROR: controller may be unavailable, try again later"
+        log "ERROR: ${endpoint_rc%%:*} query failed -- abort"
         exit 1
     fi
 done
@@ -531,7 +529,7 @@ interactive_delete_unused() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "WARNING: Failed to delete voucher: $voucher_code -- skip"
+            || log "INFO: Failed to delete voucher: $voucher_code -- skip"
     done
 
     log "INFO: Done."
@@ -559,7 +557,7 @@ interactive_forget_no_voucher() {
     local all_users_rc
     all_users_rc=$(echo "$all_users_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
     if [ "$all_users_rc" != "ok" ]; then
-        log "WARNING: Could not fetch rest/user (rc=$all_users_rc) -- skip"
+        log "INFO: Could not fetch rest/user (rc=$all_users_rc) -- skip"
         return
     fi
 
@@ -619,7 +617,7 @@ interactive_forget_no_voucher() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -- skip"
     done
 
     log "INFO: Done."
@@ -723,7 +721,7 @@ interactive_delete_expired() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$forget_rc" = "ok" ] \
                 && log "INFO: Forgotten: $mac_addr" \
-                || log "WARNING: Failed to forget: $mac_addr -- skip"
+                || log "INFO: Failed to forget: $mac_addr -- skip"
         done < <(echo "$guest_json" | jq -r --arg code "$voucher_code" '
             .data[]
             | select(.voucher_code == $code)
@@ -814,7 +812,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $target_code" \
-            || log "WARNING: delete voucher failed: (rc=$delete_rc) -- skip"
+            || log "INFO: delete voucher failed: (rc=$delete_rc) -- skip"
     else
         log "INFO: voucher $target_code not found, proceeding with cleanup"
     fi
@@ -873,7 +871,7 @@ interactive_revoke_by_code() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$unauth_rc" = "ok" ] \
                 && log "INFO: Revoked: $mac_addr" \
-                || log "WARNING: revoke failed: $mac_addr (rc=$unauth_rc) -- skip"
+                || log "INFO: revoke failed: $mac_addr (rc=$unauth_rc) -- skip"
         fi
 
         local forget_rc
@@ -882,7 +880,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: forget failed: $mac_addr (rc=$forget_rc) -- skip"
+            || log "INFO: forget failed: $mac_addr (rc=$forget_rc) -- skip"
     done
 
     log "INFO: revocation complete for code: $target_code"
@@ -962,7 +960,7 @@ interactive_forget_flagged() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -- skip"
     done
 
     log "INFO: Done."
@@ -1029,7 +1027,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "WARNING: Failed to delete voucher: $voucher_code -- skip"
+            || log "INFO: Failed to delete voucher: $voucher_code -- skip"
     done < <(echo "$voucher_json" | jq -r '.data[] | ._id' 2>/dev/null)
 
     local mac_addr unauth_rc
@@ -1053,7 +1051,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "WARNING: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -- skip"
     done < <(echo "$guest_json" | jq -r '.data[] | (.mac | ascii_downcase)' 2>/dev/null | sort -u)
 
     log "INFO: Purge complete."

@@ -135,7 +135,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhm.log perms fixed -- alert"
+            log "INFO: uhm.log perms fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -174,7 +174,7 @@ uhm_reload_in_progress() {
 }
 
 # dependencies
-for dep_pkg in curl jq mawk coreutils util-linux cron grep sed systemd iproute2; do
+for dep_pkg in curl jq coreutils util-linux cron grep sed systemd iproute2; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -316,7 +316,7 @@ if [[ -f "$uhm_conf" ]]; then
     env_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
     if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
         if chown root:root "$uhm_conf" 2>/dev/null && chmod 600 "$uhm_conf" 2>/dev/null; then
-            log "WARNING: uhm.env perms fixed -- alert"
+            log "INFO: uhm.env perms fixed"
         else
             log "ERROR: cannot fix uhm.env perms -- abort"
             exit 1
@@ -367,7 +367,7 @@ check_uhmd() {
         mark_recovery_attempt "uhmd.service"
         systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
-            log "FIX: uhmd restarted -- alert"
+            log "INFO: uhmd restarted"
             clear_recovery_attempt "uhmd.service"
         else
             log "WARNING: uhmd restart FAILED -- alert"
@@ -392,7 +392,7 @@ check_ualert() {
         mark_recovery_attempt "uhmalert.service"
         systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
-            log "FIX: uhmalert restarted -- alert"
+            log "INFO: uhmalert restarted"
             clear_recovery_attempt "uhmalert.service"
         else
             log "WARNING: uhmalert restart FAILED -- alert"
@@ -423,7 +423,7 @@ check_pydhcpd() {
         mark_recovery_attempt "pydhcpd.service"
         systemctl reset-failed pydhcpd.service 2>/dev/null || true
         if systemctl restart pydhcpd.service; then
-            log "FIX: pydhcpd restarted -- alert"
+            log "INFO: pydhcpd restarted"
             clear_recovery_attempt "pydhcpd.service"
         else
             log "WARNING: pydhcpd restart FAILED -- alert"
@@ -490,7 +490,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
-            log "FIX: uosserver started -- alert"
+            log "INFO: uosserver started"
             clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver start FAILED -- alert"
@@ -522,7 +522,7 @@ check_uosserver() {
             mark_recovery_attempt "uosserver.service"
             systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
-                log "FIX: uosserver restarted -- alert"
+                log "INFO: uosserver restarted"
                 clear_recovery_attempt "uosserver.service"
             else
                 log "WARNING: uosserver restart FAILED -- alert"
@@ -565,7 +565,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
-            log "FIX: uosserver restarted (login failed) -- alert"
+            log "INFO: uosserver restarted (login failed)"
             clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver restart FAILED -- alert"
@@ -589,7 +589,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
-            log "FIX: unifi started -- alert"
+            log "INFO: unifi started"
             clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service start FAILED -- alert"
@@ -617,7 +617,7 @@ check_unifi_classic() {
             mark_recovery_attempt "unifi.service"
             systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
-                log "FIX: unifi restarted -- alert"
+                log "INFO: unifi restarted"
                 clear_recovery_attempt "unifi.service"
             else
                 log "WARNING: unifi.service restart FAILED -- alert"
@@ -660,7 +660,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
-            log "FIX: unifi restarted (login failed) -- alert"
+            log "INFO: unifi restarted (login failed)"
             clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service restart FAILED -- alert"

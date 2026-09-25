@@ -37,17 +37,13 @@
 #    unexpectedly" (expected/already handled, see uhmd.sh run_cycle() --
 #    not a bug).
 #
-# 3. Any FIX: line -- written only by uhmwatch.sh when it successfully
-#    recovers a service. Fires immediately, same as #2, and closes out
-#    the WARNING alert that reported the problem in the first place.
-#
 # Standalone -- never reads or modifies uhmd.sh, only tails its log
 # file. Runs as its own systemd service (uhmalert.service), independent of
 # uhmd, so the daemon stays byte-identical to upstream. Optional:
 # uhmd.sh runs fine with or without uhmalert installed.
 #
 # DEPENDENCIES:
-# - bash, curl, mawk, grep, sed, util-linux (flock), GNU coreutils
+# - bash, curl, grep, sed, util-linux (flock), GNU coreutils
 #   (date -d, tail -F) -- standard on Ubuntu/Debian
 # - systemd (systemctl) -- only needed for `install`/`uninstall`
 # - uhmd.sh already installed and running (this reads its log; it
@@ -122,7 +118,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhm.log perms fixed -- alert"
+            log "INFO: uhm.log perms fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -131,7 +127,7 @@ esac
 unset log_stat
 
 # dependencies
-for dep_pkg in curl mawk coreutils util-linux grep sed systemd; do
+for dep_pkg in curl coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -310,7 +306,7 @@ file_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
 file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
 if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
     if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "WARNING: uhm.env perms fixed -- alert"
+        log "INFO: uhm.env perms fixed"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
         exit 1
@@ -413,7 +409,7 @@ while true; do
         if (( now_epoch - last_ts_epoch >= gap_limit )); then
             if systemctl is-active --quiet uhmd; then
                 notify "uhm: recovered -- no new failures in the last ${gap_limit}s"
-                log "ALERT: recovery notice (no new failures) -- sent"
+                log "INFO: recovery notice (no new failures)"
                 fail_streak=0
                 alert_sent=0
             else
@@ -441,7 +437,7 @@ while true; do
         if [[ "$log_msg" == "INFO: UniFi backend ready (voucher/guest/sta OK)" ]]; then
             if (( alert_sent == 1 )); then
                 notify "uhm: recovered -- backend answering again"
-                log "ALERT: recovery notice (backend ready) -- sent"
+                log "INFO: recovery notice (backend ready)"
                 fail_streak=0
                 alert_sent=0
             fi
@@ -458,19 +454,23 @@ while true; do
 
         # Generic catch-all: any other ERROR/WARNING line, from
         # uhmd.sh or the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain
-        # (shared log) -- fires immediately, no streak needed. FIX: lines
-        # come only from uhmwatch.sh (any of the services it manages) --
-        # a successful recovery closing out an earlier WARNING/ERROR alert.
-        if (( is_connectivity == 0 )) && { [[ "$log_msg" == ERROR:* ]] || [[ "$log_msg" == WARNING:* ]] || [[ "$log_msg" == FIX:* ]]; }; then
+        # (shared log) -- fires immediately, no streak needed.
+        if (( is_connectivity == 0 )) && { [[ "$log_msg" == ERROR:* ]] || [[ "$log_msg" == WARNING:* ]]; }; then
             now_epoch=$(date +%s)
             if [[ "$log_msg" == "$last_generic_msg" ]] && (( now_epoch - last_generic_time < dedup_window )); then
-                log "INFO: dup alert (${dedup_window}s): ${log_msg:0:25} -- skip"
+                dup_text="${log_msg#* }"
+                dup_text="${dup_text% -- *}"
+                log "INFO: dup alert (${dedup_window}s): $dup_text -- skip"
                 continue
             fi
             last_generic_msg="$log_msg"
             last_generic_time="$now_epoch"
+            # The quoted line carries its own label and control action; both
+            # are stripped so this one does not end up with two of each.
+            alert_text="${log_msg#* }"
+            alert_text="${alert_text% -- *}"
             notify "uhm: $log_msg"
-            log "ALERT: ${log_msg:0:45} -- sent"
+            log "INFO: $alert_text"
             continue
         fi
 
@@ -496,8 +496,8 @@ while true; do
                 fail_streak=0
             else
                 notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $line_ts)"
-                log "ALERT: $fail_streak consecutive cycle failures -- sent"
-                log "ALERT: latest at $line_ts"
+                log "INFO: $fail_streak consecutive cycle failures"
+                log "INFO: latest at $line_ts"
                 alert_sent=1
             fi
         fi

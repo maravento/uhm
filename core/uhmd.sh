@@ -198,7 +198,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhm.log perms fixed -- alert"
+            log "INFO: uhm.log perms fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -216,7 +216,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in curl jq mawk coreutils util-linux grep sed systemd; do
+for dep_pkg in curl jq coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -406,7 +406,7 @@ ensure_acl_lists() {
         file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
         if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
             if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "WARNING: $(basename "$check_file") perms fixed -- alert"
+                log "INFO: $(basename "$check_file") perms fixed"
             else
                 log "ERROR: cannot fix $(basename "$check_file") perms -- abort"
                 exit 1
@@ -417,7 +417,7 @@ ensure_acl_lists() {
 
 load_config() {
     if [[ ! -f "$config_file" ]]; then
-        echo "ERROR: $config_file not found" >&2
+        log "ERROR: $config_file not found -- abort"
         exit 1
     fi
     local file_owner file_perms
@@ -425,7 +425,7 @@ load_config() {
     file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
     if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
         if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-            log "WARNING: uhm.env perms fixed -- alert"
+            log "INFO: uhm.env perms fixed"
         else
             log "ERROR: cannot fix uhm.env perms -- abort"
             exit 1
@@ -435,8 +435,8 @@ load_config() {
     # the single source of truth for them. uhm.env is read after, so uhm's
     # own keys win if a name ever collides.
     if [[ ! -r "$pydhcp_env" ]]; then
-        log "ERROR: cannot read $pydhcp_env -- abort"
         log "ERROR: uhm reads pydhcp's network and ACL values from it"
+        log "ERROR: cannot read $pydhcp_env -- abort"
         exit 1
     fi
     load_conf "$pydhcp_env"
@@ -533,7 +533,7 @@ ensure_executable() {
     file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
     if [[ "$file_owner" != "root" || "$file_perms" != "$expected_mode" ]]; then
         if chown root:root "$check_file" 2>/dev/null && chmod "$expected_mode" "$check_file" 2>/dev/null; then
-            log "WARNING: $script_name perms fixed -- alert"
+            log "INFO: $script_name perms fixed"
         else
             log "WARNING: cannot fix $script_name perms -- alert"
         fi
@@ -1692,9 +1692,8 @@ kick_newly_authorized() {
         # skip above -- this one firing at all means something upstream let a
         # managed MAC slip through, which is itself worth surfacing.
         if is_managed_mac "$mac_addr"; then
-            log "WARNING: $mac_addr is in mac-*.txt -- skip"
-            log "WARNING: not kicked, it is a managed device"
-            log "WARNING: $mac_addr bypassed guard -- alert"
+            log "WARNING: managed device, not kicked, upstream filter failed"
+            log "WARNING: $mac_addr reached the kick loop -- alert"
             continue
         fi
         if [[ "$exit_code" == "ok" ]]; then

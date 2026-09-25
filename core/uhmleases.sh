@@ -127,7 +127,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: uhm.log perms fixed -- alert"
+            log "INFO: uhm.log perms fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -224,7 +224,7 @@ env_owner=$(stat -c '%U' "$env_file" 2>/dev/null)
 env_perms=$(stat -c '%a' "$env_file" 2>/dev/null)
 if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
     if chown root:root "$env_file" 2>/dev/null && chmod 600 "$env_file" 2>/dev/null; then
-        log "WARNING: uhm.env perms fixed -- alert"
+        log "INFO: uhm.env perms fixed"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
         exit 1
@@ -267,8 +267,8 @@ load_conf() {
 # single source of truth for them. uhm.env is read after, so the uhm keys
 # win if a name ever collides.
 if [ ! -r "$pydhcp_env" ]; then
-    log "ERROR: cannot read $pydhcp_env -- abort"
     log "ERROR: uhm reads pydhcp's network and ACL values from it"
+    log "ERROR: cannot read $pydhcp_env -- abort"
     exit 1
 fi
 load_conf "$pydhcp_env"
@@ -280,7 +280,7 @@ if [ -z "${SERVER_IP:-}" ]; then
 fi
 
 # dependencies
-for dep_pkg in python3 mawk coreutils util-linux curl grep sed systemd libc-bin; do
+for dep_pkg in python3 coreutils util-linux curl grep sed systemd libc-bin; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
@@ -569,7 +569,7 @@ ensure_acl_lists() {
         file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
         if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
             if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "WARNING: $(basename "$check_file") perms fixed -- alert"
+                log "INFO: $(basename "$check_file") perms fixed"
             else
                 log "ERROR: cannot fix $(basename "$check_file") perms -- abort"
                 exit 1
