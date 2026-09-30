@@ -198,7 +198,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed"
+            log "INFO: uhm.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -406,7 +406,7 @@ ensure_acl_lists() {
         file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
         if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
             if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "INFO: $(basename "$check_file") perms fixed"
+                log "INFO: $(basename "$check_file") perms fixed -- fixed"
             else
                 log "ERROR: cannot fix $(basename "$check_file") perms -- abort"
                 exit 1
@@ -425,7 +425,7 @@ load_config() {
     file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
     if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
         if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-            log "INFO: uhm.env perms fixed"
+            log "INFO: uhm.env perms fixed -- fixed"
         else
             log "ERROR: cannot fix uhm.env perms -- abort"
             exit 1
@@ -533,7 +533,7 @@ ensure_executable() {
     file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
     if [[ "$file_owner" != "root" || "$file_perms" != "$expected_mode" ]]; then
         if chown root:root "$check_file" 2>/dev/null && chmod "$expected_mode" "$check_file" 2>/dev/null; then
-            log "INFO: $script_name perms fixed"
+            log "INFO: $script_name perms fixed -- fixed"
         else
             log "WARNING: cannot fix $script_name perms -- alert"
         fi
@@ -1482,7 +1482,7 @@ process_sessions() {
             if (( ${#assigned_hostname} + 1 + ${#voucher_code} <= 63 )); then
                 assigned_hostname="${assigned_hostname}-${voucher_code}"
             else
-                log "INFO: voucher code too long, hostname without it -- degraded"
+                log "INFO: hostname+voucher code exceeds 63 chars, voucher code omitted"
             fi
         fi
 
@@ -1882,7 +1882,7 @@ main() {
     while (( vouchers_ok == 0 )); do
         voucher_elapsed=$(( $(date +%s) - voucher_start ))
         if (( voucher_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "INFO: no vouchers at startup, names without code -- degraded"
+            log "WARNING: no vouchers at startup, names without code -- alert"
             break
         fi
         sleep 10

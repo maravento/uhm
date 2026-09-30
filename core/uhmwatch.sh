@@ -135,7 +135,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed"
+            log "INFO: uhm.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -316,7 +316,7 @@ if [[ -f "$uhm_conf" ]]; then
     env_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
     if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
         if chown root:root "$uhm_conf" 2>/dev/null && chmod 600 "$uhm_conf" 2>/dev/null; then
-            log "INFO: uhm.env perms fixed"
+            log "INFO: uhm.env perms fixed -- fixed"
         else
             log "ERROR: cannot fix uhm.env perms -- abort"
             exit 1

@@ -188,6 +188,15 @@ err() { printf ' \e[31m \e[0m %s\n' "$*" >&2; log "ERROR: $*"; }
 step() { printf '\n-- %s ---------------------------------------------\n' "$*"; }
 abort() { err "$*"; exit 1; }
 
+# port in use
+check_port() {
+    local proto="$1" port="$2" role="$3"
+    if [ -n "$(ss -lnH "-${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
+        err "${proto^^} port $port in use by another $role"
+        abort "stop that service before installing -- abort"
+    fi
+}
+
 version_ge() {
     # version_ge A B -- returns 0 if version A >= version B
     [[ "$1" == "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" ]]
@@ -270,9 +279,8 @@ detect_dhcp_backend() {
     if $pydhcp_active; then
         info "DHCP backend detected: pydhcpd"
     else
-        err "pydhcpd is not active."
-        err "Install pydhcpd from https://github.com/maravento/pydhcp"
-        abort "DHCP backend required -- abort"
+        err "pydhcpd is not active"
+        abort "install it from https://github.com/maravento/pydhcp -- abort"
     fi
 }
 
@@ -324,7 +332,9 @@ load_pydhcp_conf() {
         grep -q "^${env_key}=" "$pydhcp_env" || missing_keys+=("$env_key")
     done
     if (( ${#missing_keys[@]} > 0 )); then
-        err "$pydhcp_env is missing pydhcp's own keys: ${missing_keys[*]}"
+        for env_key in "${missing_keys[@]}"; do
+            err "$pydhcp_env missing key $env_key"
+        done
         abort "re-run pydhcp pysetup.sh, or restore the backup -- abort"
     fi
 
@@ -361,8 +371,8 @@ ask_interface() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        err "interface '$user_answer' not found"
-        err "available: $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)"
+        info "interface '$user_answer' not found"
+        info "available: $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true) -- retry"
     done
 }
 
@@ -375,7 +385,7 @@ ask_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        err "'$user_answer' is not valid. Enter a positive integer."
+        info "'$user_answer' is not valid, enter a positive integer -- retry"
     done
 }
 
@@ -396,7 +406,7 @@ ask_ip() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        err "'$user_answer' is not a valid IPv4 address."
+        info "'$user_answer' is not a valid IPv4 address -- retry"
     done
 }
 
@@ -436,8 +446,8 @@ discover_unifi_controller() {
     login_payload=$(UH_JQ_USER="$unifi_user" UH_JQ_PASS="$unifi_pass" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
 
-    for check_port in "${check_ports[@]}"; do
-        test_url="https://${server_ip}:${check_port}"
+    for probe_port in "${check_ports[@]}"; do
+        test_url="https://${server_ip}:${probe_port}"
 
         # Body goes to curl via stdin (--data-binary @-), not -d, for the
         # same reason: -d "$login_payload" would put the password in curl's argv.
@@ -546,25 +556,25 @@ run_setup_wizard() {
         ask_ip "Hotspot range start" "${net_base}.160" cfg_ini_range
         ask_ip "Hotspot range end" "${net_base}.199" cfg_end_range
         if ! ip_le "$cfg_ini_range" "$cfg_end_range"; then
-            err "range start ${cfg_ini_range} is above range end"
-            err "range end is ${cfg_end_range}"
+            info "range start ${cfg_ini_range} is above range end"
+            info "range end is ${cfg_end_range} -- retry"
             continue
         fi
         if ! ip_in_network "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
            || ! ip_in_network "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
-            err "Range ${cfg_ini_range}-${cfg_end_range} falls outside"
-            err "  ${SERV_SUBNET}/${SERV_MASK}. Choose addresses inside the network."
+            info "Range ${cfg_ini_range}-${cfg_end_range} falls outside"
+            info "${SERV_SUBNET}/${SERV_MASK}, choose addresses inside it -- retry"
             continue
         fi
         if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
-            err "Range ${cfg_ini_range}-${cfg_end_range} includes the server's own IP"
-            err "  (${SERVER_IP}). Choose a different range."
+            info "Range ${cfg_ini_range}-${cfg_end_range} includes the server IP"
+            info "(${SERVER_IP}), choose a different range -- retry"
             continue
         fi
         if ranges_overlap "$cfg_ini_range" "$cfg_end_range" \
                            "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK"; then
-            err "Range ${cfg_ini_range}-${cfg_end_range} overlaps pydhcp's own pool"
-            err "  (${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}). Choose a different range."
+            info "Range ${cfg_ini_range}-${cfg_end_range} overlaps pydhcp's pool"
+            info "(${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}), choose another -- retry"
             continue
         fi
         break
@@ -575,7 +585,7 @@ run_setup_wizard() {
     while true; do
         read -rsp " UniFi admin password: " cfg_unifi_pass; echo ""
         [[ -n "$cfg_unifi_pass" ]] && break
-        err "Password cannot be empty."
+        info "Password cannot be empty -- retry"
     done
 
     step "UniFi controller discovery"
@@ -589,7 +599,7 @@ run_setup_wizard() {
         found_url="$discovered_url"
         found_type="$discovered_type"
     else
-        { err "no UniFi controller detected"; err "check credentials, and that it is running and reachable"; abort "if not installed, use unifisetup.sh first -- abort"; }
+        { err "no UniFi controller detected, check credentials"; abort "check it's running/reachable, or use unifisetup.sh -- abort"; }
     fi
 
     step "Hotspot SSID"
@@ -635,7 +645,7 @@ run_setup_wizard() {
         if [[ "$found_type" == "unifi-os" ]] && ! command -v podman &>/dev/null; then
             { err "cannot detect UniFi version: 'podman' not available"; abort "install podman, or use unifisetup.sh -- abort"; }
         fi
-        { err "cannot detect UniFi version (type: ${found_type})"; err "uhm supports only the versions tested to date"; abort "check the UniFi installation, then re-run -- abort"; }
+        { err "cannot detect UniFi version (type: ${found_type})"; abort "only tested versions supported, check the install -- abort"; }
     fi
     if ! version_ge "$detected_version" "$min_version"; then
         { err "UniFi ${detected_version} (${found_type}) is below ${min_version}"; abort "uhm needs ${min_version} or above -- abort"; }
@@ -662,7 +672,7 @@ run_setup_wizard() {
         info "TLS certificate pinned"
     else
         warn "Could not compute TLS certificate pin"
-        warn "  uhmd will connect without pinning"
+        warn "uhmd will connect without pinning -- alert"
     fi
 
     step "Reload script"
@@ -766,7 +776,7 @@ EOF
             if [[ "$env_line" == *=* && "$env_line" != \#* ]]; then
                 env_key="${env_line%%=*}"
                 if grep -q "^${env_key}=" "$pydhcp_env"; then
-                    warn "$env_key already set in $(basename "$pydhcp_env") -- not written again"
+                    info "$env_key already set in $(basename "$pydhcp_env") -- skip"
                     continue
                 fi
             fi
@@ -809,7 +819,7 @@ deploy_acl_files() {
         if [[ -f "$dest_path" ]]; then
             continue
         fi
-        [[ "$report_mode" == "warn" ]] && warn "$(basename "$dest_path") missing -- creating empty"
+        [[ "$report_mode" == "warn" ]] && warn "$(basename "$dest_path") missing -- alert"
         install -m 600 -o root -g root "$repo_file" "$dest_path"
     done
     info "ACL data files present in ${acl_dir}"
@@ -856,7 +866,7 @@ install_web() {
 
     for dep_pkg in apache2 libapache2-mod-php; do
         if ! dpkg -s "$dep_pkg" &>/dev/null; then
-            warn "'$dep_pkg' is not installed, web interface -- skip"
+            warn "'$dep_pkg' is not installed, web interface -- alert"
             return 1
         fi
     done
@@ -864,7 +874,7 @@ install_web() {
     if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
         net_prefix="${BASH_REMATCH[1]}"
     else
-        warn "cannot derive the prefix from $SERV_MASK, web interface -- skip"
+        warn "cannot derive the prefix from $SERV_MASK, web interface -- alert"
         return 1
     fi
 
@@ -880,7 +890,7 @@ install_web() {
     install -m 440 -o root -g root "${repo_web}/uhmweb.sudoers" "$sudoers_dest"
     if ! visudo -c -f "$sudoers_dest" &>/dev/null; then
         rm -f "$sudoers_dest"
-        warn "invalid sudo rule removed, web interface -- skip"
+        warn "invalid sudo rule removed, web interface -- alert"
         return 1
     fi
 
@@ -893,8 +903,8 @@ install_web() {
     a2ensite uhmweb &>/dev/null || true
 
     if ! apache2ctl configtest &>/dev/null; then
-        warn "apache configtest failed, not reloaded -- alert"
-        warn "  check $vhost_dest and run: systemctl reload apache2"
+        warn "apache configtest failed, not reloaded"
+        warn "check $vhost_dest, run: systemctl reload apache2 -- alert"
         return 1
     fi
     systemctl reload apache2 &>/dev/null || true
@@ -945,7 +955,7 @@ install_logrotate() {
     if [[ -f "$logrotate_file" ]]; then
         info "logrotate config already present at $logrotate_file"
     else
-        [[ "$report_mode" == "warn" ]] && warn "$(basename "$logrotate_file") missing -- creating it"
+        [[ "$report_mode" == "warn" ]] && warn "$(basename "$logrotate_file") missing -- alert"
         cat > "$logrotate_file" <<EOF
 ${uhm_log_file} {
     daily
@@ -983,14 +993,14 @@ final_sanity_check() {
 
     if [[ ! -x "$uhm_iptables_dest" ]]; then
         warn "uhmiptables.sh is missing or not executable"
-        warn "  ACL changes will not reach the firewall"
+        warn "ACL changes will not reach the firewall -- alert"
         (( issue_list++ )) || true
     fi
 
     if (( issue_list == 0 )); then
         info "All checks passed."
     else
-        warn "${issue_list} issue(s) need attention before uhm is fully functional."
+        warn "${issue_list} issue(s) need attention before uhm is fully functional -- alert"
     fi
 }
 
@@ -1001,8 +1011,8 @@ install_systemd_service() {
     if systemctl restart uhmd; then
         info "uhmd enabled and started"
     else
-        warn "Could not start uhmd -- alert"
-        warn "check it with: systemctl status uhmd"
+        warn "Could not start uhmd"
+        warn "check it with: systemctl status uhmd -- alert"
     fi
 }
 
@@ -1017,14 +1027,15 @@ do_install() {
     echo "------------------------------------------------------"
 
     if [[ -d "$hotspot_dir" ]]; then
-        abort "uhm is already installed at ${hotspot_dir}.
-  Use --update to upgrade (keeps config), or --remove to remove first."
+        err "uhm is already installed at ${hotspot_dir}"
+        abort "use --update to upgrade, or --remove first -- abort"
     fi
 
-    trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes"; perform_remove; }' EXIT
+    trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -- alert"; perform_remove; }' EXIT
 
     step "Preflight"
     check_repo_files
+    check_port tcp 4048 "web interface"
 
     step "Filesystem layout"
     deploy_directories
@@ -1130,10 +1141,10 @@ do_update() {
     fi
 
     if (( uhmd_was_active )); then
-        systemctl stop uhmd && info "uhmd stopped for update" || warn "Could not stop uhmd, continuing anyway"
+        systemctl stop uhmd && info "uhmd stopped for update" || warn "Could not stop uhmd, continuing anyway -- alert"
     fi
     if (( ualert_was_active )); then
-        systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert, continuing anyway"
+        systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert, continuing anyway -- alert"
     fi
     if (( uwatch_was_active )); then
         # Remove the active line outright (whichever path it used, current
@@ -1186,8 +1197,8 @@ do_update() {
         if systemctl restart uhmd; then
             info "uhmd restarted"
         else
-            warn "Could not restart uhmd -- alert"
-            warn "check it with: systemctl status uhmd"
+            warn "Could not restart uhmd"
+            warn "check it with: systemctl status uhmd -- alert"
         fi
     else
         info "uhmd was not active before the update, left stopped"
@@ -1197,7 +1208,7 @@ do_update() {
     # Only restore what this update itself paused above -- never start
     # something the administrator had deliberately left stopped/disabled.
     if (( ualert_was_active )); then
-        systemctl start uhmalert && info "uhmalert restarted" || { warn "Could not restart uhmalert -- alert"; warn "check it with: systemctl status uhmalert"; }
+        systemctl start uhmalert && info "uhmalert restarted" || { warn "Could not restart uhmalert"; warn "check it with: systemctl status uhmalert -- alert"; }
     fi
     if (( uwatch_was_active )); then
         # Re-registers a clean entry at the current core/ path -- also
@@ -1250,21 +1261,21 @@ do_remove() {
     echo "------------------------------------------------------"
 
     echo ""
-    warn "This will permanently remove, without asking again:"
-    warn "  - uhmd.service (stopped and disabled) and $service_dest"
-    warn "  - cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
-    warn "  - the uhmwatch cron entry"
-    warn "  - uhmalert.service if installed"
-    warn "  - the web interface, its vhost and its sudo rule, if installed"
-    warn "  - ${logrotate_file}"
-    warn "  - ${hotspot_dir}"
-    warn "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
-    warn "    Run ${uhmbk_script} first if you want a backup"
-    warn "  - ${uhm_log_file}, rotated logs"
-    warn "  - uhmunifi.log and reload failure traces"
-    warn "/etc/bak is NOT touched."
-    warn "Package dependencies"
-    warn "  (curl, jq, iptables, ipset, etc.) are NOT removed."
+    info "This will permanently remove, without asking again:"
+    info "  - uhmd.service (stopped and disabled) and $service_dest"
+    info "  - cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
+    info "  - the uhmwatch cron entry"
+    info "  - uhmalert.service if installed"
+    info "  - the web interface, its vhost and its sudo rule, if installed"
+    info "  - ${logrotate_file}"
+    info "  - ${hotspot_dir}"
+    info "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
+    info "    Run ${uhmbk_script} first if you want a backup"
+    info "  - ${uhm_log_file}, rotated logs"
+    info "  - uhmunifi.log and reload failure traces"
+    info "/etc/bak is NOT touched."
+    info "Package dependencies"
+    info "  (curl, jq, iptables, ipset, etc.) are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" || { info "Aborted by user."; exit 0; }
 
@@ -1424,7 +1435,7 @@ main() {
             exit 0
             ;;
         *)
-            err "Unknown option: $1"
+            err "Unknown option: $1 -- abort"
             usage
             exit 1
             ;;

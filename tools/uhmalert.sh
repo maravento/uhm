@@ -118,7 +118,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed"
+            log "INFO: uhm.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -178,8 +178,8 @@ install_module() {
     echo ""
 
     if [[ ! -f "$config_file" ]]; then
-        echo "ERROR: $config_file not found" >&2
-        echo "ERROR: install and configure uhm first -- abort" >&2
+        log "ERROR: $config_file not found"
+        log "ERROR: install and configure uhm first -- abort"
         exit 1
     fi
 
@@ -306,7 +306,7 @@ file_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
 file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
 if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
     if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "INFO: uhm.env perms fixed"
+        log "INFO: uhm.env perms fixed -- fixed"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
         exit 1

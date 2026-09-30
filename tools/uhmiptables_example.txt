@@ -97,7 +97,7 @@ load_conf() {
         case "$env_key" in
             INTERFACESv4|\
             SERVER_IP|SERV_SUBNET|SERV_MASK|SERV_DNS|\
-            UHM_PATH|ACL_PATH|\
+            UHM_PATH|ACL_PATH|WAN_IFACE|\
             ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_GRACE|UHM_MACAUTH|WPAD_PORT)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
@@ -140,7 +140,7 @@ load_conf "$uhm_conf" || true
 
 # WAN is a placeholder: uhmsetup.sh replaces it with sed -i during the
 # setup wizard, after asking and listing available interfaces.
-wan_iface="eth0"
+wan_iface="${WAN_IFACE:-eth0}"
 INTERFACESv4="${INTERFACESv4:-eth1}"
 SERV_SUBNET="${SERV_SUBNET:-192.168.0.0}"
 SERVER_IP="${SERVER_IP:-192.168.0.10}"

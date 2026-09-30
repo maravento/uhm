@@ -60,18 +60,15 @@
 #
 # DEPENDENCIES : curl, jq, coreutils, util-linux, grep, sed
 # CONFIG       : /etc/uhm/uhm.env
-# LOG          : /var/log/uhmunifi.log
 #
 # GLOBALS BY DESIGN:
 # session_cookie and csrf_token are set by do_login() and read by api_get()
 # and api_post() on every request. They cannot be declared local.
 #
-# NOTE on logging:
-# - Manual/interactive script, not a daemon: the log file is truncated
-#   at the start of every run, so it always reflects only the latest
-#   session. It records the login/fetch summary and every action taken;
-#   Check MAC is terminal-only, on demand, same as an action's own tables.
-#   No rotation is needed or installed for this file.
+# LOG: /var/log/uhmunifi.log, truncated at the start of every run
+#      Interactive script, not a daemon, so the file holds one session only
+#      and needs no rotation. It records the login summary and every action
+#      taken; Check MAC prints to the terminal only, on demand
 #
 ################################################################################
 
@@ -124,7 +121,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhmunifi.log perms fixed"
+            log "INFO: uhmunifi.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix uhmunifi.log perms -- alert"
         fi
@@ -316,7 +313,7 @@ api_get() {
     http_code=$(echo "$raw_response" | grep '__CODE__:' | cut -d: -f2 | tr -d '\r\n')
     response_body=$(echo "$raw_response" | grep -v '__CODE__:')
     if [[ "$http_code" == "401" ]]; then
-        echo "INFO: Session expired -- re-authenticating" >&2
+        log "INFO: session expired, re-authenticating"
         do_login
         raw_response=$(curl -s "${tls_opts[@]}" -X GET \
             --connect-timeout 10 --max-time 30 \
@@ -343,7 +340,7 @@ api_post() {
         "$api_base_url/$1")
     http_code=$(echo "$raw_response" | grep '__CODE__:' | cut -d: -f2 | tr -d '\r\n')
     if [[ "$http_code" == "401" ]]; then
-        echo "INFO: Session expired -- re-authenticating" >&2
+        log "INFO: session expired, re-authenticating"
         do_login
         raw_response=$(curl -s "${tls_opts[@]}" -X POST \
             --connect-timeout 10 --max-time 30 \
@@ -453,7 +450,7 @@ print_mac_status() {
     printf "  hostname=%s\n" "$client_name"
 
     if [[ "$guest_rc" != "ok" ]]; then
-        echo "stat/guest unavailable, voucher_code not shown -- skip"
+        echo "stat/guest unavailable, voucher_code not shown"
     else
         local voucher_code
         voucher_code=$(echo "$guest_json" | jq -r --arg m "$mac_addr" '
@@ -463,8 +460,7 @@ print_mac_status() {
     fi
 
     if [[ "$sta_authorized" == "false" && "$is_guest" == "true" ]]; then
-        echo "WARNING: UniFi reports this MAC unauthorized on a Guest WLAN"
-        echo "WARNING: the AP holds it at the captive portal regardless of local ACL/DHCP state"
+        echo "unauthorized on a Guest WLAN -- held at the captive portal"
     fi
 }
 

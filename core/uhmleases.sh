@@ -97,8 +97,7 @@
 # 4. Set WPAD_ENABLED=true in pydhcp.env
 # The lines are only written if http://SERVER_IP:WPAD_PORT/wpad.pac answers 200
 #
-# NOTE on logging:
-# - Writes to a log file shared with the rest of the reload chain.
+# LOG: /var/log/uhm.log, shared with the rest of the reload chain
 #
 ################################################################################
 
@@ -127,7 +126,7 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed"
+            log "INFO: uhm.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix uhm.log perms -- alert"
         fi
@@ -224,7 +223,7 @@ env_owner=$(stat -c '%U' "$env_file" 2>/dev/null)
 env_perms=$(stat -c '%a' "$env_file" 2>/dev/null)
 if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
     if chown root:root "$env_file" 2>/dev/null && chmod 600 "$env_file" 2>/dev/null; then
-        log "INFO: uhm.env perms fixed"
+        log "INFO: uhm.env perms fixed -- fixed"
     else
         log "ERROR: cannot fix uhm.env perms -- abort"
         exit 1
@@ -309,14 +308,19 @@ unset range_var_name
 # pydhcpd.conf for a network that is not this one, and the DHCP server
 # would hand out addresses nobody can reach. pysetup.sh always writes
 # them, so a missing key means pydhcp.env was edited or truncated.
+missing_pydhcp_keys=()
 for required_key in SERV_MASK SERV_DNS SERV_SUBNET SERV_BROADCAST \
           SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERVER_IP; do
-    if [ -z "${!required_key:-}" ]; then
-        log "ERROR: $required_key not set in pydhcp.env"
-        log "ERROR: re-run pydhcp pysetup.sh, or restore it -- abort"
-        exit 1
-    fi
+    [ -z "${!required_key:-}" ] && missing_pydhcp_keys+=("$required_key")
 done
+unset required_key
+if (( ${#missing_pydhcp_keys[@]} > 0 )); then
+    for required_key in "${missing_pydhcp_keys[@]}"; do
+        log "ERROR: $required_key not set in pydhcp.env"
+    done
+    log "ERROR: re-run pydhcp pysetup.sh, or restore it -- abort"
+    exit 1
+fi
 unset required_key
 
 for ip_var_name in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
@@ -369,10 +373,8 @@ elif pool_start <= hotspot_end and hotspot_start <= pool_end:
     print('the block-pool range overlaps the hotspot range')
 " "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$UHM_INI_RANGE" "$UHM_END_RANGE" 2>/dev/null)
 if [[ -n "$range_conflict" ]]; then
-    log "ERROR: $range_conflict"
-    log "ERROR: SERVER_IP=$SERVER_IP"
-    log "ERROR: block-pool=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK"
-    log "ERROR: hotspot=$UHM_INI_RANGE-$UHM_END_RANGE -- abort"
+    log "ERROR: $range_conflict, SERVER_IP=$SERVER_IP"
+    log "ERROR: blk=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK hs=$UHM_INI_RANGE-$UHM_END_RANGE -- abort"
     exit 1
 fi
 unset range_conflict
@@ -569,7 +571,7 @@ ensure_acl_lists() {
         file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
         if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
             if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "INFO: $(basename "$check_file") perms fixed"
+                log "INFO: $(basename "$check_file") perms fixed -- fixed"
             else
                 log "ERROR: cannot fix $(basename "$check_file") perms -- abort"
                 exit 1

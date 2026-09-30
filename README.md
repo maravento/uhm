@@ -34,10 +34,6 @@
   </tr>
 </table>
 
-## Architecture
-
-📐 [Runtime Architecture Diagram](https://htmlpreview.github.io/?https://raw.githubusercontent.com/maravento/uhm/master/docs/uhm-architecture.html) — visual walkthrough of the UniFi/DHCP/firewall reload pipeline.
-
 ## UNIFI HARDWARE VS UHM
 
 ---
@@ -364,6 +360,8 @@ uhm/                      # as cloned -- see note above
 │                            # fine without any of these
 │   ├── uhmalert.sh               # optional watcher that tails the log and pushes
 │   │                             # notifications via ntfy.sh
+│   ├── uhmbk.sh                  # backs up uhm's own files into /etc/bak/uhm,
+│   │                             # run monthly through cron
 │   ├── uhmiptables.sh            # minimal template (IPv4 forwarding + NAT) -- deployed
 │   │                             # only if missing, never overwritten afterward
 │   ├── uhmiptables_example.txt   # full reference ruleset (ipsets, iptables, redirects)
@@ -2014,7 +2012,7 @@ Two separate triggers invoke `uhmreload.sh`, each logged differently so the reas
 | Trigger | Log line | Description | Descripción |
 |--------|-----------|--------------|---------------|
 | Cycle | `2026-07-23 22:01:31 INFO: invoking /etc/uhm/core/uhmreload.sh` | The normal case: an ACL file actually changed (or `RELOAD_SAFETY_INTERVAL_SECONDS` elapsed), detected in `check_and_reload_if_changed()` every `POLL_INTERVAL` | El caso normal: una ACL realmente cambió (o venció `RELOAD_SAFETY_INTERVAL_SECONDS`), detectado en `check_and_reload_if_changed()` en cada `POLL_INTERVAL` |
-| Startup | `2026-08-11 07:53:05 INFO: Startup -- invoking uhmreload (ACLs + firewall)` | On every `uhmd.sh` start, regardless of ACL state: iptables/ipset rules don't survive a reboot even if the ACL files themselves didn't change, so this one fires unconditionally instead of waiting for a diff | En cada inicio de `uhmd.sh`, sin importar el estado de las ACLs: las reglas de iptables/ipset no sobreviven un reboot aunque los archivos ACL no hayan cambiado, así que esta se dispara sin condición en vez de esperar un diff |
+| Startup | `2026-08-11 07:53:05 INFO: startup, invoking uhmreload` | On every `uhmd.sh` start, regardless of ACL state: iptables/ipset rules don't survive a reboot even if the ACL files themselves didn't change, so this one fires unconditionally instead of waiting for a diff | En cada inicio de `uhmd.sh`, sin importar el estado de las ACLs: las reglas de iptables/ipset no sobreviven un reboot aunque los archivos ACL no hayan cambiado, así que esta se dispara sin condición en vez de esperar un diff |
 
 #### Failure handling
 
@@ -2720,7 +2718,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 |---|---|---|
 | `ERROR:` | Exclusively for a message that aborts the current flow -- the script or the calling function stops right there, nothing after it runs. Always paired with the `-- abort` suffix. | Exclusivo para un mensaje que aborta el flujo actual -- el script o la función que lo invoca se detiene ahí mismo, nada después corre. Siempre acompañado del sufijo `-- abort`. |
 | `WARNING:` | Something is seriously wrong and needs the administrator's immediate attention, but execution does not abort. Paired with `-- alert` (a live condition needing supervision, e.g. a possible attack or resource saturation) or `-- fallback` (the administrator supplied a bad/out-of-range value in the config, and the script used a built-in default instead -- the value must be corrected). | Algo anda mal y requiere atención inmediata del administrador, pero la ejecución no aborta. Acompañado de `-- alert` (una condición en vivo que amerita supervisión, ej. un posible ataque o saturación de recursos) o `-- fallback` (el administrador puso un valor malo o fuera de rango en la configuración, y el script usó un valor por defecto en su lugar -- ese valor debe corregirse). |
-| `INFO:` | Routine state changes and notifications -- everything else, including anything skipped, defaulted, or self-healed without needing administrator attention. Flag is optional: `-- skip`, `-- degraded`, `-- retry`, `-- fixed`, or none. | Cambios de estado rutinarios y notificaciones -- todo lo demás, incluyendo lo omitido, resuelto con un valor por defecto, o auto-reparado sin necesitar atención del administrador. El flag es opcional: `-- skip`, `-- degraded`, `-- retry`, `-- fixed`, o ninguno. |
+| `INFO:` | Routine state changes and notifications -- everything else, including anything skipped, defaulted, or self-healed without needing administrator attention. Flag is optional, used only when necessary: `-- skip`, `-- retry`, `-- fixed`, or none. | Cambios de estado rutinarios y notificaciones -- todo lo demás, incluyendo lo omitido, resuelto con un valor por defecto, o auto-reparado sin necesitar atención del administrador. El flag es opcional, solo cuando es necesario: `-- skip`, `-- retry`, `-- fixed`, o ninguno. |
 | `STATUS` (no prefix) | Level-less lines: each script's own `"<name> start..."`/`"<name> done"` boundary markers, and the compact `field=value\|field=value` counters -- grouped under this generic label only by the LogView tab of the web interface, not written as `STATUS:` in the log itself. | Líneas sin nivel: las marcas de inicio/cierre `"<nombre> start..."`/`"<nombre> done"` de cada script, y los contadores compactos `campo=valor\|campo=valor` -- agrupadas bajo esta etiqueta genérica solo por la pestaña LogView de la interfaz web, no se escriben como `STATUS:` en el log real. |
 
 > `uhmalert.sh` sends push notifications only for `ERROR:`/`WARNING:` lines. For pydhcp's own log format and levels, see [pydhcp -- Log levels](../pydhcp/README.md#log-levels).
@@ -2736,11 +2734,11 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 | `INFO: ... -- skip` | The step is skipped and retried next cycle | El paso se salta y se reintenta en el siguiente ciclo | `API GET stat/sta -> HTTP 000 -- skip` |
 | `INFO:` | Logged once, when all three endpoints answer together | Se registra una vez, cuando los tres endpoints responden juntos | `UniFi backend ready (voucher/guest/sta OK)` |
 | `WARNING: ... -- fallback` | The documented default is used | Se usa el valor por defecto documentado | `no CLEANUP_INTERVAL in pydhcp.env -- fallback` |
-| `INFO:` | Self-healed, nothing for the admin to do | Auto-reparado, nada que el administrador deba hacer | `uhm.env perms fixed` |
+| `INFO: ... -- fixed` | Self-healed, nothing for the admin to do | Auto-reparado, nada que el administrador deba hacer | `uhm.env perms fixed -- fixed` |
 | `WARNING: ... -- alert` | The MACs stay queued and are harmlessly reprocessed next cycle -- never a permissions issue (runs as root); check free space, a read-only mount, or the immutable attribute (`lsattr`, cleared with `chattr -i`) | Los MACs quedan en cola y se reprocesan sin efecto en el siguiente ciclo -- nunca es un problema de permisos (corre como root); revise espacio libre, montaje de solo lectura, o el atributo de inmodificable (`lsattr`, se quita con `chattr -i`) | `cannot empty uhm-queue.txt -- alert` |
 | `WARNING: ... -- alert` | The previous config is restored; the next cycle retries | Se restaura la configuración anterior; el siguiente ciclo reintenta | `uhmreload failed (code 1), back off -- alert` |
-| `WARNING: ... -- alert` | `uhmwatch.sh` found the service down | `uhmwatch.sh` encontró el servicio caído | `pydhcpd OFFLINE` · `uhmd restart FAILED -- alert` |
-| `ERROR: ... -- abort` | The script stops before touching anything | El script se detiene antes de tocar nada | `missing dependency 'jq' -- abort` · `uhm.env not found -- abort` |
+| `WARNING: ... -- alert` | `uhmwatch.sh` found the service down | `uhmwatch.sh` encontró el servicio caído | `pydhcpd OFFLINE -- alert` · `uhmd restart FAILED -- alert` |
+| `ERROR: ... -- abort` | The script stops before touching anything | El script se detiene antes de tocar nada | `missing dependency 'jq' -- abort` · `uhm.env not found, run uhmsetup.sh -- abort` |
 | `ERROR: ... -- abort` | Every offending entry is listed before aborting | Se listan todas las entradas implicadas antes de abortar | `mac-*.txt IP conflict -- abort` |
 
 ```text
@@ -2986,14 +2984,6 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 
 **Optional tunnel:**
 - [Cloudflare Tunnel with Zero Trust Recommended](https://raw.githubusercontent.com/maravento/vault/master/scripts/bash/cftunnel.sh)
-
-## WORKTOOLS
-
----
-
-- [Archify](https://github.com/tt-a1i/archify)
-- [Apache HTTP Server](https://httpd.apache.org/) (optional, required by the web interface)
-- [Maintenance Scripts (uhmalert, uhmiptables, uhmtool, uhmunifi)](https://github.com/maravento/uhm/tree/master/tools)
 
 ## NOTICE
 
