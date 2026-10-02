@@ -221,6 +221,7 @@
       padding: 24px;
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      transition: opacity 0.3s ease;
     }
 
     .spinner {
@@ -312,7 +313,7 @@
           <div class="spinner" aria-hidden="true"></div>
           <div class="loading-text">Loading ACL...</div>
         </div>
-        <iframe class="iframe-full" src="aclview/index.php" onload="hideLoading(this)"></iframe>
+        <iframe class="iframe-full" src="aclview/index.php" loading="lazy" onload="hideLoading(this)"></iframe>
       </div>
 
       <div id="toolview" class="tab-content">
@@ -320,7 +321,7 @@
           <div class="spinner" aria-hidden="true"></div>
           <div class="loading-text">Loading Tool...</div>
         </div>
-        <iframe class="iframe-full" src="toolview/index.php" onload="hideLoading(this)"></iframe>
+        <iframe class="iframe-full" src="toolview/index.php" loading="lazy" onload="hideLoading(this)"></iframe>
       </div>
     </div>
   </main>
@@ -336,7 +337,7 @@
       document.documentElement.classList.toggle('dark', darkMode);
       themeButton.innerHTML = darkMode ? '&#9728;&#65039;' : '&#127769;';
       document.querySelectorAll('iframe').forEach(function (frame) {
-        try { frame.contentWindow.postMessage({ uhDark: darkMode }, '*'); } catch (e) { /* not loaded yet */ }
+        try { frame.contentWindow.postMessage({ uhDark: darkMode }, window.location.origin); } catch (e) { /* not loaded yet */ }
       });
     }
 
@@ -369,6 +370,15 @@
         other.classList.remove('active');
       });
       panel.classList.add('active');
+
+      var frame = panel.querySelector('iframe');
+      if (frame) {
+        try { frame.contentWindow.postMessage({ uhDark: darkMode }, window.location.origin); } catch (e) { /* not loaded yet */ }
+      }
+
+      var newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('tab', target);
+      window.history.replaceState({}, '', newUrl);
     }
 
     document.querySelectorAll('.tabs-pro .tab-pro').forEach(function (button) {

@@ -15,19 +15,20 @@
 #
 # Run from inside the cloned repo. The script expects to find:
 # ./core/uhmd.sh
-# ./service/uhmd.service
+# ./config/service/uhmd.service
 # ./core/uhmreload.sh
 # ./core/uhmleases.sh
 # ./core/uhmwatch.sh
 # ./tools/uhmunifi.sh
 # ./tools/uhmtool.sh
 # ./tools/uhmalert.sh
-# ./tools/uhmiptables.sh (minimal template -- deployed only when absent)
-# ./tools/uhmiptables_example.txt (reference example only, never deployed)
+# ./tools/uhmiptables.sh (placeholder -- deployed only when absent)
+# ./tools/uhmiptables_example.txt (reference ruleset -- deployed, not run)
 # ./acl/uhm-auth.txt
 # ./acl/uhm-queue.txt
 # ./acl/uhm-grace.txt
 # ./web/ (web interface -- deployed only when the panel is accepted)
+# ./config/ (server configuration -- never published under the web root)
 #
 # core/ holds the reload mechanism (uhmleases.sh reconciles ACLs/leases,
 # uhmreload.sh invokes it, uhmd.sh/.service run the daemon that calls
@@ -40,11 +41,12 @@
 # overwritten afterward) --
 # not to be confused with /etc/acl, which belongs to pydhcp/iptables.
 #
-# tools/uhmiptables.sh is a minimal but working template (IPv4 forwarding +
-# NAT). tools/uhmiptables_example.txt is the full reference ruleset, never
-# deployed -- the administrator copies it over uhmiptables.sh and adapts it
-# manually. deploy_scripts() below excludes uhmiptables.sh
-# from the tools/*.sh deploy loop; it is never installed automatically.
+# tools/uhmiptables.sh is a placeholder: IPv4 forwarding and NAT, nothing
+# else. tools/uhmiptables_example.txt is the full reference ruleset. Both are
+# deployed side by side, and the placeholder's header tells the administrator
+# how to copy the example over it. Only the placeholder is executable.
+# deploy_scripts() below excludes uhmiptables.sh from the tools/*.sh deploy
+# loop, so a customized file is never overwritten.
 #
 # DEPENDENCIES:
 # Hard dependencies (checked before anything else; aborts if any is missing --
@@ -69,9 +71,9 @@
 #
 # CONFIG FILE (uhm.env):
 # Holds only uhm's own keys: UniFi credentials, guest SSID, hotspot range,
-# timers and paths. WAN interface is not a key here -- it is written as a
-# placeholder replacement directly into uhmiptables.sh (see Setup wizard),
-# the only script that uses it. pydhcp's values are never copied here -- every
+# timers and paths. WAN interface is not a key here -- WAN_IFACE is pydhcp's
+# own shared key, and the scripts that need it read it from pydhcp.env.
+# pydhcp's values are never copied here -- every
 # component reads pydhcp.env first and uhm.env after, so a change made in
 # pydhcp.env reaches uhm without a re-install. A key already present in
 # pydhcp.env is skipped instead of written a second time, and the skip is
@@ -83,9 +85,7 @@
 # uhmd.sh/uhmreload.sh/uhmleases.sh/uhmwatch.sh/uhmalert.sh) so install,
 # update and remove runs never mix with daily operation -- and so their
 # WARNING/ERROR lines never reach uhmalert.sh, which pushes a notification
-# for every one of them it finds in uhm.log. Appended across runs, so an
-# install can be compared against the updates that followed it.
-# Rewritten on each run.
+# for every one of them it finds in uhm.log. Rewritten on each run.
 #
 ################################################################################
 
@@ -160,21 +160,26 @@ web_port="4048"
 vhost_dest="/etc/apache2/sites-available/uhmweb.conf"
 sudoers_dest="/etc/sudoers.d/uhmweb"
 apache_ports="/etc/apache2/ports.conf"
+wpad_root="/var/www/wpad"
+wpad_vhost_dest="/etc/apache2/sites-available/wpad.conf"
 
 # Repo file expectations (relative to this script)
 repo_core="${script_dir}/core"
 repo_tools="${script_dir}/tools"
 repo_acl="${script_dir}/acl"
 repo_uhmd="${repo_core}/uhmd.sh"
-repo_service="${script_dir}/service/uhmd.service"
 repo_web="${script_dir}/web"
+repo_config="${script_dir}/config"
+repo_wpad="${repo_config}/wpad"
+repo_uhmweb="${repo_config}/uhmweb"
+repo_service="${repo_config}/service/uhmd.service"
 
 # Required apt packages
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmunifi or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate)
+apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip)
 
 # Discovered runtime values (filled during install)
 
@@ -203,15 +208,10 @@ version_ge() {
 }
 
 # validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
-UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
-UH_MAC="^${UH_MAC_RE}$"
 UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # ------------------------------------------------------------------------------
@@ -258,6 +258,7 @@ check_repo_files() {
     [[ -d "$repo_tools" ]] || { err "missing tools/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_acl" ]] || { err "missing acl/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_web" ]] || { err "missing web/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -d "$repo_config" ]] || { err "missing config/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     info "Repo files located"
 }
 
@@ -270,6 +271,50 @@ check_apt_deps() {
         { err "missing package(s): ${missing_pkgs[*]}"; abort "install them with apt, then re-run -- abort"; }
     fi
     info "All apt dependencies present: ${apt_deps[*]}"
+}
+
+# Aborts if software uhm would collide with is already installed. Same shape
+# as gateproxy's own check, but a shorter list: apache2 and pydhcp are uhm's
+# own components, and squid is what the reference ruleset expects, so none of
+# the three is a conflict here.
+check_conflicts() {
+    local role="$1"; shift
+    local found=() dep_pkg
+    for dep_pkg in "$@"; do
+        if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
+            found+=("$dep_pkg")
+        fi
+    done
+    if (( ${#found[@]} > 0 )); then
+        for dep_pkg in "${found[@]}"; do
+            err "conflicting $role package: $dep_pkg"
+        done
+        abort "remove them with apt purge, then re-run -- abort"
+    fi
+}
+
+# Installed but not necessarily in the way -- reported, never fatal
+warn_overlap() {
+    local feature="$1"; shift
+    local dep_pkg
+    for dep_pkg in "$@"; do
+        if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
+            warn "$dep_pkg installed, keep its $feature disabled -- alert"
+        fi
+    done
+}
+
+check_preinstalled() {
+    info "Checking for conflicting pre-installed packages..."
+    check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
+    check_conflicts "web server"  nginx lighttpd caddy
+    check_conflicts "firewall"    firewalld
+    warn_overlap "dhcp" dnsmasq
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "^Status: active"; then
+        err "ufw is active, conflicts with uhm's iptables rules"
+        abort "disable it with: ufw disable -- abort"
+    fi
+    info "No conflicting packages found"
 }
 
 detect_dhcp_backend() {
@@ -301,12 +346,13 @@ load_conf() {
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
             exit 1
         fi
         case "$env_key" in
             SERVER_IP|SERV_MASK|SERV_SUBNET|SERV_BROADCAST|SERV_DNS|\
-            SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK)
+            SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|\
+            WPAD_ENABLED|WPAD_PORT)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
         esac
@@ -360,20 +406,6 @@ ask() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     read -rp " ${prompt_text} [${default_value}]: " user_answer
     printf -v "$target_var" '%s' "${user_answer:-$default_value}"
-}
-
-ask_interface() {
-    local prompt_text="$1" default_value="$2" target_var="$3" user_answer
-    while true; do
-        read -rp " ${prompt_text} [${default_value}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if ip link show "$user_answer" &>/dev/null; then
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        info "interface '$user_answer' not found"
-        info "available: $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true) -- retry"
-    done
 }
 
 ask_number() {
@@ -516,7 +548,6 @@ fetch_unifi_ssids() {
 # SETUP WIZARD
 # Collects every value uhm.env needs and writes the block
 run_setup_wizard() {
-    local wan_iface
     local cfg_ini_range cfg_end_range cfg_essid
     local cfg_unifi_user cfg_unifi_pass cfg_reload_script
     local found_url found_type
@@ -526,23 +557,11 @@ run_setup_wizard() {
     echo "uhm -- Interactive Setup"
     echo "------------------------------------------------------"
 
-    step "Network"
-    # WAN interface is uhm's own: a value another project may have written
-    # into pydhcp.env belongs to that project, not to the ecosystem, so uhm
-    # asks for its own. The answer is not stored in uhm.env -- it replaces
-    # the "eth0" placeholder directly in uhmiptables.sh, the only script
-    # that uses it.
-    local iface_list
-    iface_list=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | tr '\n' ' ' || true)
-    echo "Available interfaces: $iface_list"
-    ask_interface "WAN interface" "eth0" wan_iface
-    if [[ -f "$uhm_iptables_dest" ]]; then
-        sed -i "s:eth0:$wan_iface:g" "$uhm_iptables_dest"
-    fi
-
     step "pydhcp network configuration"
+    # WAN_IFACE is not asked here. pysetup.sh writes it into pydhcp.env as a
+    # shared key, and every script that needs it reads it from there.
     info "Loaded from $pydhcp_env"
-    info "  Server IP: $SERVER_IP  Mask: $SERV_MASK  DNS: $SERV_DNS"
+    info "  IP $SERVER_IP  mask $SERV_MASK  dns $SERV_DNS"
 
     step "Hotspot IP range"
     # Two full addresses, the same shape pydhcp already uses for its own pool
@@ -563,7 +582,7 @@ run_setup_wizard() {
         if ! ip_in_network "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
            || ! ip_in_network "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
             info "Range ${cfg_ini_range}-${cfg_end_range} falls outside"
-            info "${SERV_SUBNET}/${SERV_MASK}, choose addresses inside it -- retry"
+            info "${SERV_SUBNET}/${SERV_MASK}, use addresses inside it -- retry"
             continue
         fi
         if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
@@ -584,6 +603,13 @@ run_setup_wizard() {
     ask "UniFi admin username" "admin" cfg_unifi_user
     while true; do
         read -rsp " UniFi admin password: " cfg_unifi_pass; echo ""
+        # load_conf rejects a value that starts or ends with a quote or a
+        # space, so uhmd would abort on every start.
+        if [[ "$cfg_unifi_pass" == [\"\'[:space:]]* \
+           || "$cfg_unifi_pass" == *[\"\'[:space:]] ]]; then
+            info "Password cannot start or end with a quote or space -- retry"
+            continue
+        fi
         [[ -n "$cfg_unifi_pass" ]] && break
         info "Password cannot be empty -- retry"
     done
@@ -850,12 +876,19 @@ deploy_scripts() {
 }
 
 deploy_uhmiptables() {
+    # The reference ruleset is not customized data: it is deployed on every
+    # run, before the placeholder guard below, so --update refreshes it and a
+    # host installed before it existed also gets it.
+    install -m 644 -o root -g root "${repo_tools}/uhmiptables_example.txt" \
+        "${tools_dir}/uhmiptables_example.txt"
+    info "Reference ruleset: ${tools_dir}/uhmiptables_example.txt"
+
     if [[ -f "$uhm_iptables_dest" ]]; then
         info "uhmiptables.sh already exists -- skip"
         return 0
     fi
     install -m 750 -o root -g root "${repo_tools}/uhmiptables.sh" "$uhm_iptables_dest"
-    info "Minimal template deployed to $uhm_iptables_dest (routing + NAT only)"
+    info "Placeholder deployed to $uhm_iptables_dest"
 }
 
 # Deploys the web interface: pages under $web_root, the vhost, the sudo
@@ -874,7 +907,7 @@ install_web() {
     if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
         net_prefix="${BASH_REMATCH[1]}"
     else
-        warn "cannot derive the prefix from $SERV_MASK, web interface -- alert"
+        warn "cannot derive prefix from $SERV_MASK, web panel -- alert"
         return 1
     fi
 
@@ -884,10 +917,10 @@ install_web() {
     find "$web_root" -type d -exec chmod 755 {} +
     find "$web_root" -type f -exec chmod 644 {} +
 
-    install -m 644 -o root -g root "${repo_web}/uhmweb.conf" "$vhost_dest"
+    install -m 644 -o root -g root "${repo_uhmweb}/uhmweb.conf" "$vhost_dest"
     sed -i "s|192.168.0.0/24|${SERV_SUBNET}/${net_prefix}|g" "$vhost_dest"
 
-    install -m 440 -o root -g root "${repo_web}/uhmweb.sudoers" "$sudoers_dest"
+    install -m 440 -o root -g root "${repo_uhmweb}/uhmweb.sudoers" "$sudoers_dest"
     if ! visudo -c -f "$sudoers_dest" &>/dev/null; then
         rm -f "$sudoers_dest"
         warn "invalid sudo rule removed, web interface -- alert"
@@ -904,13 +937,124 @@ install_web() {
 
     if ! apache2ctl configtest &>/dev/null; then
         warn "apache configtest failed, not reloaded"
-        warn "check $vhost_dest, run: systemctl reload apache2 -- alert"
+        warn "check $(basename "$vhost_dest"), run: systemctl reload apache2 -- alert"
         return 1
     fi
     systemctl reload apache2 &>/dev/null || true
 
     info "Web interface available at http://${SERVER_IP}:${web_port}/"
     return 0
+}
+
+# Deploys the WPAD/PAC infrastructure: an apache2 virtualhost on WPAD_PORT,
+# the PAC file under $wpad_root, and the WPAD_ENABLED flip in pydhcp.env.
+#
+# pydhcp decides whether to announce DHCP option 252 by probing the PAC URL,
+# in pysetup.sh, and re-checks it on every reload, in pyleases.sh. It never
+# serves the PAC itself, so on a pydhcp-first install that probe fails and
+# WPAD_ENABLED lands as false. uhm is the component that can serve it, so
+# uhm is the one that asks.
+install_wpad() {
+    local wpad_port squid_port pac_proxy
+    wpad_port="${WPAD_PORT:-18100}"
+    pac_proxy=""
+
+    if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+        info "WPAD already enabled in $pydhcp_env -- skip"
+        return 0
+    fi
+
+    echo "WPAD serves a proxy auto-config file over HTTP, and pydhcp"
+    echo "announces its URL as DHCP option 252. It is off because nothing"
+    echo "was serving a PAC file on port ${wpad_port} when pydhcp was"
+    echo "installed. Enabling it adds an apache2 virtualhost on that port."
+    confirm "WPAD is disabled. Enable it?" "n" || return 0
+
+    # The PAC is built from what is actually running. A proxy line only makes
+    # sense if squid answers, otherwise a client honouring option 252 waits
+    # for a port nothing listens on before falling back to DIRECT.
+    # Three server package names exist: squid is the GnuTLS flavour,
+    # squid-openssl the OpenSSL one gateproxy installs, squid3 the legacy name.
+    if dpkg -s squid &>/dev/null || dpkg -s squid-openssl &>/dev/null \
+       || dpkg -s squid3 &>/dev/null; then
+        squid_port=$(awk '$1=="http_port"{print $2; exit}' /etc/squid/squid.conf 2>/dev/null)
+        squid_port="${squid_port##*:}"
+        if [[ "$squid_port" =~ $UH_UINT ]] \
+           && [ -n "$(ss -lnH -t "sport = :$squid_port" 2>/dev/null)" ]; then
+            pac_proxy="PROXY ${SERVER_IP}:${squid_port}; DIRECT"
+            info "squid answering on port ${squid_port}, PAC will use it"
+        else
+            warn "squid not listening, PAC returns DIRECT -- alert"
+        fi
+    else
+        info "no squid on this host, PAC returns DIRECT"
+    fi
+    [ -n "$pac_proxy" ] || pac_proxy="DIRECT"
+
+    # Written here instead of copied from the repo: both the LAN wildcard and
+    # the proxy line depend on values only known at install time, so a shipped
+    # template would be rewritten line by line anyway.
+    install -d -m 755 -o www-data -g www-data "$wpad_root"
+    cat > "${wpad_root}/wpad.pac" <<EOF
+function FindProxyForURL(url, host) {
+    if (isPlainHostName(host) || shExpMatch(host, "localhost"))
+        return "DIRECT";
+    if (shExpMatch(host, "$(echo "$SERV_SUBNET" | awk -F. '{OFS="."; $4="*"; print $0}')") || shExpMatch(host, "127.*"))
+        return "DIRECT";
+    return "${pac_proxy}";
+}
+EOF
+    chown www-data:www-data "${wpad_root}/wpad.pac"
+    chmod 644 "${wpad_root}/wpad.pac"
+
+    install -m 644 -o root -g root "${repo_wpad}/wpad.conf" "$wpad_vhost_dest"
+    sed -i "s|\*:18100|*:${wpad_port}|" "$wpad_vhost_dest"
+
+    [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
+    sed -i -E "/^Listen [^[:space:]]*:${wpad_port}\$/d; /^Listen ${wpad_port}\$/d" "$apache_ports"
+    echo "Listen ${SERVER_IP}:${wpad_port}" >> "$apache_ports"
+
+    a2ensite wpad &>/dev/null || true
+    if ! apache2ctl configtest &>/dev/null; then
+        warn "apache configtest failed, WPAD not enabled -- alert"
+        return 1
+    fi
+    systemctl reload apache2 &>/dev/null || true
+
+    # pyleases.sh re-probes this URL on every reload. If it does not answer,
+    # option 252 stays commented whatever the key says, so the flip below is
+    # only written once the PAC is proven reachable.
+    if ! curl -fsS --noproxy '*' --max-time 5 -o /dev/null \
+         "http://${SERVER_IP}:${wpad_port}/wpad.pac"; then
+        warn "PAC not reachable, WPAD_ENABLED left untouched -- alert"
+        return 1
+    fi
+
+    if grep -q '^WPAD_ENABLED=' "$pydhcp_env"; then
+        sed -i 's|^WPAD_ENABLED=.*|WPAD_ENABLED=true|' "$pydhcp_env"
+    else
+        echo "WPAD_ENABLED=true" >> "$pydhcp_env"
+    fi
+    info "WPAD enabled: http://${SERVER_IP}:${wpad_port}/wpad.pac"
+    info "  option 252 is announced after the next uhmreload.sh run"
+    return 0
+}
+
+remove_wpad() {
+    local wpad_port
+    # do_remove never loads pydhcp.env, so the port has to be read here or
+    # the Listen line below would be deleted by its default value alone.
+    load_conf "$pydhcp_env" || true
+    wpad_port="${WPAD_PORT:-18100}"
+    a2dissite wpad &>/dev/null || true
+    rm -f "$wpad_vhost_dest"
+    rm -rf "$wpad_root"
+    if [[ -f "$apache_ports" ]]; then
+        sed -i -E "/^Listen [^[:space:]]*:${wpad_port}\$/d; /^Listen ${wpad_port}\$/d" "$apache_ports"
+    fi
+    if [[ -f "$pydhcp_env" ]] && grep -q '^WPAD_ENABLED=true' "$pydhcp_env"; then
+        sed -i 's|^WPAD_ENABLED=.*|WPAD_ENABLED=false|' "$pydhcp_env"
+    fi
 }
 
 remove_web() {
@@ -1000,7 +1144,7 @@ final_sanity_check() {
     if (( issue_list == 0 )); then
         info "All checks passed."
     else
-        warn "${issue_list} issue(s) need attention before uhm is fully functional -- alert"
+        warn "${issue_list} issue(s) need attention, uhm not fully functional -- alert"
     fi
 }
 
@@ -1014,6 +1158,61 @@ install_systemd_service() {
         warn "Could not start uhmd"
         warn "check it with: systemctl status uhmd -- alert"
     fi
+}
+
+# Installs pydhcp, uhm's DHCP backend, by running its own installer.
+#
+# pysetup.sh is run interactively, not driven with expect: it owns the network
+# questions (interface, netmask, pool, DNS, cleanup interval) and writes them
+# to pydhcp.env, which every component then reads. Asking them here too would
+# duplicate both the prompts and their validation.
+install_pydhcp() {
+    local pydhcp_path="${script_dir}/pydhcp"
+
+    if systemctl is-active --quiet pydhcpd 2>/dev/null; then
+        info "pydhcpd already active -- skip"
+        return 0
+    fi
+
+    echo ""
+    echo "uhm needs pydhcp as its DHCP backend. Its installer runs next and"
+    echo "asks for the network values uhm reads afterwards from pydhcp.env."
+    echo ""
+
+    if [[ ! -d "$pydhcp_path" ]]; then
+        git clone https://github.com/maravento/pydhcp "$pydhcp_path" \
+            || { err "cannot clone pydhcp"; abort "check network access, then re-run -- abort"; }
+    fi
+
+    [[ -r "${pydhcp_path}/pysetup.sh" ]] \
+        || { err "pysetup.sh not found in $pydhcp_path"; abort "remove that directory and re-run -- abort"; }
+
+    ( cd "$pydhcp_path" && bash pysetup.sh ) \
+        || { err "pydhcp install failed"; abort "see ${pydhcp_path}/pysetup.log -- abort"; }
+
+    systemctl is-active --quiet pydhcpd 2>/dev/null \
+        || { err "pydhcpd is not active after install"; abort "check it with: systemctl status pydhcpd -- abort"; }
+    info "pydhcp installed, pydhcpd active"
+}
+
+# Installs apache2, which uhm needs for the web panel and for WPAD. Unlike
+# apt_deps, these two are installed instead of merely verified: they are
+# uhm's own serving layer, not a tool it calls.
+install_apache2() {
+    local dep_pkg missing_pkgs=()
+
+    for dep_pkg in apache2 libapache2-mod-php; do
+        dpkg -s "$dep_pkg" &>/dev/null || missing_pkgs+=("$dep_pkg")
+    done
+    if (( ${#missing_pkgs[@]} == 0 )); then
+        info "apache2 already present"
+        return 0
+    fi
+
+    DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
+        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -- abort"; }
+    systemctl enable apache2 &>/dev/null || true
+    info "Installed: ${missing_pkgs[*]}"
 }
 
 # ------------------------------------------------------------------------------
@@ -1035,7 +1234,20 @@ do_install() {
 
     step "Preflight"
     check_repo_files
+    check_preinstalled
     check_port tcp 4048 "web interface"
+
+    step "pydhcp"
+    install_pydhcp
+
+    step "apache2"
+    install_apache2
+
+    # Both run here, after pydhcp: detect_dhcp_backend needs pydhcpd active
+    # and load_pydhcp_conf needs pydhcp.env written, and neither exists on a
+    # host where uhm installs pydhcp itself.
+    detect_dhcp_backend
+    load_pydhcp_conf
 
     step "Filesystem layout"
     deploy_directories
@@ -1070,6 +1282,7 @@ do_install() {
     if confirm "Install the web interface (log viewer, ACL editor, reports)?" "n"; then
         install_web || true
     fi
+    install_wpad || true
 
     step "Cron"
     deregister_cron
@@ -1083,9 +1296,10 @@ do_install() {
     echo "uhm installed."
     echo ""
     echo "Next steps:"
-    echo "1. Optional: ${uhm_iptables_dest} is a minimal template"
+    echo "1. Optional: ${uhm_iptables_dest} is a placeholder"
     echo "   (routing + NAT). For full enforcement, copy"
-    echo "   tools/uhmiptables_example.txt over it and adapt it."
+    echo "   ${tools_dir}/uhmiptables_example.txt over it,"
+    echo "   then read it through and adapt it. See its header."
     echo "2. Check service: systemctl status uhmd"
     echo "3. Check logs: tail -f ${uhm_log_file}"
     echo "------------------------------------------------------"
@@ -1262,11 +1476,11 @@ do_remove() {
 
     echo ""
     info "This will permanently remove, without asking again:"
-    info "  - uhmd.service (stopped and disabled) and $service_dest"
+    info "  - uhmd.service: stopped, disabled, unit file removed"
     info "  - cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
     info "  - the uhmwatch cron entry"
     info "  - uhmalert.service if installed"
-    info "  - the web interface, its vhost and its sudo rule, if installed"
+    info "  - the web panel, its vhost and sudo rule, if installed"
     info "  - ${logrotate_file}"
     info "  - ${hotspot_dir}"
     info "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
@@ -1354,6 +1568,10 @@ perform_remove() {
     step "Web interface"
     remove_web
 
+    # WPAD (optional component)
+    step "WPAD"
+    remove_wpad
+
     # Logrotate
     step "Logrotate"
     if [[ -f "$logrotate_file" ]]; then
@@ -1416,8 +1634,6 @@ main() {
     case "${1:-}" in
         ""|install)
             check_apt_deps
-            detect_dhcp_backend
-            load_pydhcp_conf
             do_install
             log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
             exit 0

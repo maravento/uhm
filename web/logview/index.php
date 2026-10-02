@@ -227,6 +227,8 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 var API='../api.php';
 var ALL=[],CUR=[],fOff=0,live=true,pTmr=null,grep=false,loading=false,nrc=0;
 var PI=1000,MR=5000,RC=1000;
+var ctrl=null;
+function fj(url){if(ctrl)ctrl.abort();ctrl=new AbortController();return fetch(url,{signal:ctrl.signal}).then(function(r){return r.json()})}
 
 // Theme follows the panel shell: the stored key on load, a postMessage
 // afterwards, so switching theme never reloads the module.
@@ -240,9 +242,9 @@ window.addEventListener('message',function(ev){
 });
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function hl(t,q){if(!q)return esc(t);try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return esc(t).replace(r,'<span class="hl">$1</span>')}catch(e){return esc(t)}}
+function hl(s,q){if(!q)return s;try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return s.split(/(<[^>]+>)/).map(function(part){return part.charAt(0)==='<'?part:part.replace(r,'<span class="hl">$1</span>')}).join('')}catch(e){return s}}
 var UH_MAC_RE=/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi;
-function cm(m,q){var s=q?hl(m,q):esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|newauth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return s}
+function cm(m,q){var s=esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|newauth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return q?hl(s,q):s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
 function mf(r){var lv=document.getElementById('uhLv').value;if(lv&&r.level!==lv)return false;var q=(document.getElementById('uhQ').value||'').toLowerCase().trim();if(!grep&&q&&r._i.indexOf(q)===-1)return false;return true}
 
@@ -281,9 +283,9 @@ window.uhRL=function(){
   if(loading)return;uhCG(true);loading=true;cP();ALL=[];CUR=[];fOff=0;nrc=0;
   document.getElementById('uhTB').innerHTML='<tr><td colspan="3" style="text-align:center;padding:40px;color:#90a4ae">Loading...</td></tr>';
   var ln=document.getElementById('uhLn').value;
-  fetch(API+'?g=log&a=tail&pos=0&lines='+ln).then(function(r){return r.json()}).then(function(d){
+  fj(API+'?g=log&a=tail&pos=0&lines='+ln).then(function(d){
     if(d.error){loading=false;return}ALL=bi(d.rows||[]).reverse();fOff=d.pos||0;uhAF();ucs();loading=false;if(live)sP();
-  }).catch(function(){loading=false});
+  }).catch(function(e){if(e&&e.name==='AbortError')return;loading=false});
 };
 
 function poll(){
@@ -294,7 +296,8 @@ function poll(){
     var nr=bi(d.rows.reverse());fOff=d.pos;
     if(!nr.length)return;
     ALL=nr.concat(ALL);if(ALL.length>MR)ALL=ALL.slice(0,MR);nrc+=nr.length;
-    uhAF(nr.length);ucs();if(sp>50){document.getElementById('uhNC').textContent=nrc;document.getElementById('uhNB').style.display='block'}
+    if(sp>50){document.getElementById('uhNC').textContent=nrc;document.getElementById('uhNB').style.display='block'}
+    else{uhAF(nr.length);ucs()}
   }).catch(function(){});
 }
 function sP(){cP();pTmr=setInterval(poll,PI)}
@@ -313,11 +316,11 @@ window.uhGS=function(){
   if(loading)return;loading=true;cP();ALL=[];CUR=[];nrc=0;grep=true;
   var btn=document.getElementById('uhBG');btn.disabled=true;btn.innerHTML='<span class="uh-sp"></span> Searching...';
   document.getElementById('uhTB').innerHTML='<tr><td colspan="3" style="text-align:center;padding:40px;color:#90a4ae">Searching entire log...</td></tr>';
-  fetch(API+'?g=log&a=grep&q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(d){
+  fj(API+'?g=log&a=grep&q='+encodeURIComponent(q)).then(function(d){
     if(d.error){loading=false;rgB();return}ALL=bi(d.rows||[]).reverse();fOff=d.offset||0;
     document.getElementById('uhGT').textContent=q;document.getElementById('uhGC').textContent=ALL.length;
     document.getElementById('uhGB').style.display='flex';uhAF();ucs();loading=false;sgB();
-  }).catch(function(){loading=false;rgB();grep=false});
+  }).catch(function(e){if(e&&e.name==='AbortError')return;loading=false;rgB();grep=false});
 };
 function sgB(){var b=document.getElementById('uhBG');b.classList.add('grep-on');b.disabled=false;b.title='Back to live mode';b.innerHTML='&#10005; Live mode'}
 function rgB(){var b=document.getElementById('uhBG');b.classList.remove('grep-on');b.innerHTML='Full log';b.title='Type a term first, then search the entire log file';uhBS()}
@@ -338,7 +341,13 @@ function pS(){
 }
 
 document.getElementById('uhQ').addEventListener('input',function(){if(!grep)uhAF()});
+document.getElementById('uhQ').addEventListener('keydown',function(e){
+  if(e.key==='Escape'){this.value='';if(grep){uhCG(false)}else{uhBS();uhAF()}}
+});
 document.getElementById('uhLv').addEventListener('change',function(){uhAF()});
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden)cP();else if(live&&!grep)sP();
+});
 
 pS();setInterval(pS,30000);uhBS();uhRL();
 })();

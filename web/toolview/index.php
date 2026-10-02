@@ -235,7 +235,12 @@ function needsQuery(){
 function syncInput(){
   input.disabled=!needsQuery();
   input.placeholder=select.value==='report:search'?'IP address or hostname':'MAC address';
-  if(input.disabled)input.value='';
+  if(input.disabled){
+    input.value='';
+  }else{
+    input.focus();
+    input.select();
+  }
 }
 
 function showError(text){
@@ -288,13 +293,13 @@ function renderSummary(data){
   var bar=document.getElementById('uhBar');
   if(data.summary){
     var s=data.summary;
-    bar.innerHTML='MACs <b>'+s.total+'</b> | Grace <b>'+s.grace+'</b> | Blocked <b>'+s.block+'</b> | '+
-      'ACL <b>'+s.acl+'</b> | Auth <b>'+s.auth+'</b> | Leases <b>'+s.leases+'</b> | '+
-      'Warnings <b>'+s.warnings+'</b>';
+    bar.innerHTML='MACs <b>'+esc(s.total)+'</b> | Grace <b>'+esc(s.grace)+'</b> | Blocked <b>'+esc(s.block)+'</b> | '+
+      'ACL <b>'+esc(s.acl)+'</b> | Auth <b>'+esc(s.auth)+'</b> | Leases <b>'+esc(s.leases)+'</b> | '+
+      'Warnings <b>'+esc(s.warnings)+'</b>';
     return;
   }
   if(data.total!==undefined){
-    bar.innerHTML='Total <b>'+data.total+'</b> | Expired <b>'+data.expired+'</b> | Active <b>'+data.active+'</b>';
+    bar.innerHTML='Total <b>'+esc(data.total)+'</b> | Expired <b>'+esc(data.expired)+'</b> | Active <b>'+esc(data.active)+'</b>';
     return;
   }
   if(data.controller){
@@ -303,6 +308,8 @@ function renderSummary(data){
   }
   bar.innerHTML='';
 }
+
+var ctrl=null;
 
 window.uhRun=function(){
   var choice=select.value;
@@ -324,7 +331,10 @@ window.uhRun=function(){
   empty.textContent='Running...';
   document.getElementById('uhBar').innerHTML='';
 
-  fetch(url).then(function(r){return r.json()}).then(function(d){
+  if(ctrl)ctrl.abort();
+  ctrl=new AbortController();
+
+  fetch(url,{signal:ctrl.signal}).then(function(r){return r.json()}).then(function(d){
     button.disabled=false;
     if(d.error){
       empty.textContent='No results';
@@ -333,7 +343,8 @@ window.uhRun=function(){
     }
     renderSummary(d);
     renderTable(COLUMNS[choice],d.rows);
-  }).catch(function(){
+  }).catch(function(e){
+    if(e&&e.name==='AbortError')return;
     button.disabled=false;
     empty.textContent='No results';
     showError('cannot reach the API');
@@ -342,6 +353,16 @@ window.uhRun=function(){
 
 select.addEventListener('change',syncInput);
 document.getElementById('uhRunBtn').addEventListener('click',uhRun);
+document.getElementById('uhTB').addEventListener('click',function(e){
+  var td=e.target.closest('td.mono');
+  if(td&&td.textContent.trim()){
+    navigator.clipboard.writeText(td.textContent.trim()).then(function(){
+      var original=td.style.outline;
+      td.style.outline='1px solid #3498db';
+      setTimeout(function(){td.style.outline=original},300);
+    });
+  }
+});
 syncInput();
 })();
 </script>

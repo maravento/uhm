@@ -97,30 +97,6 @@ UH_UINT='^(0|[1-9][0-9]*)$'
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
-# LOAD_CONF
-# Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS|UHM_LEASES|UHM_IPTABLES)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
-
 ensure_executable() {
     local script_path="$1" script_name="$2" expected_mode="$3"
     [[ -f "$script_path" ]] || return 1
@@ -188,56 +164,107 @@ run_step() {
 # ENV
 # ------------------------------------------------------------------------------
 
+# PERMS
+# Owner and mode of every .env this script reads
 config_file="/etc/uhm/uhm.env"
-if [[ ! -f "$config_file" ]]; then
-    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
-    exit 1
-fi
-env_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
-env_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
-if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
-    if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "INFO: uhm.env perms fixed -- fixed"
-    else
-        log "ERROR: cannot fix uhm.env perms -- abort"
+env_specs=("$config_file root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
         exit 1
     fi
-fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS|UHM_LEASES|UHM_IPTABLES)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+        esac
+    done < "$conf_file"
+}
+
+# LOAD
 load_conf "$config_file" || true
 
-UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-}"
-if [[ -z "$UHM_LEASES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS not set -- fallback"
-    UHM_LEASES_TIMEOUT_SECONDS=120
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in UHM_LEASES UHM_IPTABLES; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+        key_errors+=("$env_key invalid seconds")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -- abort"
+    exit 1
 fi
-if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: UHM_LEASES_TIMEOUT_SECONDS invalid -- fallback"
-    UHM_LEASES_TIMEOUT_SECONDS=120
-fi
+unset key_errors key_error env_key
 
-UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-}"
-if [[ -z "$UHM_IPTABLES_TIMEOUT_SECONDS" ]]; then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS not set -- fallback"
-    UHM_IPTABLES_TIMEOUT_SECONDS=60
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+# Fallbacks 120 and 60 must stay in sync with uhmd.sh, which reads the same
+# two values.
+if [ -z "${UHM_LEASES_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -- fallback"
 fi
-if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS invalid -- fallback"
-    UHM_IPTABLES_TIMEOUT_SECONDS=60
+UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
+if [ -z "${UHM_IPTABLES_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no UHM_IPTABLES_TIMEOUT_SECONDS in uhm.env -- fallback"
 fi
-
-UHM_LEASES="${UHM_LEASES:-}"
-if [[ -z "$UHM_LEASES" ]]; then
-    log "WARNING: UHM_LEASES not set -- fallback"
-    UHM_LEASES="/etc/uhm/core/uhmleases.sh"
+UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
+if [ -z "${UHM_LEASES:-}" ]; then
+    log "WARNING: no UHM_LEASES in uhm.env -- fallback"
 fi
-
-UHM_IPTABLES="${UHM_IPTABLES:-}"
-if [[ -z "$UHM_IPTABLES" ]]; then
-    log "WARNING: UHM_IPTABLES not set -- fallback"
-    UHM_IPTABLES="/etc/uhm/tools/uhmiptables.sh"
+UHM_LEASES="${UHM_LEASES:-/etc/uhm/core/uhmleases.sh}"
+if [ -z "${UHM_IPTABLES:-}" ]; then
+    log "WARNING: no UHM_IPTABLES in uhm.env -- fallback"
 fi
+UHM_IPTABLES="${UHM_IPTABLES:-/etc/uhm/tools/uhmiptables.sh}"
 
 # ------------------------------------------------------------------------------
 # MAIN

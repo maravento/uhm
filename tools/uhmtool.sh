@@ -66,20 +66,14 @@ trap cleanup_temp EXIT
 # ------------------------------------------------------------------------------
 
 # validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
-UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
-UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 uhm_log_file="/var/log/uhm.log"
-pydhcp_conf="/etc/pydhcp/pydhcp.env"
-uhm_conf="/etc/uhm/uhm.env"
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+uhm_env="/etc/uhm/uhm.env"
 cycle_lock="/var/lock/uhmd-cycle.lock"
 max_grep_lines=3000
 max_upload_bytes=1048576
@@ -107,11 +101,12 @@ load_conf() {
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
+        env_key="${env_key%%[[:space:]]*}"
         env_value="${env_line#*=}"
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            json_error "malformed line in $(basename "$conf_file")"
+            json_error "$env_key malformed in $(basename "$conf_file")"
             exit 1
         fi
         case "$env_key" in
@@ -141,39 +136,96 @@ json_escape() {
 
 # The log group only needs the log file, which is world-readable and has no
 # credentials in it. Loading the configuration is deferred to the groups
-# that read ACL files or call the controller.
+# that read ACL files or call the controller, so this stays a function
+# instead of a top-level ENV section.
+#
+# Errors leave as a single JSON object, not as log lines: the caller is
+# web/api.php. The shape of KEY CHECK is kept -- every failure is collected
+# first and reported once -- but the whole list goes out in one json_error.
 load_env() {
-    local uhm_owner uhm_perms required_key
-
-    if [ ! -r "$pydhcp_conf" ]; then
-        json_error "cannot read $(basename "$pydhcp_conf")"
-        exit 1
-    fi
-    if [ ! -f "$uhm_conf" ]; then
-        json_error "uhm.env not found, run uhmsetup.sh"
-        exit 1
-    fi
-    uhm_owner=$(stat -c '%U' "$uhm_conf" 2>/dev/null)
-    uhm_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
-    if [[ "$uhm_owner" != "root" ]] || [[ "$uhm_perms" != "600" ]]; then
-        json_error "uhm.env must be root:root 600"
-        exit 1
-    fi
-
-    load_conf "$pydhcp_conf"
-    load_conf "$uhm_conf"
-
-    for required_key in BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
-        if [ -z "${!required_key:-}" ]; then
-            json_error "$required_key not set in uhm.env or pydhcp.env"
+    # PERMS
+    # Owner and mode of every .env this script reads
+    local env_specs env_spec env_path env_owner_want env_perms_want
+    local env_owner env_perms key_errors key_error env_key
+    env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
+    for env_spec in "${env_specs[@]}"; do
+        read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+        if [ ! -f "$env_path" ]; then
+            json_error "$(basename "$env_path") not found"
             exit 1
+        fi
+        env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+        env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+        if [[ "$env_owner" != "$env_owner_want" ]] \
+           || [[ "$env_perms" != "$env_perms_want" ]]; then
+            if ! chown "$env_owner_want" "$env_path" 2>/dev/null \
+               || ! chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+                json_error "cannot fix $(basename "$env_path") perms"
+                exit 1
+            fi
         fi
     done
 
-    if ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
-        json_error "BLOCKDHCP_GRACE_SECONDS invalid in uhm.env"
+    # LOAD
+    load_conf "$pydhcp_env"
+    load_conf "$uhm_env"
+
+    # KEY CHECK
+    # Collect every failure first, then decide -- a single error reports them all
+    key_errors=()
+    for env_key in ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
+        if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+            key_errors+=("$env_key missing line")
+        elif [[ -z "${!env_key:-}" ]]; then
+            key_errors+=("$env_key not set")
+        fi
+    done
+    for env_key in UHM_MACAUTH UHM_GRACE; do
+        if ! grep -q "^${env_key}=" "$uhm_env"; then
+            key_errors+=("$env_key missing line")
+        elif [[ -z "${!env_key:-}" ]]; then
+            key_errors+=("$env_key not set")
+        fi
+    done
+    for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD; do
+        if ! grep -q "^${env_key}=" "$uhm_env"; then
+            key_errors+=("$env_key missing line")
+        elif [[ -z "${!env_key:-}" ]]; then
+            key_errors+=("$env_key not set")
+        fi
+    done
+    if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
+        key_errors+=("UNIFI_TYPE missing line")
+    elif [[ -z "${UNIFI_TYPE:-}" ]]; then
+        key_errors+=("UNIFI_TYPE not set")
+    elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
+        key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
+    fi
+    # UNIFI_SITE is interpolated directly into API URLs -- reject anything
+    # outside the character set UniFi itself uses for site names.
+    if ! grep -q "^UNIFI_SITE=" "$uhm_env"; then
+        key_errors+=("UNIFI_SITE missing line")
+    elif [[ -z "${UNIFI_SITE:-}" ]]; then
+        key_errors+=("UNIFI_SITE not set")
+    elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        key_errors+=("UNIFI_SITE invalid characters")
+    fi
+    if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
+        key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")
+    elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
+        key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
+    elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
+        key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
+    fi
+    if (( ${#key_errors[@]} > 0 )); then
+        json_error "invalid keys: ${key_errors[*]}"
         exit 1
     fi
+
+    # FALLBACK
+    # Second layer of protection, behind KEY CHECK -- by design never reached
+    UNIFI_SITE="${UNIFI_SITE:-default}"
+    UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 
     if [ ! -d "$ACL_MAC_PATH" ]; then
         json_error "cannot read $ACL_MAC_PATH"
@@ -652,18 +704,9 @@ session_cookie=""
 csrf_token=""
 api_base_url=""
 
+# Derives the API prefix from keys load_env() already validated -- no key
+# checking of its own, KEY CHECK is the only place that validates.
 unifi_require_config() {
-    local missing_key
-
-    for missing_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD; do
-        if [ -z "${!missing_key:-}" ]; then
-            json_error "$missing_key not set in uhm.env"
-            exit 1
-        fi
-    done
-    UNIFI_SITE="${UNIFI_SITE:-default}"
-    UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-
     if [[ "$UNIFI_TYPE" == "classic" ]]; then
         api_base_url="$UNIFI_CONTROLLER_URL/api/s/$UNIFI_SITE"
     else
@@ -741,7 +784,7 @@ unifi_fetch() {
     response_rc=$(jq -r '.meta.rc // "error"' <<< "$response_json" 2>/dev/null)
     if [[ "$response_rc" != "ok" ]]; then
         json_error "$endpoint query failed"
-        exit 0
+        return 1
     fi
     printf '%s' "$response_json"
 }
@@ -763,9 +806,9 @@ unifi_status() {
     local sta_json guest_json voucher_json
     local sta_file guest_file voucher_file
 
-    sta_json=$(unifi_fetch "stat/sta")
-    guest_json=$(unifi_fetch "stat/guest")
-    voucher_json=$(unifi_fetch "stat/voucher")
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
 
     sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
     guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
@@ -791,9 +834,9 @@ unifi_authorized() {
     local sta_json guest_json voucher_json auth_file
     local sta_file guest_file voucher_file
 
-    sta_json=$(unifi_fetch "stat/sta")
-    guest_json=$(unifi_fetch "stat/guest")
-    voucher_json=$(unifi_fetch "stat/voucher")
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
 
     auth_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
     sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
@@ -830,7 +873,7 @@ unifi_authorized() {
 unifi_vouchers() {
     local voucher_json
 
-    voucher_json=$(unifi_fetch "stat/voucher")
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
     jq -c '{rows: [(.data // [])[] | {code: .code, quota: (.quota // 0), used: (.used // 0),
         duration: (.duration // 0), note: (.note // ""), create_time: (.create_time // 0)}]}' <<< "$voucher_json"
 }
@@ -841,7 +884,7 @@ unifi_vouchers() {
 unifi_guests() {
     local guest_json managed_file guest_file
 
-    guest_json=$(unifi_fetch "stat/guest")
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
     managed_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
     guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
     temp_files+=("$managed_file" "$guest_file")
@@ -864,7 +907,7 @@ unifi_guests() {
 unifi_unauthorized() {
     local sta_json
 
-    sta_json=$(unifi_fetch "stat/sta")
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
     jq -c --arg essid "${UHM_ESSID:-}" \
         '{rows: [(.data // [])[] | select((.essid // "") == $essid and (.authorized // false) == false)
           | {mac: (.mac // "" | ascii_downcase), ip: (.ip // ""), hostname: (.hostname // ""),

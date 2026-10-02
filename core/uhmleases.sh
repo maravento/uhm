@@ -143,8 +143,13 @@ if ! flock -n 200; then
     exit 1
 fi
 
-# start
-log "uhmleases start..."
+# dependencies
+for dep_pkg in python3 coreutils util-linux curl grep sed systemd libc-bin; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        exit 1
+    fi
+done
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -208,84 +213,6 @@ cleanup_temp() {
 }
 trap cleanup_temp EXIT
 
-# ------------------------------------------------------------------------------
-# ENV
-# ------------------------------------------------------------------------------
-
-pydhcp_env="/etc/pydhcp/pydhcp.env"
-env_file="/etc/uhm/uhm.env"
-if [ ! -f "$env_file" ]; then
-    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
-    exit 1
-fi
-
-env_owner=$(stat -c '%U' "$env_file" 2>/dev/null)
-env_perms=$(stat -c '%a' "$env_file" 2>/dev/null)
-if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
-    if chown root:root "$env_file" 2>/dev/null && chmod 600 "$env_file" 2>/dev/null; then
-        log "INFO: uhm.env perms fixed -- fixed"
-    else
-        log "ERROR: cannot fix uhm.env perms -- abort"
-        exit 1
-    fi
-fi
-unset env_owner env_perms
-
-# Load only known KEY=VALUE pairs from ENV_FILE instead of sourcing it,
-# so a tampered or maliciously replaced env file cannot execute code.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
-            ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_MACAUTH|ACL_BLOCK_FILE|\
-            UHM_GRACE|BLOCKDHCP_GRACE_SECONDS|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
-            PING_TIMEOUT_SECONDS|UHM_INI_RANGE|UHM_END_RANGE|PYDHCPD_LEASES|\
-            UHM_QUEUE|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
-# pydhcp.env first: it owns the network, ACL and lease values, and is the
-# single source of truth for them. uhm.env is read after, so the uhm keys
-# win if a name ever collides.
-if [ ! -r "$pydhcp_env" ]; then
-    log "ERROR: uhm reads pydhcp's network and ACL values from it"
-    log "ERROR: cannot read $pydhcp_env -- abort"
-    exit 1
-fi
-load_conf "$pydhcp_env"
-load_conf "$env_file"
-
-if [ -z "${SERVER_IP:-}" ]; then
-    log "ERROR: SERVER_IP not set -- abort"
-    exit 1
-fi
-
-# dependencies
-for dep_pkg in python3 coreutils util-linux curl grep sed systemd libc-bin; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
-        exit 1
-    fi
-done
-
 # IPv4 <-> integer. Callers validate with UH_IPV4 before calling, which
 # rejects leading zeros. Ranges are compared as integers, so nothing below
 # assumes a particular netmask or a three-octet prefix.
@@ -294,206 +221,6 @@ ip_to_int() {
     IFS='.' read -r octet_1 octet_2 octet_3 octet_4 <<< "$1"
     echo $(( (octet_1 << 24) + (octet_2 << 16) + (octet_3 << 8) + octet_4 ))
 }
-
-# Defaults for variables that may not exist in older uhm.env installations.
-# These match the values documented in the README.md Config Reference table.
-for range_var_name in UHM_INI_RANGE UHM_END_RANGE; do
-    if [ -z "${!range_var_name:-}" ]; then
-        log "ERROR: $range_var_name not set -- abort"
-        exit 1
-    fi
-done
-unset range_var_name
-# Network values have no safe default: inventing one would rebuild
-# pydhcpd.conf for a network that is not this one, and the DHCP server
-# would hand out addresses nobody can reach. pysetup.sh always writes
-# them, so a missing key means pydhcp.env was edited or truncated.
-missing_pydhcp_keys=()
-for required_key in SERV_MASK SERV_DNS SERV_SUBNET SERV_BROADCAST \
-          SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERVER_IP; do
-    [ -z "${!required_key:-}" ] && missing_pydhcp_keys+=("$required_key")
-done
-unset required_key
-if (( ${#missing_pydhcp_keys[@]} > 0 )); then
-    for required_key in "${missing_pydhcp_keys[@]}"; do
-        log "ERROR: $required_key not set in pydhcp.env"
-    done
-    log "ERROR: re-run pydhcp pysetup.sh, or restore it -- abort"
-    exit 1
-fi
-unset required_key
-
-for ip_var_name in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
-    if ! [[ "${!ip_var_name}" =~ $UH_IPV4 ]]; then
-        log "ERROR: $ip_var_name invalid IPv4 -- abort"
-        exit 1
-    fi
-done
-unset ip_var_name
-if ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
-    log "ERROR: SERV_MASK is not a valid netmask -- abort"
-    exit 1
-fi
-if ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
-    log "ERROR: SERV_DNS is not a valid IPv4 list -- abort"
-    exit 1
-fi
-for range_var_name in UHM_INI_RANGE UHM_END_RANGE; do
-    if ! [[ "${!range_var_name}" =~ $UH_IPV4 ]]; then
-        log "ERROR: $range_var_name invalid IPv4 -- abort"
-        exit 1
-    fi
-done
-unset range_var_name
-if (( $(ip_to_int "$UHM_INI_RANGE") > $(ip_to_int "$UHM_END_RANGE") )); then
-    log "ERROR: UHM_INI_RANGE is above UHM_END_RANGE -- abort"
-    exit 1
-fi
-
-# Guard: none of the three IP ranges/points this script writes into
-# pydhcpd.conf may overlap one another -- SERVER_IP, the block-pool range
-# (SERV_INI_RANGE_BLOCK-SERV_END_RANGE_BLOCK) and the hotspot voucher range
-# (UHM_INI_RANGE-UHM_END_RANGE). pydhcpd.py only
-# rejects the block-pool/SERVER_IP overlap, and only after this script has
-# already stopped the daemon and rewritten pydhcpd.conf. Catching every
-# combination here, before any destructive action, avoids leaving the daemon
-# down over a config mistake that could have been caught up front.
-range_conflict=$(python3 -c "
-import ipaddress, sys
-server_ip = ipaddress.IPv4Address(sys.argv[1])
-pool_start = ipaddress.IPv4Address(sys.argv[2])
-pool_end = ipaddress.IPv4Address(sys.argv[3])
-hotspot_start = ipaddress.IPv4Address(sys.argv[4])
-hotspot_end = ipaddress.IPv4Address(sys.argv[5])
-if pool_start <= server_ip <= pool_end:
-    print('SERVER_IP overlaps the block-pool range')
-elif hotspot_start <= server_ip <= hotspot_end:
-    print('SERVER_IP overlaps the hotspot range')
-elif pool_start <= hotspot_end and hotspot_start <= pool_end:
-    print('the block-pool range overlaps the hotspot range')
-" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$UHM_INI_RANGE" "$UHM_END_RANGE" 2>/dev/null)
-if [[ -n "$range_conflict" ]]; then
-    log "ERROR: $range_conflict, SERVER_IP=$SERVER_IP"
-    log "ERROR: blk=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK hs=$UHM_INI_RANGE-$UHM_END_RANGE -- abort"
-    exit 1
-fi
-unset range_conflict
-
-# Every fallback below is composed from the directory above it, so each base
-# path is named once instead of being repeated in full per file.
-if [ -z "${ACL_PATH:-}" ]; then
-    log "WARNING: no ACL_PATH in pydhcp.env -- fallback"
-    ACL_PATH="/etc/acl"
-fi
-if [ -z "${ACL_MAC_PATH:-}" ]; then
-    log "WARNING: no ACL_MAC_PATH in pydhcp.env -- fallback"
-    ACL_MAC_PATH="$ACL_PATH/mac"
-fi
-if [ -z "${ACL_DHCP_PATH:-}" ]; then
-    log "WARNING: no ACL_DHCP_PATH in pydhcp.env -- fallback"
-    ACL_DHCP_PATH="/etc/pydhcp/acl"
-fi
-UHM_PATH="${UHM_PATH:-/etc/uhm}"
-if [ -z "${ACL_MAC_LIMITED:-}" ]; then
-    log "WARNING: no ACL_MAC_LIMITED in pydhcp.env -- fallback"
-    ACL_MAC_LIMITED="$ACL_MAC_PATH/mac-limited.txt"
-fi
-if [ -z "${ACL_MAC_UNLIMITED:-}" ]; then
-    log "WARNING: no ACL_MAC_UNLIMITED in pydhcp.env -- fallback"
-    ACL_MAC_UNLIMITED="$ACL_MAC_PATH/mac-unlimited.txt"
-fi
-UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
-if [ -z "${ACL_BLOCK_FILE:-}" ]; then
-    log "WARNING: no ACL_BLOCK_FILE in pydhcp.env -- fallback"
-    ACL_BLOCK_FILE="$ACL_DHCP_PATH/blockdhcp.txt"
-fi
-if [ -z "${PYDHCPD_LEASES:-}" ]; then
-    log "WARNING: no PYDHCPD_LEASES in pydhcp.env -- fallback"
-    PYDHCPD_LEASES="/etc/pydhcp/core/pydhcpd.leases"
-fi
-DHCPDv4_CONF="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
-UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
-BLOCKDHCP_GRACE_SECONDS="${BLOCKDHCP_GRACE_SECONDS:-86400}"
-if ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
-    log "WARNING: BLOCKDHCP_GRACE_SECONDS invalid -- fallback"
-    BLOCKDHCP_GRACE_SECONDS=86400
-fi
-if [ -z "${CLEANUP_INTERVAL:-}" ]; then
-    log "WARNING: no CLEANUP_INTERVAL in pydhcp.env -- fallback"
-    CLEANUP_INTERVAL="60"
-fi
-if ! [[ "$CLEANUP_INTERVAL" =~ $UH_UINT ]] || (( CLEANUP_INTERVAL == 0 )); then
-    log "WARNING: CLEANUP_INTERVAL invalid -- fallback"
-    CLEANUP_INTERVAL=60
-fi
-if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
-    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -- fallback"
-    AUTHORIZED_LEASE_TIME="2592000"
-fi
-if ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] || (( AUTHORIZED_LEASE_TIME == 0 )); then
-    log "WARNING: AUTHORIZED_LEASE_TIME invalid -- fallback"
-    AUTHORIZED_LEASE_TIME=2592000
-fi
-if [ -z "${QUARANTINE_DURATION:-}" ]; then
-    log "WARNING: no QUARANTINE_DURATION in pydhcp.env -- fallback"
-    QUARANTINE_DURATION="60"
-fi
-if ! [[ "$QUARANTINE_DURATION" =~ $UH_UINT ]] || (( QUARANTINE_DURATION == 0 )); then
-    log "WARNING: QUARANTINE_DURATION invalid -- fallback"
-    QUARANTINE_DURATION=60
-fi
-if [ -z "${WPAD_ENABLED:-}" ]; then
-    log "WARNING: no WPAD_ENABLED in pydhcp.env -- fallback"
-    WPAD_ENABLED="false"
-fi
-if [ -z "${WPAD_PORT:-}" ]; then
-    log "WARNING: no WPAD_PORT in pydhcp.env -- fallback"
-    WPAD_PORT="18100"
-fi
-if ! [[ "$WPAD_PORT" =~ $UH_UINT ]] ||
-   (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
-    log "WARNING: WPAD_PORT invalid -- fallback"
-    WPAD_PORT=18100
-fi
-if [ -z "${PING_CHECK_ENABLED:-}" ]; then
-    log "WARNING: no PING_CHECK_ENABLED in pydhcp.env -- fallback"
-    PING_CHECK_ENABLED="true"
-fi
-if [ -z "${PING_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no PING_TIMEOUT_SECONDS in pydhcp.env -- fallback"
-    PING_TIMEOUT_SECONDS="1"
-fi
-if ! [[ "$PING_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( PING_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: PING_TIMEOUT_SECONDS invalid -- fallback"
-    PING_TIMEOUT_SECONDS=1
-fi
-UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
-
-wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
-wpad_ready=0
-if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
-    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
-        wpad_ready=1
-    else
-        log "WARNING: WPAD_ENABLED=true but not served -- fallback"
-    fi
-fi
-
-if (( wpad_ready )); then
-    wpad_header="option wpad code 252 = text;"
-    wpad_subnet="option wpad \"$wpad_url\";"
-else
-    wpad_header="#option wpad code 252 = text;"
-    wpad_subnet="#option wpad \"$wpad_url\";"
-fi
-
-if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
-    ping_check_line="ping-check true;"
-    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS};"
-else
-    ping_check_line="ping-check false;"
-    ping_timeout_line=""
-fi
 
 verify_dhcp_service() {
     if ! systemctl is-active --quiet pydhcpd; then
@@ -894,6 +621,332 @@ check_mac_ip_ranges() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
+# LOAD_CONF
+# them, so a tampered or maliciously replaced env file cannot execute code.
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
+            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
+            ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_MACAUTH|ACL_BLOCK_FILE|\
+            UHM_GRACE|BLOCKDHCP_GRACE_SECONDS|\
+            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
+            PING_TIMEOUT_SECONDS|UHM_INI_RANGE|UHM_END_RANGE|PYDHCPD_LEASES|\
+            UHM_QUEUE|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+            *)
+                ;;
+        esac
+    done < "$conf_file"
+}
+# pydhcp.env first: it owns the network, ACL and lease values, and is the
+# single source of truth for them. uhm.env is read after, so the uhm keys
+# win if a name ever collides.
+
+# LOAD
+load_conf "$pydhcp_env" || true
+load_conf "$uhm_env" || true
+
+# KEY CHECK
+
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
+               ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF \
+               DAEMON_USER DAEMON_GROUP WPAD_ENABLED PING_CHECK_ENABLED; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
+               PING_TIMEOUT_SECONDS; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+        key_errors+=("$env_key invalid seconds")
+    fi
+done
+if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
+    key_errors+=("WPAD_PORT missing line")
+elif [[ -z "${WPAD_PORT:-}" ]]; then
+    key_errors+=("WPAD_PORT not set")
+elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
+     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+    key_errors+=("WPAD_PORT invalid port")
+fi
+for env_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK \
+               SERV_END_RANGE_BLOCK; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+if ! grep -q "^SERV_MASK=" "$pydhcp_env"; then
+    key_errors+=("SERV_MASK missing line")
+elif [[ -z "${SERV_MASK:-}" ]]; then
+    key_errors+=("SERV_MASK not set")
+elif ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
+    key_errors+=("SERV_MASK invalid netmask")
+fi
+if ! grep -q "^SERV_DNS=" "$pydhcp_env"; then
+    key_errors+=("SERV_DNS missing line")
+elif [[ -z "${SERV_DNS:-}" ]]; then
+    key_errors+=("SERV_DNS not set")
+elif ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
+    key_errors+=("SERV_DNS invalid IPv4 list")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    exit 1
+fi
+
+key_errors=()
+for env_key in UHM_PATH UHM_MACAUTH UHM_GRACE UHM_QUEUE; do
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
+    key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")
+elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
+    key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
+elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
+    key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
+fi
+for env_key in UHM_INI_RANGE UHM_END_RANGE; do
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+# FALLBACK
+
+# Second layer of protection, behind KEY CHECK -- by design never reached.
+# Every fallback below is composed from the directory above it, so each base
+# path is named once instead of being repeated in full per file.
+if [ -z "${ACL_PATH:-}" ]; then
+    log "WARNING: no ACL_PATH in pydhcp.env -- fallback"
+    ACL_PATH="/etc/acl"
+fi
+if [ -z "${ACL_MAC_PATH:-}" ]; then
+    log "WARNING: no ACL_MAC_PATH in pydhcp.env -- fallback"
+    ACL_MAC_PATH="$ACL_PATH/mac"
+fi
+if [ -z "${ACL_DHCP_PATH:-}" ]; then
+    log "WARNING: no ACL_DHCP_PATH in pydhcp.env -- fallback"
+    ACL_DHCP_PATH="/etc/pydhcp/acl"
+fi
+if [ -z "${UHM_PATH:-}" ]; then
+    log "WARNING: no UHM_PATH in uhm.env -- fallback"
+    UHM_PATH="/etc/uhm"
+fi
+if [ -z "${ACL_MAC_LIMITED:-}" ]; then
+    log "WARNING: no ACL_MAC_LIMITED in pydhcp.env -- fallback"
+    ACL_MAC_LIMITED="$ACL_MAC_PATH/mac-limited.txt"
+fi
+if [ -z "${ACL_MAC_UNLIMITED:-}" ]; then
+    log "WARNING: no ACL_MAC_UNLIMITED in pydhcp.env -- fallback"
+    ACL_MAC_UNLIMITED="$ACL_MAC_PATH/mac-unlimited.txt"
+fi
+if [ -z "${UHM_MACAUTH:-}" ]; then
+    log "WARNING: no UHM_MACAUTH in uhm.env -- fallback"
+    UHM_MACAUTH="$UHM_PATH/acl/uhm-auth.txt"
+fi
+if [ -z "${ACL_BLOCK_FILE:-}" ]; then
+    log "WARNING: no ACL_BLOCK_FILE in pydhcp.env -- fallback"
+    ACL_BLOCK_FILE="$ACL_DHCP_PATH/blockdhcp.txt"
+fi
+if [ -z "${PYDHCPD_LEASES:-}" ]; then
+    log "WARNING: no PYDHCPD_LEASES in pydhcp.env -- fallback"
+    PYDHCPD_LEASES="/etc/pydhcp/core/pydhcpd.leases"
+fi
+if [ -z "${DHCPDv4_CONF:-}" ]; then
+    log "WARNING: no DHCPDv4_CONF in pydhcp.env -- fallback"
+    DHCPDv4_CONF="/etc/pydhcp/core/pydhcpd.conf"
+fi
+if [ -z "${UHM_GRACE:-}" ]; then
+    log "WARNING: no UHM_GRACE in uhm.env -- fallback"
+    UHM_GRACE="$UHM_PATH/acl/uhm-grace.txt"
+fi
+if [ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]; then
+    log "WARNING: no BLOCKDHCP_GRACE_SECONDS in uhm.env -- fallback"
+    BLOCKDHCP_GRACE_SECONDS="86400"
+fi
+if [ -z "${CLEANUP_INTERVAL:-}" ]; then
+    log "WARNING: no CLEANUP_INTERVAL in pydhcp.env -- fallback"
+    CLEANUP_INTERVAL="60"
+fi
+if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
+    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -- fallback"
+    AUTHORIZED_LEASE_TIME="2592000"
+fi
+if [ -z "${QUARANTINE_DURATION:-}" ]; then
+    log "WARNING: no QUARANTINE_DURATION in pydhcp.env -- fallback"
+    QUARANTINE_DURATION="60"
+fi
+if [ -z "${WPAD_ENABLED:-}" ]; then
+    log "WARNING: no WPAD_ENABLED in pydhcp.env -- fallback"
+    WPAD_ENABLED="false"
+fi
+if [ -z "${WPAD_PORT:-}" ]; then
+    log "WARNING: no WPAD_PORT in pydhcp.env -- fallback"
+    WPAD_PORT="18100"
+fi
+if [ -z "${PING_CHECK_ENABLED:-}" ]; then
+    log "WARNING: no PING_CHECK_ENABLED in pydhcp.env -- fallback"
+    PING_CHECK_ENABLED="true"
+fi
+if [ -z "${PING_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no PING_TIMEOUT_SECONDS in pydhcp.env -- fallback"
+    PING_TIMEOUT_SECONDS="1"
+fi
+if [ -z "${UHM_QUEUE:-}" ]; then
+    log "WARNING: no UHM_QUEUE in uhm.env -- fallback"
+    UHM_QUEUE="$UHM_PATH/acl/uhm-queue.txt"
+fi
+
+# KEY GUARD
+if (( $(ip_to_int "$UHM_INI_RANGE") > $(ip_to_int "$UHM_END_RANGE") )); then
+    log "ERROR: UHM_INI_RANGE is above UHM_END_RANGE -- abort"
+    exit 1
+fi
+
+# Guard: none of the three IP ranges/points this script writes into
+# pydhcpd.conf may overlap one another -- SERVER_IP, the block-pool range
+# (SERV_INI_RANGE_BLOCK-SERV_END_RANGE_BLOCK) and the hotspot voucher range
+# (UHM_INI_RANGE-UHM_END_RANGE). pydhcpd.py only
+# rejects the block-pool/SERVER_IP overlap, and only after this script has
+# already stopped the daemon and rewritten pydhcpd.conf. Catching every
+# combination here, before any destructive action, avoids leaving the daemon
+# down over a config mistake that could have been caught up front.
+range_conflict=$(python3 -c "
+import ipaddress, sys
+server_ip = ipaddress.IPv4Address(sys.argv[1])
+pool_start = ipaddress.IPv4Address(sys.argv[2])
+pool_end = ipaddress.IPv4Address(sys.argv[3])
+hotspot_start = ipaddress.IPv4Address(sys.argv[4])
+hotspot_end = ipaddress.IPv4Address(sys.argv[5])
+pool = 'blk=%s-%s' % (pool_start, pool_end)
+hotspot = 'hs=%s-%s' % (hotspot_start, hotspot_end)
+if pool_start <= server_ip <= pool_end:
+    print('SERVER_IP=%s in block-pool range|%s' % (server_ip, pool))
+elif hotspot_start <= server_ip <= hotspot_end:
+    print('SERVER_IP=%s in hotspot range|%s' % (server_ip, hotspot))
+elif pool_start <= hotspot_end and hotspot_start <= pool_end:
+    print('%s overlaps hotspot|%s' % (pool, hotspot))
+" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$UHM_INI_RANGE" "$UHM_END_RANGE" 2>/dev/null)
+if [[ -n "$range_conflict" ]]; then
+    IFS='|' read -r conflict_head conflict_tail <<< "$range_conflict"
+    log "ERROR: $conflict_head"
+    log "ERROR: $conflict_tail -- abort"
+    exit 1
+fi
+unset range_conflict conflict_head conflict_tail
+
+# ------------------------------------------------------------------------------
+# DHCPD CONFIG
+# ------------------------------------------------------------------------------
+
+wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
+wpad_ready=0
+if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
+        wpad_ready=1
+    else
+        log "WARNING: WPAD_ENABLED=true but not served -- fallback"
+    fi
+fi
+
+if (( wpad_ready )); then
+    wpad_header="option wpad code 252 = text;"
+    wpad_subnet="option wpad \"$wpad_url\";"
+else
+    wpad_header="#option wpad code 252 = text;"
+    wpad_subnet="#option wpad \"$wpad_url\";"
+fi
+
+if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
+    ping_check_line="ping-check true;"
+    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS};"
+else
+    ping_check_line="ping-check false;"
+    ping_timeout_line=""
+fi
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
+log "uhmleases start..."
+
 verify_dhcp_service
 verify_dhcp_user
 verify_dhcp_files
@@ -1032,7 +1085,7 @@ is_pydhcp() {
                             echo "$lease_content" >> "$temp_leases"
                         else
                             log "INFO: add $mac_address to uhm-grace"
-                            log "INFO: ip=$ip_address hostname=${client_name:0:30}"
+                            log "INFO: ip=$ip_address host=${client_name:0:20}"
                             echo "a;${mac_address};${ip_address};${client_name};$(date +%s);" >> "$UHM_GRACE"
                             echo "$lease_content" >> "$temp_leases"
                         fi

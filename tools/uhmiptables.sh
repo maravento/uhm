@@ -3,19 +3,35 @@
 #
 ################################################################################
 #
-# Minimal firewall template for uhm
+# uhmiptables -- firewall placeholder for uhm
 #
 # DESCRIPTION:
-# Enables IPv4 forwarding and NAT -- neither is on by default in Ubuntu, and
-# without them LAN clients get a lease but reach nothing. Nothing else: no
-# proxy redirect, no port filtering, no ipsets. Client classification and the
-# captive portal do not depend on this file.
+# This is a PLACEHOLDER, not the real ruleset. It enables IPv4 forwarding and
+# masquerades the LAN out the WAN interface, and nothing else: no ACL, no
+# ipsets, no port filtering, no policies. Without it clients get a lease and
+# reach nothing, so uhm needs this much to work.
 #
-# For the full ruleset, copy uhmiptables_example.txt over this file and
-# adapt it to your network.
+# Access control still applies: uhm enforces it at the DHCP layer, through the
+# blockdhcp deny class uhmleases.sh writes into pydhcpd.conf. That does not
+# depend on this file.
 #
-# Rules live in UHM_NAT, flushed and rebuilt on every run so they never
-# accumulate. Nothing outside that chain is touched.
+# TO INSTALL THE REAL RULESET:
+# uhmiptables_example.txt, in this same directory, is the full reference
+# implementation (ACL classification, MAC2IP, captive portal, proxy
+# redirection). To adopt it, replace this file with it:
+#
+#   cd /etc/uhm/tools
+#   cp uhmiptables.sh uhmiptables.sh.bak
+#   cp uhmiptables_example.txt uhmiptables.sh
+#   chmod 750 uhmiptables.sh
+#
+# Then read it through and adapt it: it assumes a squid proxy on this host,
+# and its rules for the limited and hotspot classes send traffic to it. See
+# the README for what each section expects.
+#
+# Rules live in the UHM_NAT and UHM_FWD chains, flushed and rebuilt on every
+# run so they never accumulate. Nothing outside those two chains is touched,
+# and no policy is changed, so an existing firewall keeps working.
 #
 # DEPENDENCIES: iptables, procps (sysctl), iproute2
 #
@@ -23,7 +39,7 @@
 #
 ################################################################################
 
-set -uo pipefail
+set -euo pipefail
 
 # ------------------------------------------------------------------------------
 # REQUIREMENTS
@@ -44,41 +60,40 @@ fi
 # dependencies
 for dep_pkg in iptables procps iproute2; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -- abort"
         exit 1
     fi
 done
 
 # ------------------------------------------------------------------------------
-# VARIABLES
+# ENV
 # ------------------------------------------------------------------------------
 
-# validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
-UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
-UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
-UH_UINT='^(0|[1-9][0-9]*)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
-UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
-UH_MAC="^${UH_MAC_RE}$"
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
-
-# Load all configuration from pydhcp.env/uhm.env (network, paths, interfaces).
-# Two files, one per owner: pydhcp.env holds pydhcp's network and ACL values,
-# uhm.env holds uhm's own. pydhcp.env is read first and uhm.env after, so
-# uhm's keys win if a name ever collides. This minimal ruleset only uses
-# $wan_iface, but every iptables flavor uhm ships (this file and
-# uhmiptables_example.txt) loads the same set of variables for
-# consistency. Safe env_key=value parsing -- files are never
-# sourced to prevent code execution.
-pydhcp_conf="/etc/pydhcp/pydhcp.env"
-uhm_conf="/etc/uhm/uhm.env"
-
-# ------------------------------------------------------------------------------
-# FUNCTIONS
-# ------------------------------------------------------------------------------
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+env_specs=("$pydhcp_env root:pydhcpd 640")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
@@ -93,78 +108,99 @@ load_conf() {
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
             exit 1
         fi
         case "$env_key" in
-            INTERFACESv4|\
-            SERVER_IP|SERV_SUBNET|SERV_MASK|SERV_DNS|WAN_IFACE|\
-            ACL_MAC_PATH|UHM_PATH|UHM_GRACE|WPAD_PORT)
+            WAN_IFACE)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
         esac
     done < "$conf_file"
 }
 
-if [ ! -r "$pydhcp_conf" ]; then
-    log "ERROR: cannot read $pydhcp_conf -- abort"
+# LOAD
+# WAN_IFACE is the only value this ruleset needs. pydhcp's installer writes it
+# into pydhcp.env as a shared key, and every project that needs it reads it
+# from there. Safe key=value parsing -- the file is never sourced to prevent
+# code execution.
+load_conf "$pydhcp_env" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in WAN_IFACE; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
     exit 1
 fi
-load_conf "$pydhcp_conf" || true
-load_conf "$uhm_conf" || true
+unset key_errors key_error env_key
 
-# wan is a placeholder: uhmsetup.sh replaces it with sed -i during the
-# setup wizard, after asking and listing available interfaces.
-wan_iface="${WAN_IFACE:-eth0}"
-INTERFACESv4="${INTERFACESv4:-eth1}"
-SERV_SUBNET="${SERV_SUBNET:-192.168.0.0}"
-SERVER_IP="${SERVER_IP:-192.168.0.10}"
-SERV_DNS="${SERV_DNS:-$SERVER_IP}"
-WPAD_PORT="${WPAD_PORT:-18100}"
-[[ "$WPAD_PORT" =~ $UH_UINT ]] && (( WPAD_PORT >= 1 && WPAD_PORT <= 65535 )) \
-    || { log "ERROR: WPAD_PORT is not a valid port -- abort"; exit 1; }
-SERV_MASK="${SERV_MASK:-255.255.255.0}"
-if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
-    netmask_int="${BASH_REMATCH[1]}"
-else
-    log "ERROR: SERV_MASK is not a valid netmask -- abort"
+# KEY GUARD
+# The MASQUERADE rule below names this interface. A value that no longer
+# matches the host produces a LAN without NAT instead of an error.
+if ! ip link show "$WAN_IFACE" >/dev/null 2>&1; then
+    log "ERROR: WAN_IFACE '$WAN_IFACE' does not exist on this host -- abort"
     exit 1
 fi
-acl_path="${ACL_MAC_PATH:-/etc/acl/mac}"
-acl_path="${acl_path%/mac}"
-acl_mac_path="$acl_path/mac"
-acl_ipt_path="${acl_path}/ipt"
-UHM_PATH="${UHM_PATH:-/etc/uhm}"
-UHM_GRACE="${UHM_GRACE:-${UHM_PATH}/acl/uhm-grace.txt}"
 
-ip link show "$wan_iface" >/dev/null 2>&1 || {
-    log "ERROR: interface '$wan_iface' does not exist -- abort"
-    exit 1
-}
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
 
 log "uhmiptables start..."
 
-sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+# A rule that fails here leaves the LAN without NAT, so every step reports it
+# instead of letting the script exit 0 and pass as a good reload.
+fail() { log "ERROR: $1 -- abort"; exit 1; }
+
+# -- FORWARDING ----------------------------------------------------------------
+
 # Not a tuning value: without forwarding this host stops routing, and LAN
-# clients get a lease that reaches nothing. Verified by its resulting
-# state, not by sysctl's exit code, so a value already set by another
-# means is accepted.
+# clients get a lease that reaches nothing. Verified by its resulting state,
+# not by sysctl's exit code, so a value already set by another means is
+# accepted.
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
     log "ERROR: IPv4 forwarding is off, LAN cannot route -- abort"
     exit 1
 fi
 
-# A rule that fails here leaves the LAN without NAT, so every step below
-# reports it instead of letting the script exit 0 and pass as a good reload.
-fail() { log "ERROR: $1 -- abort"; exit 1; }
+# -- NAT -----------------------------------------------------------------------
 
 iptables -t nat -N UHM_NAT 2>/dev/null || true
 iptables -t nat -F UHM_NAT || fail "cannot flush UHM_NAT"
 iptables -t nat -C POSTROUTING -j UHM_NAT 2>/dev/null \
     || iptables -t nat -A POSTROUTING -j UHM_NAT \
     || fail "cannot hook UHM_NAT into POSTROUTING"
-iptables -t nat -A UHM_NAT -o "$wan_iface" -j MASQUERADE \
-    || fail "cannot add MASQUERADE on $wan_iface"
+iptables -t nat -A UHM_NAT -o "$WAN_IFACE" -j MASQUERADE \
+    || fail "cannot add MASQUERADE on $WAN_IFACE"
+
+# -- FORWARD RULES -------------------------------------------------------------
+
+# ip_forward only enables routing in the kernel. If the FORWARD policy is
+# DROP, set by another firewall or by a previous ruleset, traffic still dies.
+# These two accept the LAN's way out and the replies coming back, without
+# naming the LAN interface and without touching any policy.
+iptables -N UHM_FWD 2>/dev/null || true
+iptables -F UHM_FWD || fail "cannot flush UHM_FWD"
+iptables -C FORWARD -j UHM_FWD 2>/dev/null \
+    || iptables -A FORWARD -j UHM_FWD \
+    || fail "cannot hook UHM_FWD into FORWARD"
+iptables -A UHM_FWD -o "$WAN_IFACE" -j ACCEPT \
+    || fail "cannot accept LAN traffic out $WAN_IFACE"
+iptables -A UHM_FWD -i "$WAN_IFACE" -m conntrack \
+    --ctstate ESTABLISHED,RELATED -j ACCEPT \
+    || fail "cannot accept replies in on $WAN_IFACE"
 
 # ------------------------------------------------------------------------------
 # END

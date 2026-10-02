@@ -1,41 +1,22 @@
 #!/bin/bash
 # maravento.com
-
-################################################################################
-# THIS IS AN EXAMPLE SCRIPT -- DO NOT USE IN PRODUCTION
-# uhmsetup.sh never deploys, renames, or executes this file -- it exists
-# only as reference material for the administrator to copy from by hand.
-# Adapt interface names, IPs, and ACL paths to your environment.
-# See the full reference implementation and README at:
-# https://github.com/maravento/uhm
-################################################################################
-
+#
 ################################################################################
 #
-# Iptables/Ipset Firewall O(1) -- Iptables script
+# Iptables/Ipset Firewall O(1) — Iptables script
 #
-# DESCRIPTION:
-## Verify: iptables -L -n / iptables -nvL / iptables -Ln -t mangle / iptables -Ln -t nat
-## Sockets: ss -ltuna
-# Ports: /etc/services
-# ============================
-# Ports 0-1023: "Well-known ports" (System/Privileged)
-# - Require superuser privileges to bind
-# - Standard services: HTTP(80), HTTPS(443), SSH(22), DNS(53)
-# - FTP(21), Telnet(23), SMTP(25), etc.
-# Ports 1024-49151: "Registered ports" (IANA Assigned)
-# - Assigned by Internet Assigned Numbers Authority
-# - User/application services without root privileges
-# - Examples: MySQL(3306), PostgreSQL(5432), Skype(1000-10000)
-# Ports 49152-65535: "Dynamic/Private ports" (Ephemeral)
-# - Available for any use, not registered by IANA
-# - Used for temporary/outbound connections
-# - Client-side dynamic port assignments
-# REFERENCES:
-# - https://gutl.jovenclub.cu/wiki/doku.php?id=definiciones:puertos_tcp_udp
-# - https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers
-# - RFC 6335 - Internet Assigned Numbers Authority (IANA) Procedures
-# - https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt
+# THIS IS THE REFERENCE RULESET
+# uhmsetup.sh deploys this file next to tools/uhmiptables.sh, read-only and
+# never executed. To adopt it, copy it over the placeholder:
+#
+#   cd /etc/uhm/tools
+#   cp uhmiptables.sh uhmiptables.sh.bak
+#   cp uhmiptables_example.txt uhmiptables.sh
+#   chmod 750 uhmiptables.sh
+#
+# Then read it through: it assumes a squid proxy on this host, and its rules
+# for the limited and hotspot classes send traffic to it. Adapt interface
+# names, IPs and ACL paths to your environment.
 #
 ################################################################################
 
@@ -67,16 +48,56 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep; do
+for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 mawk coreutils grep curl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: Required dependency '$dep_pkg' is not installed -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -- abort"
         exit 1
     fi
 done
 
 # ------------------------------------------------------------------------------
-# FUNCTIONS
+# VARIABLES
 # ------------------------------------------------------------------------------
+
+# validation -- one variable per thing validated; use directly with =~
+UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
+UH_UINT='^(0|[1-9][0-9]*)$'
+UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
+UH_MAC="^${UH_MAC_RE}$"
+UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
+
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
@@ -91,7 +112,7 @@ load_conf() {
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
             exit 1
         fi
         case "$env_key" in
@@ -105,79 +126,163 @@ load_conf() {
     done < "$conf_file"
 }
 
-# ------------------------------------------------------------------------------
-# VARIABLES
-# ------------------------------------------------------------------------------
+# LOAD
+# Load all configuration from the two env files (network, paths, interfaces).
+# One file per owner: pydhcp.env holds pydhcp's network and ACL values,
+# uhm.env holds uhm's own. pydhcp.env is read first and uhm.env after, so
+# uhm's keys win if a name ever collides. Safe key=value parsing -- files
+# are never sourced to prevent code execution.
+load_conf "$pydhcp_env" || true
+load_conf "$uhm_env" || true
 
-# validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
-UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
-UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
-UH_UINT='^(0|[1-9][0-9]*)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
-UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
-UH_MAC="^${UH_MAC_RE}$"
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
-
-# Load all configuration from uhm.env (network, paths, interfaces).
-# Two files, one per owner: pydhcp.env holds pydhcp's network and ACL
-# values, uhm.env holds uhm's own. pydhcp.env is read first and uhm.env
-# after, so uhm's keys win if a name ever collides. The squid ports below
-# are this script's own literals -- gateproxy keeps its copy in its own
-# firewall. Safe key=value parsing - files are never sourced to prevent
-# code execution.
-pydhcp_conf="/etc/pydhcp/pydhcp.env"
-uhm_conf="/etc/uhm/uhm.env"
-
-if [ ! -r "$pydhcp_conf" ]; then
-    log "ERROR: cannot read $pydhcp_conf -- abort"
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in WAN_IFACE INTERFACESv4 ACL_PATH ACL_MAC_LIMITED \
+               ACL_MAC_UNLIMITED; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in SERVER_IP SERV_SUBNET; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+if ! grep -q "^SERV_MASK=" "$pydhcp_env"; then
+    key_errors+=("SERV_MASK missing line")
+elif [[ -z "${SERV_MASK:-}" ]]; then
+    key_errors+=("SERV_MASK not set")
+elif ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
+    key_errors+=("SERV_MASK invalid netmask")
+fi
+if ! grep -q "^SERV_DNS=" "$pydhcp_env"; then
+    key_errors+=("SERV_DNS missing line")
+elif [[ -z "${SERV_DNS:-}" ]]; then
+    key_errors+=("SERV_DNS not set")
+elif ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
+    key_errors+=("SERV_DNS invalid DNS list")
+fi
+if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
+    key_errors+=("WPAD_PORT missing line")
+elif [[ -z "${WPAD_PORT:-}" ]]; then
+    key_errors+=("WPAD_PORT not set")
+elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
+     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+    key_errors+=("WPAD_PORT invalid port")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
     exit 1
 fi
-load_conf "$pydhcp_conf" || true
-load_conf "$uhm_conf" || true
+for env_key in UHM_PATH UHM_GRACE UHM_MACAUTH; do
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
 
-# WAN is a placeholder: uhmsetup.sh replaces it with sed -i during the
-# setup wizard, after asking and listing available interfaces.
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+if [ -z "${WAN_IFACE:-}" ]; then
+    log "WARNING: no WAN_IFACE in pydhcp.env -- fallback"
+fi
 wan_iface="${WAN_IFACE:-eth0}"
+if [ -z "${INTERFACESv4:-}" ]; then
+    log "WARNING: no INTERFACESv4 in pydhcp.env -- fallback"
+fi
 INTERFACESv4="${INTERFACESv4:-eth1}"
+if [ -z "${SERV_SUBNET:-}" ]; then
+    log "WARNING: no SERV_SUBNET in pydhcp.env -- fallback"
+fi
 SERV_SUBNET="${SERV_SUBNET:-192.168.0.0}"
+if [ -z "${SERVER_IP:-}" ]; then
+    log "WARNING: no SERVER_IP in pydhcp.env -- fallback"
+fi
 SERVER_IP="${SERVER_IP:-192.168.0.10}"
+# wpad/pac port (DHCP option 252 target)
+if [ -z "${WPAD_PORT:-}" ]; then
+    log "WARNING: no WPAD_PORT in pydhcp.env -- fallback"
+fi
+WPAD_PORT="${WPAD_PORT:-18100}"
+if [ -z "${SERV_DNS:-}" ]; then
+    log "WARNING: no SERV_DNS in pydhcp.env -- fallback"
+fi
+SERV_DNS="${SERV_DNS:-$SERVER_IP}"
+if [ -z "${SERV_MASK:-}" ]; then
+    log "WARNING: no SERV_MASK in pydhcp.env -- fallback"
+fi
+SERV_MASK="${SERV_MASK:-255.255.255.0}"
+# CIDR prefix derived from SERV_MASK, already validated by KEY CHECK
+[[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]
+netmask_int="${BASH_REMATCH[1]}"
+
+# ------------------------------------------------------------------------------
+# OWN VALUES
+# ------------------------------------------------------------------------------
+
+# Values this script declares itself -- not read from any .env. gateproxy
+# keeps its own copy of these ports in its own firewall.
 # squid proxy port
 squid_port="3128"
-# squid intercept port (NAT-redirected HTTP, not exposed to explicit proxy clients)
+# squid intercept port (NAT-redirected HTTP, not exposed to explicit proxy
+# clients)
 squid_intercept_port="3129"
-# wpad/pac port (DHCP option 252 target)
-WPAD_PORT="${WPAD_PORT:-18100}"
-[[ "$WPAD_PORT" =~ $UH_UINT ]] && (( WPAD_PORT >= 1 && WPAD_PORT <= 65535 )) || { log "ERROR: WPAD_PORT is not a valid port: '$WPAD_PORT' -- abort"; exit 1; }
-SERV_DNS="${SERV_DNS:-$SERVER_IP}"
-SERV_MASK="${SERV_MASK:-255.255.255.0}"
-if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
-    netmask_int="${BASH_REMATCH[1]}"
-else
-    log "ERROR: SERV_MASK is not a valid NETMASK: '$SERV_MASK' -- abort"
-    exit 1
-fi
 
 # ------------------------------------------------------------------------------
 # ACL
 # ------------------------------------------------------------------------------
 
-# GLOBAL PATH
+# PATHS
+if [ -z "${ACL_PATH:-}" ]; then
+    log "WARNING: no ACL_PATH in pydhcp.env -- fallback"
+fi
 acl_path="${ACL_PATH:-/etc/acl}"
 acl_mac_path="$acl_path/mac"
 acl_ipt_path="$acl_path/ipt"
 
 # UHM MAC LISTS
 # Generated by uhm
+if [ -z "${UHM_PATH:-}" ]; then
+    log "WARNING: no UHM_PATH in uhm.env -- fallback"
+fi
 UHM_PATH="${UHM_PATH:-/etc/uhm}"
+if [ -z "${UHM_MACAUTH:-}" ]; then
+    log "WARNING: no UHM_MACAUTH in uhm.env -- fallback"
+fi
 UHM_MACAUTH="${UHM_MACAUTH:-${UHM_PATH}/acl/uhm-auth.txt}"
+if [ -z "${UHM_GRACE:-}" ]; then
+    log "WARNING: no UHM_GRACE in uhm.env -- fallback"
+fi
 UHM_GRACE="${UHM_GRACE:-${UHM_PATH}/acl/uhm-grace.txt}"
 
 # MAINTAINED BY SYSADMIN
 # MAC lists
+if [ -z "${ACL_MAC_LIMITED:-}" ]; then
+    log "WARNING: no ACL_MAC_LIMITED in pydhcp.env -- fallback"
+fi
 ACL_MAC_LIMITED="${ACL_MAC_LIMITED:-$acl_mac_path/mac-limited.txt}"
+if [ -z "${ACL_MAC_UNLIMITED:-}" ]; then
+    log "WARNING: no ACL_MAC_UNLIMITED in pydhcp.env -- fallback"
+fi
 ACL_MAC_UNLIMITED="${ACL_MAC_UNLIMITED:-$acl_mac_path/mac-unlimited.txt}"
 
 # PYDHCP
@@ -191,21 +296,19 @@ path_macs="$acl_ipt_path/dhcp_mac.txt"
 
 # REQUIRED FILES
 # Abort if a list this script depends on is missing
-for conf_file in "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" "$dhcp_conf"; do
-    if [ ! -f "$conf_file" ]; then
-        log "ERROR: required file not found: $conf_file -- abort"
+for required_file in "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" "$dhcp_conf"; do
+    if [ ! -f "$required_file" ]; then
+        log "ERROR: required file not found: $required_file -- abort"
         exit 1
     fi
 done
+unset required_file
 if [ ! -d "$acl_mac_path" ] || [ -z "$(ls -A "$acl_mac_path" 2>/dev/null)" ]; then
     log "ERROR: $acl_mac_path missing or empty -- abort"
     exit 1
 fi
 
-# ------------------------------------------------------------------------------
 # MAC SETS
-# ------------------------------------------------------------------------------
-
 # The four MAC sets are declared and filled here, in one place, before any
 # rule uses them. Their source lists are already in their final state at this
 # point: uhmreload.sh runs uhmleases.sh to completion first, and nothing else
@@ -237,19 +340,22 @@ mac_set maclimited   "$ACL_MAC_LIMITED"
 mac_set macunlimited "$ACL_MAC_UNLIMITED"
 mac_set macgrace     "$UHM_GRACE"
 
-# MACPORTS
+# -- MACPORTS LIST -------------------------------------------------------------
+
 # Union of maclimited and machotspot
 ipset create macports list:set -exist
 ipset flush macports
 ipset add macports maclimited -exist
 ipset add macports machotspot -exist
 
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
 # start
 log "uhmiptables start..."
 
-# ------------------------------------------------------------------------------
-# KERNEL RULES
-# ------------------------------------------------------------------------------
+# -- KERNEL RULES --------------------------------------------------------------
 
 # ZERO ALL PACKETS AND COUNTERS
 # Reset tables (IPv4)
@@ -280,16 +386,22 @@ ebtables -X 2>/dev/null || true
 # Conntrack (Optional)
 #conntrack -F 2>/dev/null || true
 
-# ------------------------------------------------------------------------------
-# IPv4
-# ------------------------------------------------------------------------------
+# -- SYSTEM OPTIMIZATION -------------------------------------------------------
 
-# SYSTEM OPTIMIZATION
-# File handle, inotify and socket queue limits raised for a router under load
+# FILE HANDLE
+# inotify and socket queue limits raised for a router under load
 sysctl -w fs.file-max=2097152 >/dev/null 2>&1 || true
 sysctl -w fs.inotify.max_user_watches=524288 >/dev/null 2>&1 || true
 sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1 || true
 sysctl -w net.core.somaxconn=65535 >/dev/null 2>&1 || true
+
+# KERNEL AND FILESYSTEM HARDENING
+# Enable full ASLR (Address Space Layout Randomization)
+sysctl -w kernel.randomize_va_space=2 >/dev/null 2>&1 || true
+# Protect hardlinks (prevents privilege escalation attacks)
+sysctl -w fs.protected_hardlinks=1 >/dev/null 2>&1 || true
+# Protect symlinks (prevents unauthorized link access in shared directories)
+sysctl -w fs.protected_symlinks=1 >/dev/null 2>&1 || true
 
 # CONNECTION TRACKING
 # nf_conntrack_max/buckets only exist under /proc/sys once the nf_conntrack
@@ -304,7 +416,9 @@ modprobe -q nf_conntrack 2>/dev/null || true
 sysctl -w net.netfilter.nf_conntrack_max=524288 >/dev/null 2>&1 || true
 sysctl -w net.netfilter.nf_conntrack_buckets=131072 >/dev/null 2>&1 || true
 
-# SECURITY & NETWORK HARDENING
+# -- IPv4 ----------------------------------------------------------------------
+
+# SECURITY AND NETWORK HARDENING
 # Disable IP source routing (prevents IP spoofing and routing attacks)
 sysctl -w net.ipv4.conf.all.accept_source_route=0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf.default.accept_source_route=0 >/dev/null 2>&1 || true
@@ -319,7 +433,7 @@ sysctl -w net.ipv4.conf.default.log_martians=1 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf.all.rp_filter=1 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf.default.rp_filter=1 >/dev/null 2>&1 || true
 
-# NETWORK PERFORMANCE & TCP PROTECTION
+# NETWORK PERFORMANCE AND TCP PROTECTION
 # Optimized TCP/IP parameters for high-performance and secure routing
 # Enable TCP SYN cookies (protects against SYN flood attacks)
 sysctl -w net.ipv4.tcp_syncookies=1 >/dev/null 2>&1 || true
@@ -361,7 +475,7 @@ sysctl -w net.ipv4.tcp_max_tw_buckets=1000000 >/dev/null 2>&1 || true
 # Allow safe TIME_WAIT socket reuse (improves connection efficiency)
 sysctl -w net.ipv4.tcp_tw_reuse=1 >/dev/null 2>&1 || true
 
-# ROUTING & FORWARDING
+# ROUTING AND FORWARDING
 # Enable packet forwarding (required for NAT/routing)
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 # Not a tuning value like the rest: without forwarding this host stops
@@ -403,14 +517,6 @@ sysctl -w "net.ipv4.neigh.${INTERFACESv4}.mcast_solicit=6" >/dev/null 2>&1 || tr
 # longer window would keep sending to the previous holder's MAC.
 sysctl -w "net.ipv4.neigh.${INTERFACESv4}.base_reachable_time_ms=30000" >/dev/null 2>&1 || true
 
-# KERNEL & FILESYSTEM HARDENING
-# Enable full ASLR (Address Space Layout Randomization)
-sysctl -w kernel.randomize_va_space=2 >/dev/null 2>&1 || true
-# Protect hardlinks (prevents privilege escalation attacks)
-sysctl -w fs.protected_hardlinks=1 >/dev/null 2>&1 || true
-# Protect symlinks (prevents unauthorized link access in shared directories)
-sysctl -w fs.protected_symlinks=1 >/dev/null 2>&1 || true
-
 # ICMP
 # Disable sending ICMP redirects (prevents MITM via route manipulation)
 sysctl -w net.ipv4.conf.all.send_redirects=0 >/dev/null 2>&1 || true
@@ -427,18 +533,14 @@ sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1 >/dev/null 2>&1 || true
 # Rate limit ICMP message generation (100 ms minimum interval)
 sysctl -w net.ipv4.icmp_ratelimit=100 >/dev/null 2>&1 || true
 
-# ------------------------------------------------------------------------------
-# IPv6
-# ------------------------------------------------------------------------------
+# -- IPv6 ----------------------------------------------------------------------
 
 # WAN IPv6
 # IPv6 left enabled on the WAN interface
 sysctl -w "net.ipv6.conf.${wan_iface}.disable_ipv6=0" >/dev/null 2>&1 || true
-
 # LAN IPv6
 # IPv6 disabled on the LAN interface
 sysctl -w "net.ipv6.conf.${INTERFACESv4}.disable_ipv6=1" >/dev/null 2>&1 || true
-
 # WAN IPv6 TRAFFIC
 # Only what the link itself needs, plus replies to what this host started
 # Essential ICMPv6 (NDP, SLAAC, Path MTU)
@@ -448,9 +550,7 @@ ip6tables -A OUTPUT -o "$wan_iface" -p udp --sport 546 --dport 547 -j ACCEPT || 
 # Established traffic
 ip6tables -A INPUT -i "$wan_iface" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
-# ------------------------------------------------------------------------------
-# GLOBAL RULES
-# ------------------------------------------------------------------------------
+# -- POLICIES ------------------------------------------------------------------
 
 # Global policies IPv4 (ACCEPT, then explicit drops)
 iptables -P INPUT ACCEPT
@@ -462,8 +562,7 @@ ip6tables -P INPUT DROP || true
 ip6tables -P FORWARD DROP || true
 ip6tables -P OUTPUT DROP || true
 
-# LOOPBACK
-# Accept all traffic on the loopback interface
+# LOOPBACK: Accept all traffic on the loopback interface
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 ip6tables -A INPUT -i lo -j ACCEPT || true
@@ -471,15 +570,9 @@ ip6tables -A OUTPUT -o lo -j ACCEPT || true
 iptables -A INPUT -s 127.0.0.0/8 ! -i lo -j DROP
 iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 
-# WAN ingress: drop spoofed traffic claiming a reserved/private source address.
-# dst intentionally omitted -- this host may itself sit behind CGNAT/double-NAT
-# on a private WAN address, which a dst check would wrongly match and drop.
-#iptables -t mangle -A PREROUTING -i "$wan_iface" -m set --match-set bogons src -j DROP
+# -- ESSENTIAL RULES -----------------------------------------------------------
 
-# ------------------------------------------------------------------------------
 # WAN PORTS (Optional)
-# ------------------------------------------------------------------------------
-
 # Local ports dropped on the WAN side to reduce log noise
 # 25     TCP - Postfix SMTP (master)
 # 80     TCP - HTTP
@@ -513,10 +606,6 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 #done
 #iptables -A INPUT -i "$wan_iface" -p tcp -m set --match-set wandropports dst -j DROP
 #iptables -A INPUT -i "$wan_iface" -p udp --dport 5353 -j DROP
-
-# ------------------------------------------------------------------------------
-# ESSENTIAL RULES
-# ------------------------------------------------------------------------------
 
 # DHCP
 # Let pydhcpd serve the LAN, and this host renew its own lease on the WAN
@@ -566,15 +655,13 @@ for dns_ip in ${SERV_DNS//,/ }; do
         iptables -A FORWARD -i "$INTERFACESv4" -d "$dns_ip" -p "$proto_name" --dport 53 -j ACCEPT
     done
 done
+
 for proto_name in tcp udp; do
     iptables -A FORWARD -i "$INTERFACESv4" -p "$proto_name" --dport 53 -m hashlimit --hashlimit-name dns-drop --hashlimit-above 3/min --hashlimit-burst 3 --hashlimit-mode srcip -j NFLOG --nflog-prefix "DNS-DROP: "
     iptables -A FORWARD -i "$INTERFACESv4" -p "$proto_name" --dport 53 -j DROP
 done
 
-# ------------------------------------------------------------------------------
-# UNIFI PORTS
-# ------------------------------------------------------------------------------
-
+# -- UNIFI PORTS ---------------------------------------------------------------
 # https://help.ui.com/hc/en-us/articles/218506997-Required-Ports-Reference
 
 # UNIFI WAN
@@ -606,15 +693,6 @@ iptables -A INPUT -i "$wan_iface" -p udp --dport 10001 -j ACCEPT
 unifi_tcp="8080,6789"
 unifi_udp_local="10001"
 unifi_udp_wan="3478,123"
-# Commented out 2026-07-12: redundant with macunlimited (APs are already in that
-# ipset, which grants full INPUT/FORWARD/mangle/nat access). These rules were
-# opening UNIFI_TCP/UNIFI_UDP_LOCAL/UNIFI_UDP_WAN to any LAN MAC, not just APs.
-# Trial period: watch for a week: if nothing breaks, remove for good.
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -p tcp -m multiport --dports "$unifi_tcp" -j ACCEPT
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -p udp -m multiport --dports "$unifi_udp_local,$unifi_udp_wan" -j ACCEPT
-#iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports "$unifi_tcp" -j ACCEPT
-#iptables -A INPUT -i "$INTERFACESv4" -p udp --dport "$unifi_udp_local" -j ACCEPT
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p udp -m multiport --dports "$unifi_udp_wan" -j ACCEPT
 # Unifi Portal Access
 # Optional https: 8843
 cpd_tcp_ports="8880,8881,8882"
@@ -624,25 +702,19 @@ cpd_tcp_ports="8880,8881,8882"
 iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports "$cpd_tcp_ports" -m set --match-set macunlimited src -j DROP
 iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports "$cpd_tcp_ports" -m set --match-set maclimited src -j DROP
 
-# ------------------------------------------------------------------------------
-# MACGRACE
-# ------------------------------------------------------------------------------
+# -- MACGRACE ------------------------------------------------------------------
 
-# HTTP
-# Send a client still in grace to the captive portal when it browses on port 80
+# http: Send a client still in grace to the captive portal when it browses on port 80
 iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set macgrace src -p tcp --dport 80 -j ACCEPT
 iptables -t nat -A PREROUTING -i "$INTERFACESv4" -m set --match-set macgrace src -p tcp --dport 80 -j REDIRECT --to-port 8880
 iptables -A INPUT -i "$INTERFACESv4" -m set --match-set macgrace src -p tcp --dport 8880 -j ACCEPT
-# CDP
+# cdp
 # Let a client still in grace reach the captive portal ports
 iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set macgrace src -p tcp -m multiport --dports "$cpd_tcp_ports" -j ACCEPT
 iptables -A INPUT -i "$INTERFACESv4" -m set --match-set macgrace src -p tcp -m multiport --dports "$cpd_tcp_ports" -j ACCEPT
 
-# ------------------------------------------------------------------------------
-# MAC2IP
-# ------------------------------------------------------------------------------
+# -- MAC2IP --------------------------------------------------------------------
 
-# MAC2IP
 mac2ip_rules=$(awk '
     /host [^{]+ \{/ { in_block=1; mac=""; ip="" }
     in_block && /hardware ethernet/ { mac=$3; gsub(/;/, "", mac) }
@@ -655,7 +727,7 @@ mac2ip_rules=$(awk '
 # Lowercase MAC-only view of MAC2IP, for the classified-MAC diagnostic below
 # (has no static reservation, distinct from the ip,mac pairs macip itself uses).
 mac2ip_macs=$(awk '{print tolower($1)}' <<< "$mac2ip_rules")
-# rule MAC2IP
+
 if ! ipset list macip &>/dev/null; then
     ipset create macip hash:ip,mac -exist
 else
@@ -709,9 +781,7 @@ else
     log "WARNING: no static DHCP entries in $dhcp_conf -- alert"
 fi
 
-# ------------------------------------------------------------------------------
-# MACUNLIMITED
-# ------------------------------------------------------------------------------
+# -- MACUNLIMITED --------------------------------------------------------------
 
 # MAC + IP for Access Points, Switch, etc.
 iptables -t nat -A PREROUTING -i "$INTERFACESv4" -m set --match-set macunlimited src -j ACCEPT
@@ -724,43 +794,7 @@ for chain_name in INPUT FORWARD; do
     iptables -A "$chain_name" -i "$INTERFACESv4" -m set --match-set macunlimited src -j ACCEPT
 done
 
-# ------------------------------------------------------------------------------
-# SECURITY RULES (Optional) (Example)
-# ------------------------------------------------------------------------------
-
-# BOGONS (Optional)
-# Reserved and unroutable address ranges. Disabled by default: enable the
-# whole block only if the LAN range is not listed in bogons.txt, or it will
-# block the local network.
-#bogons_file="$acl_ipt_path/bogons.txt"
-#bogons_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/ipt/bogons.txt"
-#if [ ! -f "$bogons_file" ]; then
-#    if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$bogons_file" "$bogons_url"; then
-#        chown root:root "$bogons_file"
-#    else
-#        log "WARNING: cannot download $bogons_file -- alert"
-#    fi
-#fi
-
-#if ! ipset list bogons &>/dev/null; then
-#    ipset create bogons hash:net -exist
-#else
-#    ipset flush bogons
-#fi
-#if [ -f "$bogons_file" ]; then
-#    for bogons_cidr in $(grep -vE '^\s*#|^\s*$' "$bogons_file" | awk '{print $1}' | sort -V -u 2>/dev/null); do
-#        ipset add bogons "$bogons_cidr" -exist
-#    done
-#else
-#    log "WARNING: $bogons_file not found, bogons -- alert"
-#fi
-
-# Allow 255.255.255.0/24 before BOGONS DROP
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -s 255.255.255.0/24 -j ACCEPT
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -d 255.255.255.0/24 -j ACCEPT
-# DROP bogons
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set bogons src -j DROP
-#iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set bogons dst -j DROP
+# -- SECURITY RULES ------------------------------------------------------------
 
 # BLOCKPORTS
 # path: /etc/acl/ipt/blockports.txt
@@ -823,11 +857,12 @@ for proto_name in tcp udp; do
     iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -p "$proto_name" -m set --match-set blockports dst -j DROP
 done
 
-# Block 6to4 (IPv6-in-IPv4 tunneling) - prevents LAN clients from bypassing
+# 6to4 (IPv6-in-IPv4 tunneling) - prevents LAN clients from bypassing
 # IPv4-based firewall rules via IPv6 tunnel encapsulation
 iptables -A FORWARD -i "$INTERFACESv4" -p 41 -j DROP
 
-# NETBIOS NMBD (disabled in smb.conf)
+# NETBIOS NMBD
+# disabled in smb.conf
 for chain_name in INPUT FORWARD; do
     iptables -A "$chain_name" -i "$INTERFACESv4" -p udp -m multiport --dports 137,138 -j DROP
     iptables -A "$chain_name" -i "$INTERFACESv4" -p tcp --dport 139 -j DROP
@@ -837,7 +872,7 @@ for chain_name in INPUT FORWARD; do
     iptables -A "$chain_name" -i "$INTERFACESv4" -p udp -m multiport --dports 5683,5684 -j DROP
 done
 
-# syncflood
+# SYNCFLOOD
 iptables -N syn_flood 2>/dev/null || true
 iptables -A INPUT -i "$wan_iface" -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -j syn_flood
 iptables -A INPUT -i "$INTERFACESv4" -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -j syn_flood
@@ -848,7 +883,8 @@ iptables -A syn_flood -i "$INTERFACESv4" -m limit --limit 200/s --limit-burst 50
 iptables -A syn_flood -m limit --limit 1/min -j NFLOG --nflog-prefix "SYNFLOOD: "
 iptables -A syn_flood -j DROP
 
-# Windows Update Delivery Optimization (WUDO)
+# WUDO
+# Windows Update Delivery Optimization
 # Allow peer-to-peer update sharing within the local network.
 # Block outbound WUDO traffic to WAN and direct connections to the firewall.
 for proto_name in tcp udp; do
@@ -860,31 +896,28 @@ for chain_name in INPUT FORWARD; do
     done
 done
 
-# Block GRE (Generic Routing Encapsulation) PROTOCOL 47
+# GRE
+# Generic Routing Encapsulation: PROTOCOL 47
 for chain_name in INPUT FORWARD; do
     iptables -A "$chain_name" -i "$INTERFACESv4" -p 47 -j DROP
 done
-
 # Block Windows Mobile Hotspot sharing
 iptables -A FORWARD -i "$INTERFACESv4" -d 192.168.137.0/24 -j DROP
-
 # Block WS-Discovery unicast to server (Windows clients noise)
 iptables -A INPUT -i "$INTERFACESv4" -p udp --sport 3702 -d "$SERVER_IP" -j DROP
-
 # KMS Windows activation noise
 iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 1688 -j ACCEPT
 iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p tcp --dport 1688 -j ACCEPT
-
 # Spotify LAN sync broadcast noise
 iptables -A INPUT -i "$INTERFACESv4" -p udp --dport 57621 -j DROP
-
 # Cisco IP phones discovery noise
 iptables -A INPUT -i "$INTERFACESv4" -p udp -m multiport --dports 2007,2008 -j DROP
-
 # SAP broadcast noise (Optional)
 iptables -A INPUT -i "$INTERFACESv4" -p udp --dport 3289 -j DROP
+# Dropbox LAN sync broadcast noise
+iptables -A INPUT -i "$INTERFACESv4" -p udp --dport 17500 -j DROP
 
-# ICMP (ping) (Optional)
+# ICMP (PING) (Optional)
 # WARNING:
 # You need to change the following kernel parameter in the header of this script:
 # sysctl -w net.ipv4.icmp_echo_ignore_all=0 >/dev/null 2>&1
@@ -895,63 +928,61 @@ iptables -A INPUT -i "$INTERFACESv4" -p udp --dport 3289 -j DROP
 # Silence ICMP forward noise
 iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p icmp -j DROP
 
-# ------------------------------------------------------------------------------
-# MAC PORTS (Optional) (Example)
-# ------------------------------------------------------------------------------
+# -- MAC PORTS -----------------------------------------------------------------
 
-# PRINTERS: printer/scanner PROTOCOL traffic addressed to the proxy itself
-#iptables -A INPUT -i "$INTERFACESv4" -p udp -m multiport --dports 161,162,3910,3911 -m set --match-set macports src -j ACCEPT
-#iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports 9100,3910,3911 -m set --match-set macports src -j ACCEPT
-# PRINTERS & SCANNERS UDP: SNMP (161,162) + prnrequest/prnstatus (3910/3911)
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p udp -m multiport --dports 161,162,3910,3911 -m set --match-set macports src -j ACCEPT
-# PRINTERS & SCANNERS TCP: JetDirect/RAW (9100) + prnrequest/prnstatus (3910/3911)
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 9100,3910,3911 -m set --match-set macports src -j ACCEPT
+# PROXYMON: WARNING PAGE HTTP FOR BANDATA
+# https://github.com/maravento/proxymon
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 18081 -m set --match-set macports src -j ACCEPT
+# SMBSTACK
+# https://github.com/maravento/smbstack
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 3092 -m set --match-set macports src -j ACCEPT
+
+# COMMONS PORTS
+# SMB / Microsoft-DS
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 445 -m set --match-set macports src -j ACCEPT
+# Printers (printer/scanner PROTOCOL traffic addressed to the proxy itself)
+iptables -A INPUT -i "$INTERFACESv4" -p udp -m multiport --dports 161,162,3910,3911 -m set --match-set macports src -j ACCEPT
+iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports 9100,3910,3911 -m set --match-set macports src -j ACCEPT
+# Printers & Scanners UDP (SNMP 161,162 + prnrequest/prnstatus 3910/3911)
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p udp -m multiport --dports 161,162,3910,3911 -m set --match-set macports src -j ACCEPT
+# Printers & Scanners TCP (JetDirect/RAW 9100 + prnrequest/prnstatus 3910/3911)
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 9100,3910,3911 -m set --match-set macports src -j ACCEPT
 # STUN/TURN (WebRTC, Teams, Meet, Zoom)
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p udp -m multiport --dports 3478:3481 -m set --match-set macports src -j ACCEPT
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p tcp -m multiport --dports 3478,5349 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p udp -m multiport --dports 3478:3481 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p tcp -m multiport --dports 3478,5349 -m set --match-set macports src -j ACCEPT
 # Google STUN
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p udp -m multiport --dports 19302:19309 -m set --match-set macports src -j ACCEPT
-# FILE SHARING SAMBA (SMB)
-#iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports 445,3092 -m set --match-set macports src -j ACCEPT
-# EMAIL (SMTP, IMAP, POP3)
-#iptables -A FORWARD -i "$INTERFACESv4" -p tcp -m multiport --dports 110,143,465,587,993,995 -m set --match-set macports src -j ACCEPT
-# MESSAGING & XMPP (Jabber, FCM)
-#iptables -A FORWARD -i "$INTERFACESv4" -p tcp -m multiport --dports 5222,5223,5228,5269 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p udp -m multiport --dports 19302:19309 -m set --match-set macports src -j ACCEPT
+# Email (SMTP, IMAP, POP3)
+iptables -A FORWARD -i "$INTERFACESv4" -p tcp -m multiport --dports 110,143,465,587,993,995 -m set --match-set macports src -j ACCEPT
+# Messaging & XMPP (Jabber, FCM)
+iptables -A FORWARD -i "$INTERFACESv4" -p tcp -m multiport --dports 5222,5223,5228,5269 -m set --match-set macports src -j ACCEPT
 # WSD (Web Services Discovery) - TCP
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 5357,5358 -m set --match-set macports src -j ACCEPT
-# mDNS LAN noise
-#iptables -A INPUT -i "$INTERFACESv4" -d 224.0.0.251 -p udp --dport 5353 -j DROP
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 5357,5358 -m set --match-set macports src -j ACCEPT
+# mDNS LAN (noise)
+iptables -A INPUT -i "$INTERFACESv4" -d 224.0.0.251 -p udp --dport 5353 -j DROP
 # Drop local multicast (collaboration tools, discovery, etc.)
-#iptables -A INPUT -i "$INTERFACESv4" -d 239.255.0.0/16 -j DROP
-# LAN traffic: discovery, printing, collaboration
+iptables -A INPUT -i "$INTERFACESv4" -d 239.255.0.0/16 -j DROP
 # mDNS / Bonjour / AirPrint
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 224.0.0.251 -p udp --dport 5353 -m set --match-set macports src -j ACCEPT
-# LLMNR
-# Name resolution between LAN devices when there is no DNS entry
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 224.0.0.252 -p udp --dport 5355 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 224.0.0.251 -p udp --dport 5353 -m set --match-set macports src -j ACCEPT
+# LLMNR (Name resolution between LAN devices when there is no DNS entry)
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 224.0.0.252 -p udp --dport 5355 -m set --match-set macports src -j ACCEPT
 # SSDP / UPnP
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 239.255.255.250 -p udp --dport 1900 -m set --match-set macports src -j ACCEPT
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p udp --dport 5000 -m set --match-set macports src -j ACCEPT
-#iptables -A FORWARD -i "$INTERFACESv4" -p udp -m multiport --dports 1900,5000 -m set --match-set macports src -j DROP
-# WSD
-# Device discovery on the LAN, used by printers and scanners
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 239.255.255.250 -p udp --dport 3702 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 239.255.255.250 -p udp --dport 1900 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p udp --dport 5000 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -p udp -m multiport --dports 1900,5000 -m set --match-set macports src -j DROP
+# WSD (Device discovery on the LAN, used by printers and scanners)
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -d 239.255.255.250 -p udp --dport 3702 -m set --match-set macports src -j ACCEPT
 # Multimedia & Streaming
-#iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 2869,8200 -m set --match-set macports src -j ACCEPT
+iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p tcp -m multiport --dports 2869,8200 -m set --match-set macports src -j ACCEPT
 # IGMP (required for multicast group management)
 iptables -A FORWARD -i "$INTERFACESv4" -o "$INTERFACESv4" -p igmp -m set --match-set macports src -j ACCEPT
-# WARNING PAGE HTTP FOR BANDATA (PROXYMON)
-# Reach the bandwidth warning page served on port 18081
-#iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 18081 -m set --match-set macports src -j ACCEPT
-# NTP
-# Time sync against this host, and out to the internet
+# NTP (Time sync against this host, and out to the internet)
 iptables -A INPUT -i "$INTERFACESv4" -p udp --dport 123 -m set --match-set macports src -j ACCEPT
 iptables -A FORWARD -i "$INTERFACESv4" -p udp --dport 123 -m set --match-set macports src -j ACCEPT
 
-# ------------------------------------------------------------------------------
-# MACLIMITED
-# ------------------------------------------------------------------------------
+# -- MAC RULES -----------------------------------------------------------------
 
+# MACLIMITED
 # PAC on WPAD_PORT - DHCP option 252, HTTP 80 -> Squid intercept port
 # Send limited devices through Squid and serve them the PAC file
 iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set maclimited src -p tcp -m multiport --dports $WPAD_PORT,80,$squid_port -j ACCEPT
@@ -959,10 +990,7 @@ iptables -t nat -A PREROUTING -i "$INTERFACESv4" -p tcp --dport 80 -m set --matc
 iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport "$squid_intercept_port" -m set --match-set maclimited src -m conntrack --ctstate DNAT -j ACCEPT
 iptables -A INPUT -i "$INTERFACESv4" -p tcp -m multiport --dports $WPAD_PORT,$squid_port -m set --match-set maclimited src -j ACCEPT
 
-# ------------------------------------------------------------------------------
 # MACHOTSPOT
-# ------------------------------------------------------------------------------
-
 # PAC on WPAD_PORT - DHCP option 252, HTTP 80 -> Squid intercept port
 iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -m set --match-set machotspot src -p tcp -m multiport --dports "$cpd_tcp_ports,$WPAD_PORT,80,$squid_port" -j ACCEPT
 iptables -t nat -A PREROUTING -i "$INTERFACESv4" -p tcp --dport 80 -m set --match-set machotspot src -j REDIRECT --to-port "$squid_intercept_port"
@@ -1002,11 +1030,10 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-# Final Drop
+# FINAL DROP
 iptables -A INPUT -m hashlimit --hashlimit-name input-drop --hashlimit-above 3/min --hashlimit-burst 3 --hashlimit-mode srcip,dstport -j NFLOG --nflog-prefix "FINAL-INPUT DROP: "
 iptables -A INPUT -j DROP
 iptables -A FORWARD -m hashlimit --hashlimit-name forward-drop --hashlimit-above 3/min --hashlimit-burst 3 --hashlimit-mode srcip,dstport -j NFLOG --nflog-prefix "FINAL-FORWARD DROP: "
 iptables -A FORWARD -j DROP
 
-# end
 log "uhmiptables done at: $(date '+%Y-%m-%d %H:%M:%S')"

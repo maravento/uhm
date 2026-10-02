@@ -72,7 +72,13 @@
 
 ---
 
-**⚠️ WARNING:** Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions is at your own risk.
+### ⚠️ WARNING
+
+| Description | Descripción |
+|-------------|-------------|
+| Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions is at your own risk. | Probado en Ubuntu 24.04/26.04 LTS. Su uso en otras versiones o distribuciones es a su propio riesgo. |
+| A clean system is strongly recommended. `uhmsetup.sh` is not a single-purpose script: it installs `pydhcp` as the DHCP backend, installs `apache2` (required by the panel and by WPAD), and deploys firewall rules. If the panel or WPAD is accepted, it also edits `/etc/apache2/ports.conf`, adds a vhost under `sites-available/` and writes a rule in `sudoers.d/`. | Se recomienda un sistema limpio. `uhmsetup.sh` no es un script de un solo propósito: instala `pydhcp` como backend DHCP, instala `apache2` (lo necesitan el panel y WPAD) y despliega reglas de firewall. Si se acepta el panel o WPAD, además edita `/etc/apache2/ports.conf`, agrega un vhost en `sites-available/` y escribe una regla en `sudoers.d/`. |
+| Before installing anything it checks for conflicting software and aborts if it finds another DHCP server (`isc-dhcp-server`, `kea-dhcp4-server`, `udhcpd`), another web server (`nginx`, `lighttpd`, `caddy`), `firewalld`, or an active `ufw`. `dnsmasq` is only warned about, not aborted. `apache2` and `squid` are not conflicts: the first is uhm's own, the second is what the reference ruleset expects. | Antes de instalar nada comprueba software en conflicto y aborta si encuentra otro servidor DHCP (`isc-dhcp-server`, `kea-dhcp4-server`, `udhcpd`), otro servidor web (`nginx`, `lighttpd`, `caddy`), `firewalld`, o un `ufw` activo. De `dnsmasq` solo avisa, no aborta. `apache2` y `squid` no son conflictos: el primero es propio de uhm, el segundo es lo que espera el ruleset de referencia. |
 
 ### Hardware
 
@@ -171,40 +177,38 @@
 | Component | Used by | Purpose | Propósito |
 |-----------|---------|---------|-----------|
 | **UniFi Network (self-hosted)** | `uhmd`, `uhmunifi.sh` | Captive portal SSID, vouchers, and the API Site must be **Third-Party Gateway**. Local admin account. See Instance above for the single-Network limitation | SSID de portal cautivo, vouchers, y el Site de la API debe ser **Third-Party Gateway**. Cuenta de admin local. Ver Instance arriba para la limitación de Network única |
-| **pydhcp** | `uhmd` (verified at startup) | DHCP backend. Exactly one must be active | Backend DHCP. Exactamente uno debe estar activo |
-| **iptables** + **ipset** | system administrator | Firewall enforcement of ACL files (must be configured manually) | Aplicación de firewall de los archivos ACL (debe configurarse manualmente) |
+| **pydhcp** | `uhmd` (verified at startup) | DHCP backend. Installed by `uhmsetup.sh`, which clones it and runs its own `pysetup.sh` interactively -- that installer owns the network questions and writes them to `pydhcp.env`. Skipped if `pydhcpd` is already active. Exactly one DHCP backend must be active | Backend DHCP. Lo instala `uhmsetup.sh`, que lo clona y ejecuta su propio `pysetup.sh` de forma interactiva -- ese instalador es el dueño de las preguntas de red y las escribe en `pydhcp.env`. Se omite si `pydhcpd` ya está activo. Exactamente un backend DHCP debe estar activo |
+| **apache2** | panel, WPAD | Installed by `uhmsetup.sh` together with `libapache2-mod-php`. Serves the web panel on port 4048 and, if WPAD is accepted, the PAC file on `WPAD_PORT` | Lo instala `uhmsetup.sh` junto con `libapache2-mod-php`. Sirve el panel web en el puerto 4048 y, si se acepta WPAD, el archivo PAC en `WPAD_PORT` |
+| **git** | `uhmsetup.sh` (install time only) | Clones the pydhcp repository | Clona el repositorio de pydhcp |
+| **iptables** + **ipset** | `uhmiptables.sh` | `uhmsetup.sh` deploys a placeholder with IPv4 forwarding and NAT. Firewall-level ACL enforcement is not included: the administrator copies the reference ruleset over it and adapts it | `uhmsetup.sh` despliega un placeholder con reenvío IPv4 y NAT. La aplicación de ACL a nivel de firewall no viene incluida: el administrador copia el ruleset de referencia sobre él y lo adapta |
 | **bash**, **curl**, **jq** | `uhmd`, `uhmunifi.sh`, `uhmleases.sh` | Script runtime, UniFi API, JSON parsing | Runtime de scripts, API de UniFi, parseo de JSON |
 | **openssl** | `uhmsetup.sh` (install time only) | Computes `UNIFI_CERT_PIN` from the controller's TLS certificate | Calcula `UNIFI_CERT_PIN` a partir del certificado TLS del controlador |
 | **python3** | `uhmleases.sh` (runtime), `uhmsetup.sh` (install time) | Range arithmetic: checks that `SERVER_IP` does not fall inside the block pool or the hotspot range, and that the hotspot range is inside the network and does not overlap pydhcp's pool | Aritmética de rangos: verifica que `SERVER_IP` no caiga dentro del pool de bloqueo ni del rango del hotspot, y que el rango del hotspot esté dentro de la red y no se solape con el pool de pydhcp |
 | **coreutils**, **grep** | all bash scripts in the project | Text/field parsing (MAC/IP/ACL lines, DHCP config, logs) | Parseo de texto/campos (líneas MAC/IP/ACL, config DHCP, logs) |
 | **sed** | `uhmd.sh`, `uhmleases.sh`, `uhmwatch.sh`, `uhmunifi.sh` | In-place ACL/config file edits | Edición in-place de archivos ACL/config |
 | **util-linux** (`flock`) | all bash scripts in the project | Per-script instance locking, prevents overlapping runs | Bloqueo de instancia por script, evita ejecuciones superpuestas |
-| **iproute2** (`ip`) | `uhmsetup.sh` (install time only) | Detects network interfaces during the setup wizard | Detecta interfaces de red durante el wizard de instalación |
+| **iproute2** (`ip`, `ss`) | `uhmsetup.sh` (install time), `uhmiptables.sh` | `ss` checks whether a port is already in use; `ip link show` verifies that `WAN_IFACE` exists before the NAT rule names it | `ss` comprueba si un puerto ya está en uso; `ip link show` verifica que `WAN_IFACE` exista antes de que la regla NAT la nombre |
 | **libc-bin** (`getent`) | `uhmleases.sh` | Checks that the `pydhcpd` user and group exist | Verifica que el usuario y grupo `pydhcpd` existan |
 | **findutils** (`find`) | `uhmsetup.sh` | Clears the install directory on uninstall, preserving `bak/` | Vacía el directorio de instalación al desinstalar, conservando `bak/` |
 | **procps** (`sysctl`) | `uhmiptables.sh` | Enables IPv4 forwarding | Habilita el forwarding IPv4 |
 | **systemd** (`systemctl`) | `uhmd`, `uhmreload.sh`, `uhmwatch.sh`, `uhmleases.sh`, `uhmalert.sh`, `uhmtool.sh` | Manages/checks the `uhmd`/`pydhcpd`/UniFi services | Gestiona/verifica los servicios `uhmd`/`pydhcpd`/UniFi |
 | **cron** | `uhmwatch.sh` (mandatory, installed automatically) | Runs the services watchdog every minute | Corre el vigilante de servicios cada minuto |
 | **logrotate** | `uhmsetup.sh` (writes `/etc/logrotate.d/uhm`) | Rotates `/var/log/uhm.log` daily; without it the shared log grows without limit | Rota `/var/log/uhm.log` a diario; sin él el log compartido crece sin límite |
-
-### Optional
-
-| Component | When it's needed | Cuándo se necesita |
-|-----------|-------------------|---------------------|
-| **squid**, **apache2**, DHCP option 252 (WPAD) | Only if your network uses [proxymon](https://github.com/maravento/proxymon) (Squid-based filtering) — `apache2` hosts the WPAD/PAC file, and WPAD lets clients auto-discover the proxy. See that project for installation and configuration details. | Solo si su red usa [proxymon](https://github.com/maravento/proxymon) (filtrado basado en Squid) — `apache2` sirve el archivo WPAD/PAC, y WPAD permite que los clientes descubran el proxy automáticamente. Consulte ese proyecto para detalles de instalación y configuración. |
-| **apache2**, **libapache2-mod-php** | Only if you install the web interface. Both are verified when the panel is accepted during install, and the panel is skipped with a message if either is missing. | Solo si instala la interfaz web. Ambos se verifican cuando se acepta el panel durante la instalación, y el panel se salta con un mensaje si falta alguno. |
+| **zip** | `tools/uhmbk.sh` | Builds the monthly configuration archive under `/etc/bak/uhm` | Construye el archivo mensual de configuración en `/etc/bak/uhm` |
 
 ```bash
-# Required packages
+# Required packages -- uhmsetup.sh aborts if any is missing
 sudo apt update
-sudo apt install -y bash curl jq iptables ipset cron python3 openssl coreutils util-linux iproute2 grep sed systemd libc-bin findutils procps
+sudo apt install -y bash curl jq iptables ipset cron python3 openssl coreutils util-linux iproute2 grep sed systemd libc-bin findutils procps logrotate git zip
 
-# DHCP backend — install pydhcp:
-#   • pydhcp — https://github.com/maravento/pydhcp
-
-# Optional
-sudo apt install -y squid apache2 libapache2-mod-php
+# Installed by uhmsetup.sh, not by hand:
+#   • pydhcp (DHCP backend) — https://github.com/maravento/pydhcp
+#   • apache2, libapache2-mod-php (panel and WPAD)
 ```
+
+> **squid is not a dependency of UHM.** UHM neither installs it nor needs it to run. It is only detected: when WPAD is accepted, `uhmsetup.sh` looks for `squid`, `squid-openssl` or `squid3`, reads the first `http_port` from `/etc/squid/squid.conf` and checks that something is listening on it. If it answers, the generated `wpad.pac` points clients at that proxy; if not, the PAC returns `DIRECT` and nothing else changes. The reference firewall ruleset (`tools/uhmiptables_example.txt`) does assume a proxy, which is one of the reasons it is not deployed as-is.
+>
+> **squid no es una dependencia de UHM.** UHM no lo instala ni lo necesita para funcionar. Solo lo detecta: cuando se acepta WPAD, `uhmsetup.sh` busca `squid`, `squid-openssl` o `squid3`, lee el primer `http_port` de `/etc/squid/squid.conf` y comprueba que algo escuche en ese puerto. Si responde, el `wpad.pac` generado apunta a ese proxy; si no, el PAC devuelve `DIRECT` y nada más cambia. El ruleset de firewall de referencia (`tools/uhmiptables_example.txt`) sí asume un proxy, y esa es una de las razones por las que no se despliega tal cual.
 
 > Without UniFi reachable or without `pydhcpd` running (beyond their respective startup grace windows), `UHM` refuses to start. Without a working `uhmiptables.sh`, the daemon still starts and keeps classifying clients (grace/authorized/blocked) normally, but firewall enforcement is skipped with a log warning until it's configured. These are hard dependencies for full functionality.
 >
@@ -316,18 +320,22 @@ sudo apt install -y squid apache2 libapache2-mod-php
     <td style="width: 50%; vertical-align: top;">
       This is the structure of the repository after cloning it with <code>git clone ... && cd uhm</code>. <b>It does not correspond to the structure of the installation.</b> <br>
       <br>
-      <code>uhmsetup.sh</code> and <code>tools/uhmiptables_example.txt</code> are files used only from the clone and <b>are never deployed to the installed system</b>. <br>
+      <code>uhmsetup.sh</code> is used only from the clone and <b>is never deployed to the installed system</b>. <br>
       <br>
-      The remaining files under <code>core/</code> and <code>tools/</code> —except <code>tools/uhmiptables_example.txt</code>— are deployed by <code>uhmsetup.sh</code> into their respective subdirectories inside <code>/etc/uhm/</code>. <br>
+      The files under <code>core/</code> and <code>tools/</code> are deployed by <code>uhmsetup.sh</code> into their respective subdirectories inside <code>/etc/uhm/</code>. That includes <code>tools/uhmiptables_example.txt</code>, deployed read-only and never executed, so the administrator can copy it over the placeholder without the clone. <br>
+      <br>
+      The files under <code>config/</code> go to their system locations instead, not to <code>/etc/uhm/</code>: the unit to <code>/etc/systemd/system/</code>, the two vhosts to <code>/etc/apache2/sites-available/</code> and the sudo rule to <code>/etc/sudoers.d/</code>. And <code>web/</code> goes to <code>/var/www/uhm</code>, only if the panel is accepted. <br>
       <br>
       In other words, the clone holds the files needed to perform the installation, while <code>/etc/uhm/</code> holds the files used by the running installation.
     </td>
     <td style="width: 50%; vertical-align: top;">
       La siguiente es la estructura del repositorio después de clonarlo con <code>git clone ... && cd uhm</code>. <b>No corresponde a la estructura de la instalación.</b> <br>
       <br>
-      <code>uhmsetup.sh</code> y <code>tools/uhmiptables_example.txt</code> son archivos utilizados únicamente desde el clon y <b>nunca se despliegan en el sistema instalado</b>. <br>
+      <code>uhmsetup.sh</code> se utiliza únicamente desde el clon y <b>nunca se despliega en el sistema instalado</b>. <br>
       <br>
-      El resto de los archivos ubicados bajo <code>core/</code> y <code>tools/</code> —excepto <code>tools/uhmiptables_example.txt</code>— son desplegados por <code>uhmsetup.sh</code> en sus respectivos subdirectorios dentro de <code>/etc/uhm/</code>. <br>
+      Los archivos ubicados bajo <code>core/</code> y <code>tools/</code> son desplegados por <code>uhmsetup.sh</code> en sus respectivos subdirectorios dentro de <code>/etc/uhm/</code>. Eso incluye <code>tools/uhmiptables_example.txt</code>, desplegado en solo lectura y nunca ejecutado, para que el administrador pueda copiarlo sobre el placeholder sin tener el clon. <br>
+      <br>
+      Los archivos bajo <code>config/</code> van a sus rutas del sistema, no a <code>/etc/uhm/</code>: la unidad a <code>/etc/systemd/system/</code>, los dos vhost a <code>/etc/apache2/sites-available/</code> y la regla de sudo a <code>/etc/sudoers.d/</code>. Y <code>web/</code> va a <code>/var/www/uhm</code>, solo si se acepta el panel. <br>
       <br>
       En otras palabras, el clon contiene los archivos necesarios para realizar la instalación, mientras que <code>/etc/uhm/</code> contiene los archivos que utiliza la instalación en funcionamiento.
     </td>
@@ -342,6 +350,16 @@ uhm/                      # as cloned -- see note above
 │   ├── uhm-grace.txt             # clients still in the grace period, no voucher yet
 │   └── uhm-queue.txt             # MACs queued for lease removal, drained on the next run
 │
+├── config/                  # server configuration, one directory per component --
+│                            # none of it is ever published under a web root
+│   ├── service/
+│   │   └── uhmd.service          # systemd unit for uhmd
+│   ├── uhmweb/
+│   │   ├── uhmweb.conf           # Apache vhost on port 4048
+│   │   └── uhmweb.sudoers        # sudo rule that lets www-data reach uhmtool.sh
+│   └── wpad/
+│       └── wpad.conf             # Apache vhost on WPAD_PORT (default 18100)
+│
 ├── core/                    # the reload mechanism, plus uhmwatch -- UHM cannot
 │                            # function correctly without any of these four
 │   ├── uhmd.sh                   # main daemon: polls the UniFi API and manages ACLs (systemd)
@@ -353,8 +371,6 @@ uhm/                      # as cloned -- see note above
 │                                 # backend -- installed automatically by uhmsetup.sh
 │                                 # with its own cron entry; lives here, not in tools/,
 │                                 # because it's mandatory
-├── service/
-│   └── uhmd.service              # systemd unit for uhmd
 │
 ├── tools/                   # independent, optional utilities -- UHM runs
 │                            # fine without any of these
@@ -362,11 +378,11 @@ uhm/                      # as cloned -- see note above
 │   │                             # notifications via ntfy.sh
 │   ├── uhmbk.sh                  # backs up uhm's own files into /etc/bak/uhm,
 │   │                             # run monthly through cron
-│   ├── uhmiptables.sh            # minimal template (IPv4 forwarding + NAT) -- deployed
-│   │                             # only if missing, never overwritten afterward
+│   ├── uhmiptables.sh            # firewall placeholder (IPv4 forwarding + NAT only)
+│   │                             # -- deployed only if missing, never overwritten
 │   ├── uhmiptables_example.txt   # full reference ruleset (ipsets, iptables, redirects)
-│   │                             # -- not deployed by uhmsetup.sh; copy it by hand over
-│   │                             # tools/uhmiptables.sh and adapt it
+│   │                             # -- deployed read-only next to the placeholder;
+│   │                             # copy it over uhmiptables.sh and adapt it
 │   ├── uhmtool.sh                # JSON backend for the web interface -- reads the log,
 │   │                             # the ACL files and the UniFi API, and writes back an
 │   │                             # ACL file after validating it
@@ -379,9 +395,7 @@ uhm/                      # as cloned -- see note above
 │   ├── logview/index.php         # LogView tab: real-time viewer for uhmd
 │   ├── toolview/index.php        # Tool tab: local ACL and UniFi reports
 │   ├── api.php                   # single endpoint, calls uhmtool.sh through sudo
-│   ├── index.html                # panel shell: three tabs, light and dark theme
-│   ├── uhmweb.conf               # Apache vhost on port 4048
-│   └── uhmweb.sudoers            # sudo rule that lets www-data reach uhmtool.sh
+│   └── index.html                # panel shell: three tabs, light and dark theme
 │
 └── uhmsetup.sh              # installer / updater / uninstaller (interactive);
                              # run from here, never deployed to /etc/uhm/
@@ -521,11 +535,11 @@ uhm/                      # as cloned -- see note above
       Before running <code>uhmd</code>, in the UniFi Network controller:
       <ol>
         <li><b>Guest SSID</b>: enable Hotspot / Captive Portal.</li>
-        <li><b>SSID name and admin password</b>: independently of what the UniFi controller itself accepts or rejects -- Ubiquiti publishes no allowed character set for either, and the SSID length limit is UniFi's own (1-32 bytes, 31 on some versions) -- this is what <code>UHM</code> can handle when it receives them through the API:
+        <li><b>SSID name and admin password</b>: there is not enough information on this subject to establish UniFi's password policy with any certainty, so what follows is set by <code>UHM</code> itself for <code>UNIFI_PASSWORD</code> and for the SSID, independently of what the controller accepts or rejects. The only limit that is UniFi's own is the SSID length (1-32 bytes, 31 on some versions). This is what <code>UHM</code> can handle when it receives them through the API:
           <ul>
             <li><b>Key path:</b> <code>/etc/uhm/uhm.env</code></li>
             <li><b>Format:</b> <code>KEY=value</code> lines with no quoting. Letters, digits, accents, spaces between words (<code>PCR ALCALDIA</code>) and any punctuation are accepted, including <code>=</code>, <code>#</code>, <code>$</code>, <code>\</code> and quotes inside the text.</li>
-            <li><b><code>uhm.env</code> condition:</b> the first and the last character of the value must be visible and other than a quote. A leading or trailing space, or a value wrapped in quotes, therefore makes the line malformed and every <code>UHM</code> script aborts on reading it.</li>
+            <li><b><code>uhm.env</code> condition:</b> the first and the last character of the value must be visible and other than a quote. A leading or trailing space, or a value wrapped in quotes, therefore makes the line malformed and every <code>UHM</code> script aborts on reading it. <code>uhmsetup.sh</code> rejects such a password at the prompt, so the condition is caught during install and not on the first daemon start.</li>
           </ul>
           <b>WARNING:</b> <code>UHM</code> neither creates nor modifies these values. The SSID and the administrator password must already exist in UniFi; <code>UHM</code> only obtains them through the controller API. The SSID is never typed during install -- it is read from the controller or picked from a menu -- and the administrator password is asked for in order to connect to the API.
         </li>
@@ -560,11 +574,11 @@ uhm/                      # as cloned -- see note above
       Antes de ejecutar <code>uhmd</code>, en el controlador UniFi Network:
       <ol>
         <li><b>SSID de invitados</b>: habilitar Hotspot / Portal Cautivo.</li>
-        <li><b>Nombre del SSID y contraseña del admin</b>: con independencia de lo que el propio controlador UniFi acepte o rechace -- Ubiquiti no publica un conjunto de caracteres permitido para ninguno de los dos, y el límite de longitud del SSID es de UniFi (1-32 bytes, 31 en algunas versiones) --, esto es lo que puede manejar <code>UHM</code> al recibirlos mediante la API:
+        <li><b>Nombre del SSID y contraseña del admin</b>: no hay información suficiente sobre este tema que permita establecer con claridad la política de contraseñas de UniFi, así que lo que sigue lo establece <code>UHM</code> para <code>UNIFI_PASSWORD</code> y para el SSID, con independencia de lo que el controlador acepte o rechace. El único límite propio de UniFi es la longitud del SSID (1-32 bytes, 31 en algunas versiones). Esto es lo que puede manejar <code>UHM</code> al recibirlos mediante la API:
           <ul>
             <li><b>Path de claves:</b> <code>/etc/uhm/uhm.env</code></li>
             <li><b>Formato:</b> líneas <code>CLAVE=valor</code> sin comillas. Se admiten letras, dígitos, tildes, espacios entre palabras (<code>PCR ALCALDIA</code>) y cualquier signo de puntuación, incluidos <code>=</code>, <code>#</code>, <code>$</code>, <code>\</code> y comillas dentro del texto.</li>
-            <li><b>Condición de <code>uhm.env</code>:</b> el primer y el último carácter del valor deben ser visibles y distintos de una comilla. Por tanto, un espacio al inicio o al final, o un valor envuelto en comillas, deja la línea mal formada y provoca que los scripts de <code>UHM</code> aborten al leerla.</li>
+            <li><b>Condición de <code>uhm.env</code>:</b> el primer y el último carácter del valor deben ser visibles y distintos de una comilla. Por tanto, un espacio al inicio o al final, o un valor envuelto en comillas, deja la línea mal formada y provoca que los scripts de <code>UHM</code> aborten al leerla. <code>uhmsetup.sh</code> rechaza esa contraseña en el prompt, así que la condición se detecta durante la instalación y no en el primer arranque del demonio.</li>
           </ul>
           <b>WARNING:</b> <code>UHM</code> no crea ni modifica estos valores. El SSID y la contraseña del administrador deben existir previamente en UniFi; <code>UHM</code> únicamente los obtiene mediante la API del controlador. El SSID no se introduce durante la instalación -- se obtiene del controlador o se selecciona mediante un menú -- y la contraseña del administrador se solicita para realizar la conexión con la API.
         </li>
@@ -889,7 +903,7 @@ journalctl -u uhmd -f
           </ul>
         </li>
       </ul>
-      <code>tools/uhmiptables_example.txt</code> is only a reference example and is never deployed. <br>
+      <code>tools/uhmiptables_example.txt</code> is deployed read-only on every run: it is reference material, not customized data. <br>
       <code>tools/uhmiptables.sh</code> is deployed only when it does not exist in the installation. <br>
       <br>
       Files and data that are not overwritten:
@@ -907,7 +921,7 @@ journalctl -u uhmd -f
       </ul>
       These files hold the administrator's configuration or custom data and stay exactly as they are. <br>
       <br>
-      If the ACL files or the <code>logrotate</code> configuration are missing during an update, they are recreated empty and a <code>WARNING</code> is shown. If <code>uhmiptables.sh</code> is missing, it is deployed again from the minimal template. <br>
+      If the ACL files or the <code>logrotate</code> configuration are missing during an update, they are recreated empty and a <code>WARNING</code> is shown. If <code>uhmiptables.sh</code> is missing, the placeholder is deployed again. <br>
       <br>
       <code>uhm.env</code> gets a special treatment: with <code>--update</code> it is not created, not verified and not repaired. If it is missing, that situation is only detected during a fresh installation, without <code>--update</code>. <br>
       <br>
@@ -956,7 +970,7 @@ journalctl -u uhmd -f
           </ul>
         </li>
       </ul>
-      <code>tools/uhmiptables_example.txt</code> es únicamente un ejemplo de referencia y nunca se despliega. <br>
+      <code>tools/uhmiptables_example.txt</code> se despliega en solo lectura en cada ejecución: es material de referencia, no datos personalizados. <br>
       <code>tools/uhmiptables.sh</code> solo se despliega cuando no existe en la instalación. <br>
       <br>
       Archivos y datos que no se sobrescriben:
@@ -974,7 +988,7 @@ journalctl -u uhmd -f
       </ul>
       Estos archivos contienen configuración o datos personalizados del administrador y permanecen exactamente como están. <br>
       <br>
-      Si durante una actualización faltan los archivos ACL o la configuración de <code>logrotate</code>, se recrean vacíos y se muestra un <code>WARNING</code>. Si falta <code>uhmiptables.sh</code>, se vuelve a desplegar desde la plantilla mínima. <br>
+      Si durante una actualización faltan los archivos ACL o la configuración de <code>logrotate</code>, se recrean vacíos y se muestra un <code>WARNING</code>. Si falta <code>uhmiptables.sh</code>, se vuelve a desplegar el placeholder. <br>
       <br>
       <code>uhm.env</code> tiene un tratamiento especial: con <code>--update</code> no se crea, no se verifica y no se repara. Si falta, esta situación solo se detecta durante una instalación nueva, sin <code>--update</code>. <br>
       <br>
@@ -1137,8 +1151,8 @@ sudo bash uhmsetup.sh --remove
 
 | Variable | Description | Descripción |
 |----------|--------------|-------------|
-| _(WAN interface)_ | Not a `uhm.env` key. `uhmsetup.sh` asks for it during setup and replaces the `eth0` placeholder directly in `tools/uhmiptables.sh` (and `tools/uhmiptables_example.txt` once copied over it) with `sed -i`, the only place it is used | No es una clave de `uhm.env`. `uhmsetup.sh` la pregunta durante la instalación y reemplaza el placeholder `eth0` directamente en `tools/uhmiptables.sh` (y en `tools/uhmiptables_example.txt` una vez copiado sobre él) con `sed -i`, el único lugar donde se usa |
-| `INTERFACESv4` | pydhcp's own value -- the LAN interface `pydhcpd` listens on, read from `/etc/pydhcp/pydhcp.env` at runtime; read by `tools/uhmiptables_example.txt` as its `$lan`; the minimal template does not use it | Valor propio de pydhcp -- la interfaz LAN en la que escucha `pydhcpd`, leída desde `/etc/pydhcp/pydhcp.env` en cada ejecución; usada por `tools/uhmiptables_example.txt` como su `$lan`; la plantilla mínima no la usa |
+| `WAN_IFACE` | Not a `uhm.env` key. It is pydhcp's own shared key, written by `pysetup.sh` into `/etc/pydhcp/pydhcp.env` and read from there by every project that needs it. `tools/uhmiptables.sh` validates it with `KEY CHECK` and has no fallback for it; the reference ruleset keeps one | No es una clave de `uhm.env`. Es una clave compartida propia de pydhcp, escrita por `pysetup.sh` en `/etc/pydhcp/pydhcp.env` y leída desde ahí por cada proyecto que la necesite. `tools/uhmiptables.sh` la valida con `KEY CHECK` y no tiene fallback para ella; el ruleset de referencia sí lo mantiene |
+| `INTERFACESv4` | pydhcp's own value -- the LAN interface `pydhcpd` listens on, read from `/etc/pydhcp/pydhcp.env` at runtime; read by `tools/uhmiptables_example.txt` as its LAN interface; the placeholder does not use it | Valor propio de pydhcp -- la interfaz LAN en la que escucha `pydhcpd`, leída desde `/etc/pydhcp/pydhcp.env` en cada ejecución; usada por `tools/uhmiptables_example.txt` como su interfaz LAN; el placeholder no la usa |
 | `SERVER_IP` | This machine's IP on the LAN, read from `/etc/pydhcp/pydhcp.env` at runtime (also the DHCP server IP; used by `uhmleases.sh` and `uhmiptables.sh`) | IP de esta máquina en la LAN, leída desde `/etc/pydhcp/pydhcp.env` en cada ejecución (también la IP del servidor DHCP; usado por `uhmleases.sh` y `uhmiptables.sh`) |
 | `UHM_INI_RANGE`, `UHM_END_RANGE` | First and last address of the fixed-IP range handed to voucher-authorized guests, as two complete IPv4 addresses -- same shape as pydhcp's own `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK`, so no netmask is assumed | Primera y última dirección del rango de IP fijas que se entrega a los invitados autorizados por voucher, como dos direcciones IPv4 completas -- misma forma que el propio `SERV_INI_RANGE_BLOCK`/`SERV_END_RANGE_BLOCK` de pydhcp, así que no se asume ninguna máscara |
 | `UHM_ESSID` | Guest SSID name; must match UniFi exactly | Nombre del SSID de invitados; debe coincidir exactamente con UniFi |
@@ -1547,7 +1561,7 @@ sudo bash uhmsetup.sh
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The daemon executes a full cycle every <code>POLL_INTERVAL</code> seconds (default 20, configured in <code>uhm.env</code>). Each cycle executes ten steps. Two independent mechanisms run inside the same cycle without being numbered steps -- see Independent Mechanisms below.
+      The daemon executes a full cycle every <code>POLL_INTERVAL</code> seconds (default 20, configured in <code>uhm.env</code>). Each cycle executes eleven steps. Two independent mechanisms run inside the same cycle without being numbered steps -- see Independent Mechanisms below.
       <ol>
         <li><b>malformed</b> — before any other step opens an ACL list, each list is checked against its own line format. <br>
           In <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code> and the lease removal queue, a bad line is deleted and the cycle continues. Those lists authorize nothing. <br>
@@ -1585,7 +1599,7 @@ sudo bash uhmsetup.sh
       </ol>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El daemon ejecuta un ciclo completo cada <code>POLL_INTERVAL</code> segundos (default 20, configurado en <code>uhm.env</code>). Cada ciclo ejecuta diez pasos. Dos mecanismos independientes corren dentro del mismo ciclo sin ser pasos numerados -- ver Independent Mechanisms más abajo.
+      El daemon ejecuta un ciclo completo cada <code>POLL_INTERVAL</code> segundos (default 20, configurado en <code>uhm.env</code>). Cada ciclo ejecuta once pasos. Dos mecanismos independientes corren dentro del mismo ciclo sin ser pasos numerados -- ver Independent Mechanisms más abajo.
       <ol>
         <li><b>malformed</b> — antes de que cualquier otro paso abra una lista ACL, cada lista se comprueba contra su propio formato de línea. <br>
           En <code>uhm-grace.txt</code>, <code>blockdhcp.txt</code> y la cola de remoción de leases, una línea mala se elimina y el ciclo continúa. Esas listas no autorizan nada. <br>
@@ -1776,15 +1790,15 @@ sudo bash uhmsetup.sh
       <br><br>
       The exact ipsets, rule order, and redirects are defined in <a href="tools/uhmiptables_example.txt"><code>tools/uhmiptables_example.txt</code></a> — read that file directly rather than a copy here, since it changes independently of this document and a duplicated excerpt would inevitably drift out of sync with the real rules.
       <br><br>
-      <b>Note:</b> <code>uhmiptables.sh</code> is invoked automatically by <code>uhmreload.sh</code> — never run it manually during normal operation. The script flushes ALL iptables rules and ipsets on every run. Variables (<code>$lan</code>, <code>$wan</code>, <code>$localnet</code>, <code>$netmask</code>, <code>$serverip</code>, <code>$cpd_tcp</code>, <code>$SERV_DNS</code>) are loaded at runtime exclusively from <code>uhm.env</code>.
+      <b>Note:</b> <code>uhmiptables.sh</code> is invoked automatically by <code>uhmreload.sh</code> — never run it manually during normal operation. The reference ruleset flushes ALL iptables rules and ipsets on every run; the placeholder touches only its own two chains. Keys are read at runtime from <code>/etc/pydhcp/pydhcp.env</code> first and <code>/etc/uhm/uhm.env</code> after, and validated by <code>KEY CHECK</code> before any rule is applied.
       <br><br>
-      <b>Minimal template</b> <br>
+      <b>Placeholder</b> <br>
       <br>
-      <code>uhmsetup.sh</code> deploys <code>tools/uhmiptables.sh</code> as a minimal but fully working template. It enables IPv4 forwarding and adds a NAT MASQUERADE rule on the WAN interface. Ubuntu does not do either by default, and without them LAN clients get a lease but reach nothing. <br>
+      <code>uhmsetup.sh</code> deploys <code>tools/uhmiptables.sh</code> as a placeholder: IPv4 forwarding and NAT, nothing else. Ubuntu does neither by default, and without them LAN clients get a lease but reach nothing. <br>
       <br>
-      Its rules live in a dedicated <code>UHM_NAT</code> chain, flushed and rebuilt on every run so they never pile up. Nothing outside that chain is touched, so a firewall managed by other means stays intact. <br>
+      Its rules live in two dedicated chains, <code>UHM_NAT</code> and <code>UHM_FWD</code>, flushed and rebuilt on every run so they never pile up. <code>UHM_FWD</code> exists because enabling forwarding in the kernel is not enough when the <code>FORWARD</code> policy is <code>DROP</code>. Nothing outside those two chains is touched and no policy is changed, so a firewall managed by other means stays intact. <br>
       <br>
-      The template does not redirect to a proxy, does not filter ports, does not bind MAC to IP and does not build any ipset. For that, copy <code>tools/uhmiptables_example.txt</code> over this file and adapt it. <br>
+      The placeholder does not redirect to a proxy, does not filter ports, does not bind MAC to IP and does not build any ipset. Access control still applies: UHM enforces it at the DHCP layer, through the <code>blockdhcp</code> deny class <code>uhmleases.sh</code> writes into <code>pydhcpd.conf</code>. For firewall-level enforcement, copy <code>tools/uhmiptables_example.txt</code> over this file and adapt it. <br>
       <br>
       The file is deployed only when it is missing and is never overwritten afterwards, since it becomes the administrator's own file once customized. <br>
       <br>
@@ -1797,15 +1811,15 @@ sudo bash uhmsetup.sh
       <br><br>
       Los ipsets exactos, el orden de reglas y las redirecciones están definidos en <a href="tools/uhmiptables_example.txt"><code>tools/uhmiptables_example.txt</code></a> — consulte ese archivo directamente en vez de una copia aquí, ya que cambia independientemente de este documento y un extracto duplicado inevitablemente quedaría desincronizado de las reglas reales.
       <br><br>
-      <b>Nota:</b> <code>uhmiptables.sh</code> es invocado automáticamente por <code>uhmreload.sh</code> — nunca ejecutarlo manualmente durante operación normal. El script vacía TODAS las reglas iptables e ipsets en cada ejecución. Las variables (<code>$lan</code>, <code>$wan</code>, <code>$localnet</code>, <code>$netmask</code>, <code>$serverip</code>, <code>$cpd_tcp</code>, <code>$SERV_DNS</code>) se cargan en tiempo de ejecución exclusivamente desde <code>uhm.env</code>.
+      <b>Nota:</b> <code>uhmiptables.sh</code> es invocado automáticamente por <code>uhmreload.sh</code> — nunca ejecutarlo manualmente durante operación normal. El ruleset de referencia vacía TODAS las reglas iptables e ipsets en cada ejecución; el placeholder solo toca sus dos cadenas propias. Las claves se leen en tiempo de ejecución desde <code>/etc/pydhcp/pydhcp.env</code> primero y <code>/etc/uhm/uhm.env</code> después, y las valida <code>KEY CHECK</code> antes de aplicar ninguna regla.
       <br><br>
-      <b>Plantilla mínima</b> <br>
+      <b>Placeholder</b> <br>
       <br>
-      <code>uhmsetup.sh</code> despliega <code>tools/uhmiptables.sh</code> como una plantilla mínima pero plenamente funcional. Habilita el reenvío IPv4 y añade una regla NAT MASQUERADE en la interfaz WAN. Ubuntu no hace ninguna de las dos cosas por defecto, y sin ellas los clientes LAN obtienen lease pero no alcanzan nada. <br>
+      <code>uhmsetup.sh</code> despliega <code>tools/uhmiptables.sh</code> como un placeholder: reenvío IPv4 y NAT, nada más. Ubuntu no hace ninguna de las dos cosas por defecto, y sin ellas los clientes LAN obtienen lease pero no alcanzan nada. <br>
       <br>
-      Sus reglas viven en una cadena dedicada <code>UHM_NAT</code>, vaciada y reconstruida en cada ejecución para que nunca se acumulen. Nada fuera de esa cadena se toca, así que un firewall gestionado por otra vía queda intacto. <br>
+      Sus reglas viven en dos cadenas dedicadas, <code>UHM_NAT</code> y <code>UHM_FWD</code>, vaciadas y reconstruidas en cada ejecución para que nunca se acumulen. <code>UHM_FWD</code> existe porque habilitar el reenvío en el kernel no basta si la política <code>FORWARD</code> es <code>DROP</code>. Nada fuera de esas dos cadenas se toca y ninguna política se cambia, así que un firewall gestionado por otra vía queda intacto. <br>
       <br>
-      La plantilla no redirige al proxy, no filtra puertos, no ata MAC a IP y no construye ningún ipset. Para eso, copie <code>tools/uhmiptables_example.txt</code> sobre este archivo y adáptelo. <br>
+      El placeholder no redirige al proxy, no filtra puertos, no ata MAC a IP y no construye ningún ipset. El control de acceso sigue aplicándose: UHM lo impone en la capa DHCP, mediante la clase de denegación <code>blockdhcp</code> que <code>uhmleases.sh</code> escribe en <code>pydhcpd.conf</code>. Para aplicación a nivel de firewall, copie <code>tools/uhmiptables_example.txt</code> sobre este archivo y adáptelo. <br>
       <br>
       El archivo se despliega solo cuando falta y nunca se sobrescribe después, ya que pasa a ser propiedad del administrador una vez personalizado. <br>
       <br>
@@ -1991,14 +2005,14 @@ sudo bash uhmsetup.sh
     <td style="width: 50%; vertical-align: top;">
       <code>uhmreload.sh</code> is the reload wrapper — invoked by <code>uhmd</code> after every ACL change, or on its own safety-net cadence (<code>RELOAD_SAFETY_INTERVAL_SECONDS</code>, default 1h) even without a diff, so idle networks still get grace→block promotion and firewall self-healing. It can also be run manually for troubleshooting, but only while <code>uhmd.service</code> is active -- it aborts otherwise. It runs <code>uhmleases.sh</code> (lease/ACL rebuild) and then <code>uhmiptables.sh</code> (firewall rules), in that order — but the two are <b>not</b> treated the same on failure (see table below).
       <br><br>
-      This asymmetry reflects what each script actually is: <code>uhmleases.sh</code> is the core ACL/lease reconciliation step — nothing downstream can be trusted without it. <code>uhmiptables.sh</code> only enforces at the firewall level, and ships as a minimal working template (see Firewall Rules) that a normal install always has in place. Only its absence is tolerated, with a warning; a genuine execution failure of <code>uhmiptables.sh</code> still aborts.
+      This asymmetry reflects what each script actually is: <code>uhmleases.sh</code> is the core ACL/lease reconciliation step — nothing downstream can be trusted without it. <code>uhmiptables.sh</code> only enforces at the firewall level, and ships as a working placeholder (see Firewall Rules) that a normal install always has in place. Only its absence is tolerated, with a warning; a genuine execution failure of <code>uhmiptables.sh</code> still aborts.
       <br><br>
       Installed at <code>/etc/uhm/core/uhmreload.sh</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
       <code>uhmreload.sh</code> es el wrapper de reload — invocado por <code>uhmd</code> tras cada cambio de ACL, o en su propia cadencia de respaldo (<code>RELOAD_SAFETY_INTERVAL_SECONDS</code>, default 1h) incluso sin diff, para que las redes inactivas sigan teniendo la promoción gracia→bloqueo y la auto-reparación del firewall. También puede ejecutarse manualmente para diagnóstico, pero solo mientras <code>uhmd.service</code> esté activo -- de lo contrario aborta. Ejecuta <code>uhmleases.sh</code> (reconstrucción de leases/ACL) y luego <code>uhmiptables.sh</code> (reglas de firewall), en ese orden — pero los dos <b>no</b> reciben el mismo trato ante un fallo (ver tabla abajo).
       <br><br>
-      Esta asimetría refleja lo que cada script realmente es: <code>uhmleases.sh</code> es el paso central de reconciliación de ACLs/leases — nada aguas abajo es confiable sin él. <code>uhmiptables.sh</code> solo aplica a nivel de firewall, y se despliega como una plantilla mínima funcional (ver Firewall Rules) que toda instalación normal tiene en su sitio. Solo su ausencia se tolera, con una advertencia; un fallo real de ejecución de <code>uhmiptables.sh</code> sigue abortando.
+      Esta asimetría refleja lo que cada script realmente es: <code>uhmleases.sh</code> es el paso central de reconciliación de ACLs/leases — nada aguas abajo es confiable sin él. <code>uhmiptables.sh</code> solo aplica a nivel de firewall, y se despliega como un placeholder funcional (ver Firewall Rules) que toda instalación normal tiene en su sitio. Solo su ausencia se tolera, con una advertencia; un fallo real de ejecución de <code>uhmiptables.sh</code> sigue abortando.
       <br><br>
       Instalado en <code>/etc/uhm/core/uhmreload.sh</code>.
     </td>
@@ -2744,7 +2758,7 @@ sudo /etc/uhm/core/uhmwatch.sh uninstall
 ```text
 --------------------------------------------------------------------------------
 2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10 -> grace
-2026-07-01 06:47:35 INFO: ip=192.168.0.231 hostname=no_name_fde07d34be
+2026-07-01 06:47:35 INFO: ip=192.168.0.231 host=no_name_fde07d34be
 2026-07-01 06:47:35 INFO: added 1 new client(s) to uhm-grace
 2026-07-01 06:47:35 INFO: uhm-grace.txt changed
 2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh

@@ -145,70 +145,9 @@ done
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 
-pydhcp_conf="/etc/pydhcp/pydhcp.env"
-uhm_conf="/etc/uhm/uhm.env"
-if [ ! -f "$uhm_conf" ]; then
-    log "ERROR: uhm.env not found, run uhmsetup.sh -- abort"
-    exit 1
-fi
-file_owner=$(stat -c '%U' "$uhm_conf" 2>/dev/null)
-file_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
-if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-    log "ERROR: uhm.env must be root:root 600 -- abort"
-    exit 1
-fi
-
-# start
-log "uhmunifi start..."
-
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
-
-# LOAD_CONF
-# Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|UHM_ESSID|UHM_MACAUTH|ACL_MAC_PATH)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
-# pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
-# own keys win if a name ever collides.
-if [ ! -r "$pydhcp_conf" ]; then
-    log "ERROR: uhm reads ACL_MAC_PATH from it"
-    log "ERROR: cannot read $pydhcp_conf -- abort"
-    exit 1
-fi
-load_conf "$pydhcp_conf"
-load_conf "$uhm_conf"
-
-for required_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UHM_ESSID \
-          UHM_MACAUTH ACL_MAC_PATH; do
-    if [ -z "${!required_key:-}" ]; then
-        log "ERROR: $required_key not set in uhm.env -- abort"
-        exit 1
-    fi
-done
-unset required_key
-
-UNIFI_SITE="${UNIFI_SITE:-default}"
-UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 
 # True if $1 (lowercase MAC) is listed in ANY mac-*.txt, active or
 # commented -- same definition as is_managed_mac() in uhmd.sh. A managed
@@ -225,6 +164,127 @@ is_managed_mac() {
     return 1
 }
 run_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_key="${env_key%%[[:space:]]*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: $env_key malformed in $(basename "$conf_file") -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|UHM_ESSID|UHM_MACAUTH|ACL_MAC_PATH)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+        esac
+    done < "$conf_file"
+}
+
+# LOAD
+# pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
+# own keys win if a name ever collides.
+load_conf "$pydhcp_env" || true
+load_conf "$uhm_env" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+if ! grep -q "^ACL_MAC_PATH=" "$pydhcp_env"; then
+    key_errors+=("ACL_MAC_PATH missing line")
+elif [[ -z "${ACL_MAC_PATH:-}" ]]; then
+    key_errors+=("ACL_MAC_PATH not set")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    exit 1
+fi
+for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
+               UHM_ESSID UHM_MACAUTH; do
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
+    key_errors+=("UNIFI_TYPE missing line")
+elif [[ -z "${UNIFI_TYPE:-}" ]]; then
+    key_errors+=("UNIFI_TYPE not set")
+elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
+    key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
+fi
+# UNIFI_SITE is interpolated directly into API URLs -- reject anything outside
+# the character set UniFi itself uses for site names.
+if ! grep -q "^UNIFI_SITE=" "$uhm_env"; then
+    key_errors+=("UNIFI_SITE missing line")
+elif [[ -z "${UNIFI_SITE:-}" ]]; then
+    key_errors+=("UNIFI_SITE not set")
+elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    key_errors+=("UNIFI_SITE invalid characters")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+if [ -z "${UNIFI_SITE:-}" ]; then
+    log "WARNING: no UNIFI_SITE in uhm.env -- fallback"
+fi
+UNIFI_SITE="${UNIFI_SITE:-default}"
+if [ -z "${UNIFI_TYPE:-}" ]; then
+    log "WARNING: no UNIFI_TYPE in uhm.env -- fallback"
+fi
+UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 
 # ------------------------------------------------------------------------------
 # AUTH
@@ -1109,6 +1169,9 @@ main_menu() {
         esac
     done
 }
+
+# start
+log "uhmunifi start..."
 
 main_menu
 

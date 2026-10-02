@@ -281,12 +281,35 @@ case "${1:-}" in
 esac
 
 # ------------------------------------------------------------------------------
-# CHECKS
+# ENV
 # ------------------------------------------------------------------------------
 
-# Load UNIFI_TYPE from uhm.env. Safe key=value parsing - file is never
-# sourced to prevent code execution.
+# PERMS
+# Owner and mode of every .env this script reads
 uhm_conf="/etc/uhm/uhm.env"
+env_specs=("$uhm_conf root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 load_conf() {
@@ -296,11 +319,12 @@ load_conf() {
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
+        env_key="${env_key%%[[:space:]]*}"
         env_value="${env_line#*=}"
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            log "ERROR: $env_key malformed in $(basename "$conf_file") -- abort"
             exit 1
         fi
         case "$env_key" in
@@ -311,36 +335,83 @@ load_conf() {
     done < "$conf_file"
 }
 
-if [[ -f "$uhm_conf" ]]; then
-    env_owner=$(stat -c '%U' "$uhm_conf" 2>/dev/null)
-    env_perms=$(stat -c '%a' "$uhm_conf" 2>/dev/null)
-    if [[ "$env_owner" != "root" ]] || [[ "$env_perms" != "600" ]]; then
-        if chown root:root "$uhm_conf" 2>/dev/null && chmod 600 "$uhm_conf" 2>/dev/null; then
-            log "INFO: uhm.env perms fixed -- fixed"
-        else
-            log "ERROR: cannot fix uhm.env perms -- abort"
-            exit 1
-        fi
+# LOAD
+load_conf "$uhm_conf" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD; do
+    if ! grep -q "^${env_key}=" "$uhm_conf"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
     fi
-    unset env_owner env_perms
+done
+if ! grep -q "^UNIFI_TYPE=" "$uhm_conf"; then
+    key_errors+=("UNIFI_TYPE missing line")
+elif [[ -z "${UNIFI_TYPE:-}" ]]; then
+    key_errors+=("UNIFI_TYPE not set")
+elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
+    key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
 fi
-load_conf "$uhm_conf"
+if ! grep -q "^RECOVERY_COOLDOWN_SECONDS=" "$uhm_conf"; then
+    key_errors+=("RECOVERY_COOLDOWN_SECONDS missing line")
+elif [[ -z "${RECOVERY_COOLDOWN_SECONDS:-}" ]]; then
+    key_errors+=("RECOVERY_COOLDOWN_SECONDS not set")
+elif ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]] \
+     || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
+    key_errors+=("RECOVERY_COOLDOWN_SECONDS invalid seconds")
+fi
+if ! grep -q "^STARTUP_GRACE_SECONDS=" "$uhm_conf"; then
+    key_errors+=("STARTUP_GRACE_SECONDS missing line")
+elif [[ -z "${STARTUP_GRACE_SECONDS:-}" ]]; then
+    key_errors+=("STARTUP_GRACE_SECONDS not set")
+elif ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
+    key_errors+=("STARTUP_GRACE_SECONDS invalid seconds")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_conf") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+if [ -z "${UNIFI_TYPE:-}" ]; then
+    log "WARNING: no UNIFI_TYPE in uhm.env -- fallback"
+fi
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
-if ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]] || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
-    log "WARNING: RECOVERY_COOLDOWN_SECONDS invalid -- fallback"
-    RECOVERY_COOLDOWN_SECONDS=600
+if [ -z "${RECOVERY_COOLDOWN_SECONDS:-}" ]; then
+    log "WARNING: no RECOVERY_COOLDOWN_SECONDS in uhm.env -- fallback"
 fi
+RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
 # Same key uhmd.sh reads for its own startup-grace login retries -- reused
 # here so the two share one margin instead of drifting apart. Without this,
 # uhmd.sh stays quiet while UniFi is still booting after a reboot, but this
 # script's own functional login check (below) had no such exemption and
 # alerted anyway for the exact same, already-expected condition.
-STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
-if ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
-    log "WARNING: STARTUP_GRACE_SECONDS invalid -- fallback"
-    STARTUP_GRACE_SECONDS=120
+if [ -z "${STARTUP_GRACE_SECONDS:-}" ]; then
+    log "WARNING: no STARTUP_GRACE_SECONDS in uhm.env -- fallback"
 fi
+STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
+# The default port differs per controller type, so this fallback reads a key
+# KEY CHECK already validated.
+if [ -z "${UNIFI_CONTROLLER_URL:-}" ]; then
+    log "WARNING: no UNIFI_CONTROLLER_URL in uhm.env -- fallback"
+fi
+if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
+    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
+else
+    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:8443}"
+fi
+
+# ------------------------------------------------------------------------------
+# CHECKS
+# ------------------------------------------------------------------------------
 
 # Time since uhmd.service itself became active -- same reasoning and same
 # config key as uhmalert.sh's own uhmd_started_at().
@@ -349,12 +420,6 @@ uhmd_started_at() {
     started_ts=$(systemctl show -p ActiveEnterTimestamp --value uhmd 2>/dev/null)
     date -d "$started_ts" +%s 2>/dev/null || echo 0
 }
-if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
-    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
-else
-    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:8443}"
-fi
-
 check_uhmd() {
     if systemctl is-active --quiet uhmd.service; then
         clear_recovery_attempt "uhmd.service"

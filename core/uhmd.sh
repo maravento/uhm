@@ -136,7 +136,7 @@
 #
 # GLOBALS BY DESIGN:
 # subnet_int, mask_int, hotspot_ini_int and hotspot_end_int are set once in
-# load_config() and read by ip_in_lan() and assign_ip_and_hostname(). new_token
+# the ENV block and read by ip_in_lan() and assign_ip_and_hostname(). new_token
 # is handed between unifi_login() and update_session_from_headers(). None of
 # them can be declared local.
 #
@@ -228,16 +228,60 @@ done
 # ------------------------------------------------------------------------------
 
 # validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
-UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
+
+# RUNTIME STATE
+# Counters and caches reset on every cycle
+session_token=""
+csrf_token=""
+voucher_cache=""
+voucher_count=0
+sessions_authorized=0
+revoked_total=0
+newly_authorized_macs=()
+declare -A revoked_sessions=()
+# Backend readiness tracking: the login endpoint can answer well before the
+# UniFi Network application's data endpoints (stat/voucher, stat/guest,
+# stat/sta) finish coming up -- common for a couple of minutes after a
+# controller/host reboot. These flags capture the rc the cycle already
+# computes for each, so run_cycle can log a single "backend ready" line on the
+# not-ready -> ready transition (and re-arm it if the backend drops again).
+vouchers_ok=0
+guest_ok=0
+sta_ok=0
+backend_ready=0
+acl_snapshot_hotspot=""
+acl_snapshot_block=""
+acl_snapshot_queue=""
+acl_snapshot_grace=""
+reload_ok=0
+# mac-*.txt change watcher (see check_mac_lists_changed): independent of the
+# ACL snapshot/reload mechanism above -- its own baseline and its own pending
+# flag, never reusing uhm-queue.txt or the acl_snapshot_* machinery.
+mac_lists_hash_prev=""
+mac_reload_pending=0
+# Safety-net reload: forces UHM_RELOAD even without an ACL diff,
+# on this cadence, so idle networks still get grace->block promotion and the
+# firewall self-heals without depending on an external cron entry (see
+# check_and_reload_if_changed). Default set in main(), alongside
+# POLL_INTERVAL; overridable via RELOAD_SAFETY_INTERVAL_SECONDS in
+# uhm.env. main() aborts below 3x (UHM_LEASES_TIMEOUT_SECONDS +
+# UHM_IPTABLES_TIMEOUT_SECONDS), never below 600 -- both timeouts are
+# themselves configurable, so the floor is computed, not fixed. The cadence
+# is measured from the moment a reload starts, not when it ends, so at the
+# floor the daemon still rests at least twice as long as the slowest reload
+# the timeouts allow. Every reload stops and starts pydhcpd. Fallbacks 120
+# and 60 must stay in sync with uhmreload.sh, which reads the same two
+# values.
+last_reload_epoch=0
+
+token_state_file="/run/uhmd_session"
+
+default_lease_time=2592000
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
@@ -294,105 +338,8 @@ cleanup_temp() {
 }
 trap cleanup_temp EXIT
 
-# ------------------------------------------------------------------------------
-# ENV
-# ------------------------------------------------------------------------------
-
-# PATHS AND CONSTANTS
-# The only path that cannot live in uhm.env, plus fixed values
-# config_file is the one path that cannot itself live in uhm.env -- the
-# daemon needs to know where that file is before it can be opened and read.
-# Every other path below (UHM_MACAUTH, ACL_BLOCK_FILE, ACL_MAC_PATH,
-# UHM_QUEUE) is set inside load_config(), after uhm.env is
-# loaded, with the same fallback default shown here.
-pydhcp_env="/etc/pydhcp/pydhcp.env"
-config_file="/etc/uhm/uhm.env"
-
-token_state_file="/run/uhmd_session"
-
-default_lease_time=2592000
-
-# RUNTIME STATE
-# Counters and caches reset on every cycle
-session_token=""
-csrf_token=""
-voucher_cache=""
-voucher_count=0
-sessions_authorized=0
-revoked_total=0
-newly_authorized_macs=()
-declare -A revoked_sessions=()
-# Backend readiness tracking: the login endpoint can answer well before the
-# UniFi Network application's data endpoints (stat/voucher, stat/guest,
-# stat/sta) finish coming up -- common for a couple of minutes after a
-# controller/host reboot. These flags capture the rc the cycle already
-# computes for each, so run_cycle can log a single "backend ready" line on the
-# not-ready -> ready transition (and re-arm it if the backend drops again).
-vouchers_ok=0
-guest_ok=0
-sta_ok=0
-backend_ready=0
-acl_snapshot_hotspot=""
-acl_snapshot_block=""
-acl_snapshot_queue=""
-acl_snapshot_grace=""
-reload_ok=0
-# mac-*.txt change watcher (see check_mac_lists_changed): independent of the
-# ACL snapshot/reload mechanism above -- its own baseline and its own pending
-# flag, never reusing uhm-queue.txt or the acl_snapshot_* machinery.
-mac_lists_hash_prev=""
-mac_reload_pending=0
-# Safety-net reload: forces UHM_RELOAD even without an ACL diff,
-# on this cadence, so idle networks still get grace->block promotion and the
-# firewall self-heals without depending on an external cron entry (see
-# check_and_reload_if_changed). Default set in main(), alongside
-# POLL_INTERVAL; overridable via RELOAD_SAFETY_INTERVAL_SECONDS in
-# uhm.env. main() aborts below 3x (UHM_LEASES_TIMEOUT_SECONDS +
-# UHM_IPTABLES_TIMEOUT_SECONDS), never below 600 -- both timeouts are
-# themselves configurable, so the floor is computed, not fixed. The cadence
-# is measured from the moment a reload starts, not when it ends, so at the
-# floor the daemon still rests at least twice as long as the slowest reload
-# the timeouts allow. Every reload stops and starts pydhcpd. Fallbacks 120
-# and 60 must stay in sync with uhmreload.sh, which reads the same two
-# values.
-last_reload_epoch=0
-
-# Loads only known KEY=VALUE pairs from config_file instead of sourcing it,
-# so a tampered or maliciously replaced config file cannot execute code.
-# Canonical parser, identical in every script of the project: a malformed
-# line aborts.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|\
-            SERVER_IP|SERV_SUBNET|SERV_MASK|UHM_PATH|\
-            UHM_INI_RANGE|UHM_END_RANGE|\
-            UHM_RELOAD|UHM_GRACE|UHM_MACAUTH|ACL_BLOCK_FILE|ACL_MAC_PATH|ACL_PATH|\
-            UHM_QUEUE|PYDHCPD_LEASES|POLL_INTERVAL|STARTUP_GRACE_SECONDS|\
-            RELOAD_SAFETY_INTERVAL_SECONDS|AUTHORIZED_LEASE_TIME|\
-            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
-
-# CONFIG
-# Reads pydhcp.env first, then uhm.env, and validates every key
+# Creates uhm's own ACL lists if missing, and keeps them root:root 600.
+# Called from main(), once the ENV block below has resolved their paths.
 ensure_acl_lists() {
     local check_file file_owner file_perms
     for check_file in "$@"; do
@@ -415,115 +362,276 @@ ensure_acl_lists() {
     done
 }
 
-load_config() {
-    if [[ ! -f "$config_file" ]]; then
-        log "ERROR: $config_file not found -- abort"
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+config_file="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$config_file root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
         exit 1
     fi
-    local file_owner file_perms
-    file_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
-    file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
-    if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-        if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-            log "INFO: uhm.env perms fixed -- fixed"
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
         else
-            log "ERROR: cannot fix uhm.env perms -- abort"
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
             exit 1
         fi
     fi
-    # pydhcp.env first: it owns the network, ACL and lease values, and is
-    # the single source of truth for them. uhm.env is read after, so uhm's
-    # own keys win if a name ever collides.
-    if [[ ! -r "$pydhcp_env" ]]; then
-        log "ERROR: uhm reads pydhcp's network and ACL values from it"
-        log "ERROR: cannot read $pydhcp_env -- abort"
-        exit 1
-    fi
-    load_conf "$pydhcp_env"
-    load_conf "$config_file"
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
 
-    # uhm's own ACL files (UHM_MACAUTH, UHM_GRACE, UHM_QUEUE) and
-    # pydhcp's (ACL_BLOCK_FILE, ACL_MAC_PATH) -- all configurable via uhm.env,
-    # same fallback defaults as uhmleases.sh uses for the same variables.
-    # uhm's own three hang off UHM_PATH so the install directory is
-    # named once and never repeated per file.
-    UHM_PATH="${UHM_PATH:-/etc/uhm}"
-    ACL_PATH="${ACL_PATH:-/etc/acl}"
-    PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/core/pydhcpd.leases}"
-    UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
-    ACL_BLOCK_FILE="${ACL_BLOCK_FILE:-/etc/pydhcp/acl/blockdhcp.txt}"
-    ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/mac}"
-    UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
-    UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
-
-    ensure_acl_lists "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
-
-    local missing_keys=()
-    [[ -z "${UNIFI_CONTROLLER_URL:-}" ]] && missing_keys+=("UNIFI_CONTROLLER_URL")
-    [[ -z "${UNIFI_USERNAME:-}" ]] && missing_keys+=("UNIFI_USERNAME")
-    [[ -z "${UNIFI_PASSWORD:-}" ]] && missing_keys+=("UNIFI_PASSWORD")
-    [[ -z "${SERVER_IP:-}" ]] && missing_keys+=("SERVER_IP")
-    [[ -z "${SERV_SUBNET:-}" ]] && missing_keys+=("SERV_SUBNET")
-    [[ -z "${SERV_MASK:-}" ]] && missing_keys+=("SERV_MASK")
-    [[ -z "${UHM_INI_RANGE:-}" ]] && missing_keys+=("UHM_INI_RANGE")
-    [[ -z "${UHM_END_RANGE:-}" ]] && missing_keys+=("UHM_END_RANGE")
-    [[ -z "${UHM_RELOAD:-}" ]] && missing_keys+=("UHM_RELOAD")
-    [[ -z "${UNIFI_TYPE:-}" ]] && missing_keys+=("UNIFI_TYPE")
-    [[ -z "${UNIFI_SITE:-}" ]] && missing_keys+=("UNIFI_SITE")
-
-    if (( ${#missing_keys[@]} > 0 )); then
-        log "ERROR: missing variables in uhm.env:"
-        local missing_key
-        for missing_key in "${missing_keys[@]}"; do
-            log "ERROR: $missing_key"
-        done
-        log "ERROR: restore uhm.env or re-run uhmsetup.sh -- abort"
-        exit 1
-    fi
-
-    if ! [[ "$SERVER_IP" =~ $UH_IPV4 ]]; then
-        log "ERROR: SERVER_IP is not valid IPv4 in uhm.env -- abort"
-        exit 1
-    fi
-
-    if ! [[ "$SERV_SUBNET" =~ $UH_IPV4 ]] || ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
-        log "ERROR: SERV_SUBNET/SERV_MASK invalid in uhm.env -- abort"
-        exit 1
-    fi
-    subnet_int=$(ip_to_int "$SERV_SUBNET")
-    mask_int=$(ip_to_int "$SERV_MASK")
-
-    if [[ "${UNIFI_TYPE:-}" != "unifi-os" && "${UNIFI_TYPE:-}" != "classic" ]]; then
-        log "ERROR: UNIFI_TYPE must be 'unifi-os' or 'classic' -- abort"
-        exit 1
-    fi
-
-    # UNIFI_SITE is interpolated directly into API URLs (api_path()) -- reject
-    # anything outside the character set UniFi itself uses for site names.
-    if [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        log "ERROR: UNIFI_SITE has invalid characters -- abort"
-        exit 1
-    fi
-
-    if ! [[ "$UHM_INI_RANGE" =~ $UH_IPV4 ]] || ! [[ "$UHM_END_RANGE" =~ $UH_IPV4 ]]; then
-        log "ERROR: hotspot range must be two valid IPv4 addresses"
-        log "ERROR: UHM_INI_RANGE/UHM_END_RANGE in uhm.env -- abort"
-        exit 1
-    fi
-
-    hotspot_ini_int=$(ip_to_int "$UHM_INI_RANGE")
-    hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
-    if (( hotspot_ini_int > hotspot_end_int )); then
-        log "ERROR: UHM_INI_RANGE is above UHM_END_RANGE -- abort"
-        exit 1
-    fi
-
-    if ! ip_in_lan "$UHM_INI_RANGE" || ! ip_in_lan "$UHM_END_RANGE"; then
-        log "ERROR: hotspot range falls outside the LAN subnet"
-        log "ERROR: subnet is $SERV_SUBNET/$SERV_MASK -- abort"
-        exit 1
-    fi
+# LOAD_CONF
+# Loads only known KEY=VALUE pairs from config_file instead of sourcing it,
+# so a tampered or maliciously replaced config file cannot execute code.
+# Canonical parser, identical in every script of the project: a malformed
+# line aborts.
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_key="${env_key%%[[:space:]]*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: $env_key malformed in $(basename "$conf_file") -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|\
+            SERVER_IP|SERV_SUBNET|SERV_MASK|UHM_PATH|\
+            UHM_INI_RANGE|UHM_END_RANGE|\
+            UHM_RELOAD|UHM_GRACE|UHM_MACAUTH|ACL_BLOCK_FILE|ACL_MAC_PATH|ACL_PATH|\
+            UHM_QUEUE|PYDHCPD_LEASES|POLL_INTERVAL|STARTUP_GRACE_SECONDS|\
+            RELOAD_SAFETY_INTERVAL_SECONDS|AUTHORIZED_LEASE_TIME|\
+            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+            *)
+                ;;
+        esac
+    done < "$conf_file"
 }
+
+# LOAD
+# pydhcp.env first: it owns the network, ACL and lease values, and is the
+# single source of truth for them. uhm.env is read after, so uhm's own keys
+# win if a name ever collides.
+load_conf "$pydhcp_env" || true
+load_conf "$config_file" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in ACL_PATH ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in SERVER_IP SERV_SUBNET; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+if ! grep -q "^SERV_MASK=" "$pydhcp_env"; then
+    key_errors+=("SERV_MASK missing line")
+elif [[ -z "${SERV_MASK:-}" ]]; then
+    key_errors+=("SERV_MASK not set")
+elif ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
+    key_errors+=("SERV_MASK invalid netmask")
+fi
+if ! grep -q "^AUTHORIZED_LEASE_TIME=" "$pydhcp_env"; then
+    key_errors+=("AUTHORIZED_LEASE_TIME missing line")
+elif [[ -z "${AUTHORIZED_LEASE_TIME:-}" ]]; then
+    key_errors+=("AUTHORIZED_LEASE_TIME not set")
+elif ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] \
+     || (( AUTHORIZED_LEASE_TIME == 0 )); then
+    key_errors+=("AUTHORIZED_LEASE_TIME invalid seconds")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    exit 1
+fi
+for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
+               UHM_PATH UHM_RELOAD UHM_MACAUTH UHM_GRACE UHM_QUEUE; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in UHM_INI_RANGE UHM_END_RANGE; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+for env_key in POLL_INTERVAL UHM_LEASES_TIMEOUT_SECONDS \
+               UHM_IPTABLES_TIMEOUT_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+        key_errors+=("$env_key invalid seconds")
+    fi
+done
+if ! grep -q "^STARTUP_GRACE_SECONDS=" "$config_file"; then
+    key_errors+=("STARTUP_GRACE_SECONDS missing line")
+elif [[ -z "${STARTUP_GRACE_SECONDS:-}" ]]; then
+    key_errors+=("STARTUP_GRACE_SECONDS not set")
+elif ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
+    key_errors+=("STARTUP_GRACE_SECONDS invalid seconds")
+fi
+if ! grep -q "^UNIFI_TYPE=" "$config_file"; then
+    key_errors+=("UNIFI_TYPE missing line")
+elif [[ -z "${UNIFI_TYPE:-}" ]]; then
+    key_errors+=("UNIFI_TYPE not set")
+elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
+    key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
+fi
+# UNIFI_SITE is interpolated directly into API URLs (api_path()) -- reject
+# anything outside the character set UniFi itself uses for site names.
+if ! grep -q "^UNIFI_SITE=" "$config_file"; then
+    key_errors+=("UNIFI_SITE missing line")
+elif [[ -z "${UNIFI_SITE:-}" ]]; then
+    key_errors+=("UNIFI_SITE not set")
+elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    key_errors+=("UNIFI_SITE invalid characters")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+# uhm's own ACL files (UHM_MACAUTH, UHM_GRACE, UHM_QUEUE) and pydhcp's
+# (ACL_BLOCK_FILE, ACL_MAC_PATH) -- all configurable, same defaults
+# uhmleases.sh uses for the same variables. uhm's own three hang off UHM_PATH
+# so the install directory is named once and never repeated per file.
+if [ -z "${UHM_PATH:-}" ]; then
+    log "WARNING: no UHM_PATH in uhm.env -- fallback"
+fi
+UHM_PATH="${UHM_PATH:-/etc/uhm}"
+if [ -z "${ACL_PATH:-}" ]; then
+    log "WARNING: no ACL_PATH in pydhcp.env -- fallback"
+fi
+ACL_PATH="${ACL_PATH:-/etc/acl}"
+if [ -z "${PYDHCPD_LEASES:-}" ]; then
+    log "WARNING: no PYDHCPD_LEASES in pydhcp.env -- fallback"
+fi
+PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/core/pydhcpd.leases}"
+if [ -z "${UHM_MACAUTH:-}" ]; then
+    log "WARNING: no UHM_MACAUTH in uhm.env -- fallback"
+fi
+UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
+if [ -z "${ACL_BLOCK_FILE:-}" ]; then
+    log "WARNING: no ACL_BLOCK_FILE in pydhcp.env -- fallback"
+fi
+ACL_BLOCK_FILE="${ACL_BLOCK_FILE:-/etc/pydhcp/acl/blockdhcp.txt}"
+if [ -z "${ACL_MAC_PATH:-}" ]; then
+    log "WARNING: no ACL_MAC_PATH in pydhcp.env -- fallback"
+fi
+ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/mac}"
+if [ -z "${UHM_GRACE:-}" ]; then
+    log "WARNING: no UHM_GRACE in uhm.env -- fallback"
+fi
+UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
+if [ -z "${UHM_QUEUE:-}" ]; then
+    log "WARNING: no UHM_QUEUE in uhm.env -- fallback"
+fi
+UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
+if [ -z "${POLL_INTERVAL:-}" ]; then
+    log "WARNING: no POLL_INTERVAL in uhm.env -- fallback"
+fi
+POLL_INTERVAL="${POLL_INTERVAL:-20}"
+if [ -z "${STARTUP_GRACE_SECONDS:-}" ]; then
+    log "WARNING: no STARTUP_GRACE_SECONDS in uhm.env -- fallback"
+fi
+STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
+# Fallbacks 120 and 60 must stay in sync with uhmreload.sh, which reads the
+# same two values.
+if [ -z "${UHM_LEASES_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -- fallback"
+fi
+UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
+if [ -z "${UHM_IPTABLES_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no UHM_IPTABLES_TIMEOUT_SECONDS in uhm.env -- fallback"
+fi
+UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
+if [ -z "${RELOAD_SAFETY_INTERVAL_SECONDS:-}" ]; then
+    log "WARNING: no RELOAD_SAFETY_INTERVAL_SECONDS in uhm.env -- fallback"
+fi
+RELOAD_SAFETY_INTERVAL_SECONDS="${RELOAD_SAFETY_INTERVAL_SECONDS:-3600}"
+if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
+    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -- fallback"
+fi
+AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-$default_lease_time}"
+# Integer forms of the LAN subnet, derived from keys KEY CHECK already
+# validated, and read by ip_in_lan()
+subnet_int=$(ip_to_int "$SERV_SUBNET")
+mask_int=$(ip_to_int "$SERV_MASK")
+# Integer forms of the hotspot range, read by the guards below and by
+# assign_ip_and_hostname()
+hotspot_ini_int=$(ip_to_int "$UHM_INI_RANGE")
+hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
+
+# KEY GUARD
+# Each key above is valid on its own. These three relations are not.
+if (( hotspot_ini_int > hotspot_end_int )); then
+    log "ERROR: hotspot range $UHM_INI_RANGE-$UHM_END_RANGE"
+    log "ERROR: hotspot range reversed in $(basename "$config_file") -- abort"
+    exit 1
+fi
+if ! ip_in_lan "$UHM_INI_RANGE" || ! ip_in_lan "$UHM_END_RANGE"; then
+    log "ERROR: hotspot range $UHM_INI_RANGE-$UHM_END_RANGE"
+    log "ERROR: hotspot range out of $(basename "$pydhcp_env") subnet -- abort"
+    exit 1
+fi
+# The safety-net cadence is measured from the moment a reload starts, so at
+# this floor the daemon still rests at least twice as long as the slowest
+# reload the two timeouts allow. Every reload stops and starts pydhcpd.
+reload_floor=$(( 3 * (UHM_LEASES_TIMEOUT_SECONDS + UHM_IPTABLES_TIMEOUT_SECONDS) ))
+(( reload_floor < 600 )) && reload_floor=600
+if (( RELOAD_SAFETY_INTERVAL_SECONDS < reload_floor )); then
+    log "ERROR: reload interval RELOAD_SAFETY_INTERVAL_SECONDS=$RELOAD_SAFETY_INTERVAL_SECONDS"
+    log "ERROR: reload interval minimum $reload_floor in $(basename "$config_file") -- abort"
+    exit 1
+fi
+unset reload_floor
 
 ensure_executable() {
     local check_file="$1" script_name="$2" expected_mode="$3"
@@ -567,7 +675,7 @@ verify_installation() {
 # ACL FILE CHECK
 # Creates uhm's own lists when absent, never pydhcp's
 # uhm's own three lists (UHM_MACAUTH/UHM_GRACE/UHM_QUEUE) are created
-# on demand by ensure_acl_lists() in load_config(). ACL_BLOCK_FILE belongs to pydhcp
+# on demand by ensure_acl_lists(), called from main(). ACL_BLOCK_FILE belongs to pydhcp
 # and is deployed by its own pysetup.sh -- this daemon writes to it but must
 # never create it, so a missing one means a broken/partial pydhcp install.
 init_acl_files() {
@@ -845,7 +953,7 @@ assign_ip_and_hostname() {
         [[ -n "$client_ip" ]] && used_ips["$client_ip"]=1
     done < <(awk -F';' '{print $3}' "$UHM_MACAUTH" 2>/dev/null)
 
-    # Defense-in-depth only (already validated in load_config()); must never
+    # Defense-in-depth only (already validated by KEY CHECK); must never
     # log() since this runs inside a $(...) subshell.
     if ! [[ "$UHM_INI_RANGE" =~ $UH_IPV4 ]] || ! [[ "$UHM_END_RANGE" =~ $UH_IPV4 ]]; then
         return 1
@@ -1188,7 +1296,7 @@ add_mac_to_acl() {
         exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
         log "INFO: Authorized $mac_addr"
         log "INFO: ip=$client_ip"
-        log "INFO: hostname=${client_name:0:30}"
+        log "INFO: host=${client_name:0:20}"
         log "INFO: expires=$exp_human"
     fi
 
@@ -1334,7 +1442,7 @@ process_new_leases() {
                && ! grep -qi "^a;${mac_addr};" "$UHM_GRACE" 2>/dev/null; then
                 echo "a;${mac_addr};${client_ip};${client_name};$(date +%s);" >> "$UHM_GRACE"
                 log "INFO: new client $mac_addr -> grace"
-                log "INFO: ip=$client_ip hostname=${client_name:0:30}"
+                log "INFO: ip=$client_ip host=${client_name:0:20}"
                 (( added_count++ )) || true
             elif [[ -n "$mac_addr" && -n "$client_ip" ]] && ! ip_in_lan "$client_ip"; then
                 log "INFO: new lease outside the LAN subnet"
@@ -1439,7 +1547,7 @@ process_sessions() {
             log "INFO: renewal for $mac_addr"
             log "INFO: end_time $existing_end -> $end_time"
             log "INFO: keeping ip=$existing_ip for $mac_addr"
-            log "INFO: hostname=${existing_hostname:0:30}"
+            log "INFO: host=${existing_hostname:0:20}"
             if add_mac_to_acl "$mac_addr" "$existing_ip" "$existing_hostname" "$end_time"; then
                 (( added_count++ )) || true
             fi
@@ -1482,7 +1590,7 @@ process_sessions() {
             if (( ${#assigned_hostname} + 1 + ${#voucher_code} <= 63 )); then
                 assigned_hostname="${assigned_hostname}-${voucher_code}"
             else
-                log "INFO: hostname+voucher code exceeds 63 chars, voucher code omitted"
+                log "INFO: hostname+voucher exceeds 63 chars, voucher omitted"
             fi
         fi
 
@@ -1811,42 +1919,7 @@ run_cycle() {
 
 # Logs in once and then repeats the cycle every POLL_INTERVAL
 main() {
-    load_config
-    POLL_INTERVAL="${POLL_INTERVAL:-20}"
-    if ! [[ "$POLL_INTERVAL" =~ $UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
-        log "WARNING: POLL_INTERVAL invalid -- fallback"
-        POLL_INTERVAL=20
-    fi
-    STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
-    if ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
-        log "WARNING: STARTUP_GRACE_SECONDS invalid -- fallback"
-        STARTUP_GRACE_SECONDS=120
-    fi
-    UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
-    if ! [[ "$UHM_LEASES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_LEASES_TIMEOUT_SECONDS == 0 )); then
-        log "WARNING: UHM_LEASES_TIMEOUT_SECONDS invalid -- fallback"
-        UHM_LEASES_TIMEOUT_SECONDS=120
-    fi
-    UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
-    if ! [[ "$UHM_IPTABLES_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( UHM_IPTABLES_TIMEOUT_SECONDS == 0 )); then
-        log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS invalid -- fallback"
-        UHM_IPTABLES_TIMEOUT_SECONDS=60
-    fi
-    local reload_floor=$(( 3 * (UHM_LEASES_TIMEOUT_SECONDS + UHM_IPTABLES_TIMEOUT_SECONDS) ))
-    (( reload_floor < 600 )) && reload_floor=600
-    RELOAD_SAFETY_INTERVAL_SECONDS="${RELOAD_SAFETY_INTERVAL_SECONDS:-3600}"
-    if ! [[ "$RELOAD_SAFETY_INTERVAL_SECONDS" =~ $UH_UINT ]] || (( RELOAD_SAFETY_INTERVAL_SECONDS < reload_floor )); then
-        log "ERROR: RELOAD_SAFETY_INTERVAL_SECONDS too low"
-        log "ERROR: minimum is $reload_floor seconds -- abort"
-        exit 1
-    fi
-    if [[ -z "${AUTHORIZED_LEASE_TIME:-}" ]]; then
-        log "WARNING: AUTHORIZED_LEASE_TIME not set -- fallback"
-        AUTHORIZED_LEASE_TIME="$default_lease_time"
-    elif ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] || (( AUTHORIZED_LEASE_TIME == 0 )); then
-        log "WARNING: AUTHORIZED_LEASE_TIME invalid -- fallback"
-        AUTHORIZED_LEASE_TIME="$default_lease_time"
-    fi
+    ensure_acl_lists "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
     verify_installation
     init_acl_files
 

@@ -161,14 +161,19 @@ function lineCount(){
   return text.replace(/\n$/,'').split('\n').length;
 }
 
+var lastLineCount=-1;
 function renderGutter(badLine){
-  var total=lineCount(),html='';
-  for(var i=1;i<=total;i++){
-    html+='<span'+(i===badLine?' class="bad"':'')+'>'+i+'</span>';
+  var total=lineCount();
+  if(total!==lastLineCount||badLine>0){
+    lastLineCount=total;
+    var html='';
+    for(var i=1;i<=total;i++){
+      html+='<span'+(i===badLine?' class="bad"':'')+'>'+i+'</span>';
+    }
+    gutter.innerHTML=html||'<span>1</span>';
+    document.getElementById('uhLines').textContent=total;
   }
-  gutter.innerHTML=html||'<span>1</span>';
   gutter.scrollTop=ta.scrollTop;
-  document.getElementById('uhLines').textContent=total;
 }
 
 function setDirty(on){
@@ -177,7 +182,19 @@ function setDirty(on){
 }
 
 ta.addEventListener('input',function(){setDirty(true);renderGutter(0)});
-ta.addEventListener('scroll',function(){gutter.scrollTop=ta.scrollTop});
+ta.addEventListener('scroll',function(){
+  window.requestAnimationFrame(function(){gutter.scrollTop=ta.scrollTop});
+});
+ta.addEventListener('keydown',function(e){
+  if(e.key==='Tab'){
+    e.preventDefault();
+    var start=this.selectionStart,end=this.selectionEnd;
+    this.value=this.value.substring(0,start)+'  '+this.value.substring(end);
+    this.selectionStart=this.selectionEnd=start+2;
+    setDirty(true);
+    renderGutter(0);
+  }
+});
 
 function hintFor(name){
   if(HINTS[name])return HINTS[name];
@@ -222,6 +239,10 @@ function saveFile(){
     if(d.error){
       showMessage(d.line?(d.error+' on line '+d.line+': '+d.content):d.error,'err');
       renderGutter(d.line||0);
+      if(d.line){
+        var lineHeight=parseFloat(getComputedStyle(ta).lineHeight)||18.75;
+        ta.scrollTop=Math.max(0,(d.line-3)*lineHeight);
+      }
       return;
     }
     showMessage('Saved '+d.name+'.txt -- '+d.lines+' lines','ok');
@@ -242,6 +263,16 @@ document.getElementById('uhReload').addEventListener('click',function(){
   loadFile(current);
 });
 document.getElementById('uhSave').addEventListener('click',saveFile);
+
+window.addEventListener('beforeunload',function(e){
+  if(dirty){e.preventDefault();e.returnValue=''}
+});
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){
+    e.preventDefault();
+    if(dirty)saveFile();
+  }
+});
 
 loadList();
 })();

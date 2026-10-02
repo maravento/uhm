@@ -269,7 +269,7 @@ uninstall_module() {
 }
 
 # ------------------------------------------------------------------------------
-# MAIN
+# ACTIONS
 # ------------------------------------------------------------------------------
 
 case "${1:-}" in
@@ -294,27 +294,37 @@ if ! flock -n 200; then
     exit 1
 fi
 
-# -- Watch loop (default action -- this is what uhmalert.service runs) ------------
-# No -e: this is a long-running watch loop, one bad line (e.g. an
-# unparseable timestamp) must not kill the whole process.
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
 
-if [[ ! -f "$config_file" ]]; then
-    log "ERROR: $config_file not found -- abort"
-    exit 1
-fi
-file_owner=$(stat -c '%U' "$config_file" 2>/dev/null)
-file_perms=$(stat -c '%a' "$config_file" 2>/dev/null)
-if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-    if chown root:root "$config_file" 2>/dev/null && chmod 600 "$config_file" 2>/dev/null; then
-        log "INFO: uhm.env perms fixed -- fixed"
-    else
-        log "ERROR: cannot fix uhm.env perms -- abort"
+# PERMS
+# Owner and mode of every .env this script reads
+env_specs=("$config_file root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
         exit 1
     fi
-fi
-# Load only known KEY=VALUE pairs instead of sourcing, so a tampered or
-# maliciously replaced config file cannot execute code. Canonical parser,
-# identical in every script of the project: a malformed line aborts.
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
 load_conf() {
     local conf_file="$1" env_key env_value env_line
     [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
@@ -326,43 +336,93 @@ load_conf() {
         if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
            || [[ "$env_value" == [[:space:]\"\']* ]] \
            || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
             exit 1
         fi
         case "$env_key" in
             UHM_NTFY_TOPIC|UHM_API_FAIL_THRESHOLD|UHM_ALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
                 printf -v "$env_key" '%s' "$env_value"
                 ;;
-            *)
-                ;;
         esac
     done < "$conf_file"
 }
-load_conf "$config_file"
 
-if [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
-    log "ERROR: UHM_NTFY_TOPIC not set in $config_file -- abort"
+# LOAD
+load_conf "$config_file" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+# The three UHM_ALERT keys are written by this script's own install action,
+# POLL_INTERVAL by uhmsetup.sh -- all four are expected to be present.
+key_errors=()
+if ! grep -q "^UHM_NTFY_TOPIC=" "$config_file"; then
+    key_errors+=("UHM_NTFY_TOPIC missing line")
+elif [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
+    key_errors+=("UHM_NTFY_TOPIC not set")
+fi
+for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+        key_errors+=("$env_key invalid count")
+    fi
+done
+if ! grep -q "^UHM_ALERT_QUIET_PERIOD_SECONDS=" "$config_file"; then
+    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS missing line")
+elif [[ -z "${UHM_ALERT_QUIET_PERIOD_SECONDS:-}" ]]; then
+    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS not set")
+elif ! [[ "$UHM_ALERT_QUIET_PERIOD_SECONDS" =~ $UH_UINT ]]; then
+    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS invalid seconds")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -- abort"
     exit 1
 fi
+unset key_errors key_error env_key
 
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+if [ -z "${UHM_API_FAIL_THRESHOLD:-}" ]; then
+    log "WARNING: no UHM_API_FAIL_THRESHOLD in uhm.env -- fallback"
+fi
 fail_threshold="${UHM_API_FAIL_THRESHOLD:-3}"
-if ! [[ "$fail_threshold" =~ $UH_UINT ]] || (( fail_threshold == 0 )); then
-    log "WARNING: UHM_API_FAIL_THRESHOLD invalid -- fallback"
-    fail_threshold=3
+if [ -z "${POLL_INTERVAL:-}" ]; then
+    log "WARNING: no POLL_INTERVAL in uhm.env -- fallback"
 fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
-if ! [[ "$POLL_INTERVAL" =~ $UH_UINT ]] || (( POLL_INTERVAL == 0 )); then
-    log "WARNING: POLL_INTERVAL invalid -- fallback"
-    POLL_INTERVAL=20
+if [ -z "${UHM_ALERT_QUIET_PERIOD_SECONDS:-}" ]; then
+    log "WARNING: no UHM_ALERT_QUIET_PERIOD_SECONDS in uhm.env -- fallback"
 fi
 quiet_period="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
-[[ "$quiet_period" =~ $UH_UINT ]] || { log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS invalid -- fallback"; quiet_period=120; }
-jitter_margin=10 # tolerance added to POLL_INTERVAL so minor cycle jitter doesn't
-            # falsely look like a gap with a silent recovery in between
-api_max_time=30 # matches curl --max-time in uhmd.sh's api_get calls
+
+# ------------------------------------------------------------------------------
+# OWN VALUES
+# ------------------------------------------------------------------------------
+
+# Values this script declares itself -- not read from any .env
+# tolerance added to POLL_INTERVAL so minor cycle jitter doesn't falsely look
+# like a gap with a silent recovery in between
+jitter_margin=10
+# matches curl --max-time in uhmd.sh's api_get calls
+api_max_time=30
+# suppress a repeated identical ERROR/WARNING catch-all alert if it fires
+# again within this many seconds
+dedup_window=300
+# Longest silence tolerated before a gap is reported, derived from the three
+# values above and from POLL_INTERVAL, already validated by KEY CHECK
 gap_limit=$(( POLL_INTERVAL + 3 * api_max_time + jitter_margin ))
-dedup_window=300 # suppress a repeated identical ERROR/WARNING catch-all
-                  # alert if it fires again within this many seconds
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
+# No -e: this is a long-running watch loop, one bad line (e.g. an
+# unparseable timestamp) must not kill the whole process.
 
 fail_streak=0
 alert_sent=0
