@@ -6,76 +6,8 @@
 # uhmwatch -- UniFi Hotspot Services Watchdog
 #
 # DESCRIPTION:
-# Mandatory -- installed automatically, not offered as a
-# yes/no prompt like uhmalert or the web interface. Every unit it watches (uhmd,
-# pydhcpd, the UniFi backend) already has its own systemd Restart=
-# policy, but that alone gives up permanently once StartLimitBurst is
-# exhausted, with no further attempt and no alert -- see the
-# StartLimitBurst paragraph below. uhmwatch is the last line of defense
-# against that: it runs every minute, independent of whatever state
-# systemd itself gave up in, so uhm's essential services don't stay
-# down indefinitely just because systemd stopped trying.
-#
-# Runs every minute via cron. Watches every service uhm depends on
-# and restarts whichever one is down. Each restart is preceded by
-# `systemctl reset-failed` -- each unit already has its own Restart=
-# policy, so a persistent failure eventually exhausts its
-# StartLimitBurst and systemd stops trying on its own, leaving the
-# service down for good with no further notice. reset-failed clears
-# that state so this watchdog's own restart attempt isn't silently
-# rejected right when it's needed most. Each service check is fully
-# independent -- one check's failure/fix never skips or blocks the others
-# in the same run (unlike a naive watchdog that exits after the first fix).
-#
-# Checks performed, every run:
-# 1. uhmd.service -- always.
-# 2. uhmalert.service -- only if installed (optional component of uhm;
-#    silently skipped if its unit file isn't present).
-# 3. pydhcpd.service -- always. External dependency (separate project),
-#    not part of uhm's own codebase, same reasoning as watching the UniFi
-#    backend below: pydhcpd's own Restart=on-failure eventually exhausts
-#    its StartLimitBurst and gives up silently (see pydhcp's own README),
-#    with no alerting of its own -- uhmd cannot function without it, so it
-#    gets the same treatment as uhmd.service itself. is-active only, no
-#    functional check (pydhcpd exposes no HTTP API to probe like UniFi does).
-#    Skipped (not restarted) if uhmleases.sh currently holds cycle_lock --
-#    it stops/reconfigures/starts pydhcpd itself as part of a normal reload
-#    (~1-3s), and a cron tick landing in that window would otherwise "fix"
-#    a service that isn't actually broken, colliding with uhmleases.sh's own
-#    pending restart and aborting that reload.
-# 4. UniFi backend -- branches on UNIFI_TYPE from uhm.env. Both branches
-#    first require systemctl is-active (start it if not), then run a
-#    functional check: a real login against the API (same mechanism
-#    uhmd.sh itself uses -- credentials via jq env, payload via curl
-#    stdin, never in argv), using UNIFI_USERNAME/UNIFI_PASSWORD from
-#    uhm.env. HTTP 200 = healthy. HTTP 000 or 5xx = unresponsive,
-#    restarts the service -- except within STARTUP_GRACE_SECONDS of
-#    uhmd.service's own start (same margin and same config key uhmd.sh
-#    uses for its own login retries): logged as INFO instead of WARNING,
-#    no restart attempted, since the controller is expected to still be
-#    booting after a reboot. Any 4xx = credentials rejected but the service
-#    itself is up and answering -- logged as a warning, no restart (a
-#    restart wouldn't fix a wrong password in uhm.env anyway).
-# If those credentials are not set in uhm.env, falls back to a
-# process/port-only check instead of skipping the check entirely.
-# - "unifi-os": uosserver.service. UOS Server is an all-in-one container
-#   that bundles its own MongoDB internally -- no host-level mongod.service
-#   is part of this architecture. A broken internal Mongo is exactly the
-#   failure mode the login check catches that a plain process check
-#   cannot. A standalone mongod.service found running alongside UOS
-# Server is very likely a leftover from a previous classic install and
-# is not monitored here.
-# - "classic": unifi.service. Ships with UNIFI_MONGODB_SERVICE_ENABLED=false
-#   by default, so it manages its own embedded MongoDB subprocess
-#   (127.0.0.1:27117) end-to-end, including its own shutdown logic -- the
-#   mongodb-org-server package's own mongod.service unit is never started
-#   and its data directory stays empty. Same all-in-one shape as unifi-os
-#   above, so restarting unifi.service already covers a Mongo failure
-#   too. Credentials-absent fallback checks ports 8443/8080 instead.
-#
-# Standalone -- never reads or modifies uhmd.sh, only manages services
-# via systemctl. Independent of the user's own system-wide service
-# watchdog (if any); this one only knows about uhm's own dependencies.
+# Standalone services watchdog. Runs every minute via cron and restarts
+# whichever service UHM depends on is found down.
 #
 # USAGE:
 # sudo ./uhmwatch.sh install     Deploy the script and register its cron
@@ -84,13 +16,8 @@
 # uhmwatch.sh                    Run the checks directly (what cron invokes)
 # uhmwatch.sh -h, --help         Show this help
 #
-# CONFIG: /etc/uhm/uhm.env (reads UNIFI_TYPE, UNIFI_CONTROLLER_URL,
-#         UNIFI_USERNAME, UNIFI_PASSWORD, UNIFI_CERT_PIN,
-#         RECOVERY_COOLDOWN_SECONDS, STARTUP_GRACE_SECONDS)
-#
-# LOG: /var/log/uhm.log (shared with the rest of uhm). Silent on a healthy
-#      run -- nothing is written unless a check finds a problem or takes a
-#      fix action.
+# ENV: /etc/uhm/uhm.env
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 
@@ -664,7 +591,7 @@ check_unifi_classic() {
 
     # Functional check: same reasoning as check_uosserver() -- systemctl
     # is-active only proves the process is up, not that the app (and its
-    # embedded Mongo subprocess, see header) is actually healthy. Same login
+    # embedded Mongo subprocess, see README) is actually healthy. Same login
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
         log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -- skip"

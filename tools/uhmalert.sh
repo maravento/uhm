@@ -6,77 +6,19 @@
 # uhmalert -- UniFi Hotspot Alert Watcher (optional)
 #
 # DESCRIPTION:
-# Watches the shared uhm log in real time and sends a push
-# notification via ntfy.sh on three kinds of events:
-#
-# 1. Connectivity loss to the UniFi controller -- anchors on the
-#    "Could not load vouchers" line, which uhmd.sh's load_all_vouchers()
-#    logs exactly once per cycle when the controller is unreachable.
-#    Successful cycles are silent, so consecutive failures are identified
-#    by comparing timestamps: a gap larger than gap_limit = POLL_INTERVAL
-#    + 3*api_max_time + jitter_margin (default 20 + 3*30 + 10 = 120s) between two
-#    failure lines means cycles succeeded silently in between, and the
-#    streak resets. The 3*api_max_time term covers the worst case of a
-#    failed cycle still making up to three 30s-capped API calls (vouchers,
-#    guest, sta) before it ends. Alerts once UHM_API_FAIL_THRESHOLD
-#    consecutive cycles fail, and again once recovered (same gap_limit is
-#    the read timeout used to detect recovery -- see watch loop below).
-#    Suppressed while uhmd.service has been active for less than
-#    UHM_ALERT_QUIET_PERIOD_SECONDS (default 120s) -- UniFi Network/UniFi
-#    OS can take a while to come back up after a reboot, and uhmalert
-#    itself starts at boot too, so the very first cycles would otherwise
-#    alert on a known, expected startup window. A real outage later still
-#    alerts at the normal threshold, unaffected.
-#
-# 2. Any other ERROR or WARNING line -- the log already classifies every
-#    line's severity ("TIMESTAMP LEVEL: message"), shared by uhmd.sh and
-#    the uhmreload.sh/uhmleases.sh/uhmiptables.sh chain. Fires
-#    immediately, no streak -- one occurrence is already worth knowing
-#    about. Excludes lines already covered by #1 (so connectivity still
-#    waits for the threshold, not the first failure) and "cycle lock held
-#    unexpectedly" (expected/already handled, see uhmd.sh run_cycle() --
-#    not a bug).
-#
-# Standalone -- never reads or modifies uhmd.sh, only tails its log
-# file. Runs as its own systemd service (uhmalert.service), independent of
-# uhmd, so the daemon stays byte-identical to upstream. Optional:
-# uhmd.sh runs fine with or without uhmalert installed.
-#
-# DEPENDENCIES:
-# - bash, curl, grep, sed, util-linux (flock), GNU coreutils
-#   (date -d, tail -F) -- standard on Ubuntu/Debian
-# - systemd (systemctl) -- only needed for `install`/`uninstall`
-# - uhmd.sh already installed and running (this reads its log; it
-#   does not start or manage the daemon itself)
-# - An ntfy.sh account is not required. Install the free "ntfy" app
-#   (Android/iOS) and subscribe to a topic name of your choice -- treat
-#   the topic name as a shared secret, since anyone who knows it can
-#   publish to it. https://ntfy.sh
-#
-# CONFIGURATION:
-# `install` appends UHM_NTFY_TOPIC (auto-generated, unpredictable),
-# UHM_API_FAIL_THRESHOLD=3 and UHM_ALERT_QUIET_PERIOD_SECONDS=120 to
-# uhm.env on first run, and prints the generated
-# topic name so you can subscribe the ntfy app to it. Never overwrites
-# any of them if already present (safe to re-run/upgrade).
-# To change them later, edit uhm.env directly and restart the
-# service: systemctl restart uhmalert
-# POLL_INTERVAL is read from the same file (falls back to 20 if unset),
-# matching uhmd.sh's own cycle interval.
+# Watches the shared uhm log in real time and sends a push notification
+# via ntfy.sh on connectivity loss and on any ERROR or WARNING line.
 #
 # USAGE:
-# sudo ./uhmalert.sh install Deploy the script,
-# create+enable+start uhmalert.service
-# (creates the systemd unit if missing)
-# sudo ./uhmalert.sh uninstall Stop+disable the service, remove the unit
-# uhmalert.sh Run the watch loop directly (this is what
-# uhmalert.service's ExecStart invokes)
-# uhmalert.sh -h, --help Show this help
+# sudo ./uhmalert.sh install     Deploy the script, create+enable+start
+#                                uhmalert.service
+# sudo ./uhmalert.sh uninstall   Stop+disable the service, remove the unit
+# uhmalert.sh                    Run the watch loop directly (what
+#                                uhmalert.service's ExecStart invokes)
+# uhmalert.sh -h, --help         Show this help
 #
-# CONFIG: /etc/uhm/uhm.env. reads:
-# UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD, UHM_ALERT_QUIET_PERIOD_SECONDS, POLL_INTERVAL
+# ENV: /etc/uhm/uhm.env
 # LOG: /var/log/uhm.log (reads only -- shared with uhmd.sh)
-# SERVICE: systemctl status uhmalert
 #
 ################################################################################
 

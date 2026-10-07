@@ -3,32 +3,22 @@
 #
 ################################################################################
 #
-# uhmtool - JSON backend for the uhm web interface
+# uhmtool -- JSON backend for the uhm web interface
 #
 # DESCRIPTION:
-# Single privileged entry point used by the uhm web interface. Reads the
-# operational log, the local ACL files and the UniFi API, and writes back
-# an ACL file after validating it. Every answer is a JSON document on
-# stdout. The web interface runs as www-data and reaches this script
-# through sudo, so no web code ever touches a root-owned file.
+# Single privileged entry point of the web interface. Every answer is a
+# JSON document on stdout. Requires root.
 #
 # USAGE:
 # sudo bash uhmtool.sh <group> <action> [arguments]
 #
-# GROUPS:
-# log      tail, grep, status
-# acl      list, read, write
-# report   mac, grace, consistency, search
-# unifi    status, authorized, vouchers, guests, unauthorized
+#   log      tail, grep, status
+#   acl      list, read, write
+#   report   mac, grace, consistency, search
+#   unifi    status, authorized, vouchers, guests, unauthorized
 #
-# PATHS:
-# /etc/pydhcp/pydhcp.env   ACL paths and lease file
-# /etc/uhm/uhm.env         uhm keys and UniFi credentials
-# /var/log/uhm.log         operational log read by the log group
-#
-# EXIT CODES:
-# 0 - Normal exit, including a JSON error document
-# 1 - Not root, missing dependency, or unreadable configuration
+# ENV: /etc/pydhcp/pydhcp.env, /etc/uhm/uhm.env
+# LOG: /var/log/uhm.log (reads only)
 #
 ################################################################################
 

@@ -3,72 +3,22 @@
 #
 ################################################################################
 #
-# uhmunifi - UniFi Network Hotspot - Full Client Audit & Management Tool
+# uhmunifi -- UniFi Network Hotspot client audit and management tool
 #
 # DESCRIPTION:
-# Offers actions to act on the UniFi API directly (delete/revoke vouchers,
-# forget clients), and looks up a single MAC's live state. The read-only
-# reports this script used to print (connection status, authorized against
-# uhm-auth.txt, vouchers, guest sessions, unauthorized) are now shown by the
-# web interface's ToolView tab instead, backed by tools/uhmtool.sh -- see
-# uhm's README.
+# Interactive tool that acts on the UniFi API directly: deletes and revokes
+# vouchers, forgets clients, and looks up a single MAC's live state.
+# Requires root.
 #
 # USAGE:
 # sudo bash uhmunifi.sh
 #
-# MENU: [1] Check MAC, [2] Actions, [q] Quit.
+#   [1] Check MAC    live UniFi state for one MAC
+#   [2] Actions      voucher and client management submenu
+#   [q] Quit
 #
-# [1] Check MAC - live UniFi state for one MAC: essid, authorized, is_guest
-#     (from stat/sta) and voucher_code (from stat/guest, if present).
-#     Independent of the local ACL files -- see uhmtool.sh for those
-#     (mac-*.txt, uhm-auth.txt, uhm-grace.txt, blockdhcp.txt,
-#     pydhcpd.leases).
-#
-# ACTIONS SUBMENU -- none of these ever touch a mac-*.txt MAC (see
-# is_managed_mac() below); only the VOUCHER/UNKNOWN categories from
-# ToolView's Guest sessions report are ever eligible.
-# [1] Delete unused vouchers - delete vouchers never activated (used=0)
-# [2] Forget clients no voucher - forget guests who connected to the
-#     portal but never submitted a voucher code. Excludes clients
-#     currently connected to the hotspot ESSID (stat/sta), even if they
-#     never used a voucher -- only disconnected/stale ones are listed
-# [3] Delete expired vouchers - delete vouchers past their end_time and
-#     forget all associated client history
-# [4] Revoke by voucher code - surgical invalidation of a single voucher:
-#     delete from stat/voucher if still present, unauthorize active
-#     sessions, forget all associated MACs from stat/guest and stat/sta.
-#     Workaround for UniFi bug: stat/guest does not distinguish manually
-#     deleted vouchers from quota-exhausted ones
-#     (community.ui.com/31faff3e)
-# [5] Forget sessions marked (!) - unauthorize + forget every active
-#     session whose authorized_by is not "voucher" and is not a
-#     mac-*.txt device (see ToolView's Guest sessions UNKNOWN category)
-# [6] Purge everything - DELETE all vouchers and client history
-#     (DESTRUCTIVE -- requires typing YES)
-#
-# AUTH
-# Authenticates against UniFi OS (/api/auth/login) by default, or classic
-# controllers (/api/login) when UNIFI_TYPE=classic is set in uhm.env.
-# Requires UHM_ESSID, UNIFI_CONTROLLER_URL, UNIFI_USERNAME,
-# UNIFI_PASSWORD in uhm.env
-#
-# EXIT CODES:
-# 0 - Normal exit
-# 1 - Not root, already running, missing dependency, unwritable log,
-#     unreadable or incomplete configuration, unreadable or malformed
-#     data file, failed login, or failed UniFi query
-#
-# DEPENDENCIES : curl, jq, coreutils, util-linux, grep, sed
-# CONFIG       : /etc/uhm/uhm.env
-#
-# GLOBALS BY DESIGN:
-# session_cookie and csrf_token are set by do_login() and read by api_get()
-# and api_post() on every request. They cannot be declared local.
-#
-# LOG: /var/log/uhmunifi.log, truncated at the start of every run
-#      Interactive script, not a daemon, so the file holds one session only
-#      and needs no rotation. It records the login summary and every action
-#      taken; Check MAC prints to the terminal only, on demand
+# ENV: /etc/uhm/uhm.env
+# LOG: /var/log/uhmunifi.log
 #
 ################################################################################
 

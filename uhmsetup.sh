@@ -3,89 +3,21 @@
 #
 ################################################################################
 #
-# uhmsetup.sh -- uhm installer / updater
+# uhmsetup -- uhm installer / updater
 # https://github.com/maravento/uhm
 #
-# MODES:
+# DESCRIPTION:
+# Installs, updates or removes uhm. Run from inside the cloned repo.
+# Requires root.
+#
+# USAGE:
 # sudo bash uhmsetup.sh            Install (default; aborts if already
 #                                  installed -- use --update or --remove)
 # sudo bash uhmsetup.sh --update   Update scripts only (preserves config/ACLs)
 # sudo bash uhmsetup.sh --remove   Uninstall
 # sudo bash uhmsetup.sh --help     Usage
 #
-# Run from inside the cloned repo. The script expects to find:
-# ./core/uhmd.sh
-# ./config/service/uhmd.service
-# ./core/uhmreload.sh
-# ./core/uhmleases.sh
-# ./core/uhmwatch.sh
-# ./tools/uhmunifi.sh
-# ./tools/uhmtool.sh
-# ./tools/uhmalert.sh
-# ./tools/uhmiptables.sh (placeholder -- deployed only when absent)
-# ./tools/uhmiptables_example.txt (reference ruleset -- deployed, not run)
-# ./acl/uhm-auth.txt
-# ./acl/uhm-queue.txt
-# ./acl/uhm-grace.txt
-# ./web/ (web interface -- deployed only when the panel is accepted)
-# ./config/ (server configuration -- never published under the web root)
-#
-# core/ holds the reload mechanism (uhmleases.sh reconciles ACLs/leases,
-# uhmreload.sh invokes it, uhmd.sh/.service run the daemon that calls
-# uhmreload.sh) plus uhmwatch.sh -- mandatory too, but for a different
-# reason: it is the services watchdog, not part of the reload chain (see
-# its own header). uhm cannot function correctly without any of these
-# five. tools/ holds independent, optional utilities (auditing,
-# monitoring, alerting) that uhm runs fine without. acl/ holds uhm's own
-# data files (empty templates in the repo, deployed once and never
-# overwritten afterward) --
-# not to be confused with /etc/acl, which belongs to pydhcp/iptables.
-#
-# tools/uhmiptables.sh is a placeholder: IPv4 forwarding and NAT, nothing
-# else. tools/uhmiptables_example.txt is the full reference ruleset. Both are
-# deployed side by side, and the placeholder's header tells the administrator
-# how to copy the example over it. Only the placeholder is executable.
-# deploy_scripts() below excludes uhmiptables.sh from the tools/*.sh deploy
-# loop, so a customized file is never overwritten.
-#
-# DEPENDENCIES:
-# Hard dependencies (checked before anything else; aborts if any is missing --
-# none of these are auto-installed):
-#     curl, jq, iptables, ipset, python3, openssl, coreutils,
-#     util-linux (flock), iproute2 (ip), cron, grep, sed, systemd,
-#     libc-bin (getent), findutils (find), procps (sysctl, used by
-#     uhmiptables.sh), logrotate
-#
-# Hard dependency NOT an apt package (aborts if missing):
-#     pydhcpd must be installed and running, with pydhcp.env present and
-#     complete (network values pysetup.sh already collected -- uhmsetup.sh
-#     reads them from there instead of asking again). pydhcp is not an apt
-#     package; install it from https://github.com/maravento/pydhcp before
-#     running this script.
-#
-# Hard dependency NOT an apt package (aborts if missing/unreachable):
-#     UniFi Network self-hosted or UniFi OS Server, installed and reachable
-#     on this same host (classic on 8443, unifi-os on 11443). If neither is
-#     installed yet, use unifisetup.sh to install it first:
-#     https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh
-#
-# CONFIG FILE (uhm.env):
-# Holds only uhm's own keys: UniFi credentials, guest SSID, hotspot range,
-# timers and paths. WAN interface is not a key here -- WAN_IFACE is pydhcp's
-# own shared key, and the scripts that need it read it from pydhcp.env.
-# pydhcp's values are never copied here -- every
-# component reads pydhcp.env first and uhm.env after, so a change made in
-# pydhcp.env reaches uhm without a re-install. A key already present in
-# pydhcp.env is skipped instead of written a second time, and the skip is
-# reported on screen: these files are parsed key=value, so a duplicate would
-# let uhm.env shadow the value its owner maintains.
-#
-# LOG: uhmsetup.log, in the same directory this script is run from. Kept
-# separate from /var/log/uhm.log (the project's operational log, written by
-# uhmd.sh/uhmreload.sh/uhmleases.sh/uhmwatch.sh/uhmalert.sh) so install,
-# update and remove runs never mix with daily operation -- and so their
-# WARNING/ERROR lines never reach uhmalert.sh, which pushes a notification
-# for every one of them it finds in uhm.log. Rewritten on each run.
+# LOG: uhmsetup.log, in the directory this script is run from
 #
 ################################################################################
 

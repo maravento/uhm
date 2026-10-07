@@ -5,99 +5,15 @@
 #
 # uhmleases -- DHCP Leases & ACL Manager for pydhcpd (UniFi Hotspot edition)
 #
-# Reimplementation of pyleases.sh with extended directives and built-in
-# UniFi Hotspot integration. Operates exclusively with pydhcpd as backend.
-# Not compatible with isc-dhcp-server or any other DHCP daemon.
-#
 # DESCRIPTION:
-# Operates on pydhcpd data. This is the reconciliation step, and its
-# absence or failure aborts the whole reload chain.
+# Reconciliation step of the reload chain. Rebuilds pydhcpd.conf from the
+# ACL lists and restarts pydhcpd. Requires root.
 #
-# This script:
-# - Drains the lease removal queue written by uhmd
-# - Parses and cleans pydhcpd.leases
-# - Detects unauthorized clients and adds them to block lists
-# - Dynamically rebuilds pydhcpd.conf based on ACL sources
-# - Applies static mappings (MAC -> IP) from ACL files
-# - Detects duplicate entries across ACL sources: silently repairs the
-#   lower-priority list, aborts only when mac-*.txt conflicts with itself
-# - Safely restarts the pydhcpd service
+# USAGE:
+# uhmleases.sh    (no arguments; normally invoked by uhmreload.sh)
 #
-# FEATURES:
-# - Locking mechanism to prevent concurrent executions (flock)
-# - Concurrency guard (always, whoever invoked it): waits up to 10s for the
-#   mechanism lock, then skips gracefully (exit 0) if still held
-# - Lease filtering and selective persistence
-# - Automatic cleanup and normalization of ACL files
-# - check_duplicate(): the single guard against duplicate ACL entries
-#   (priority mac-*.txt > uhm-auth.txt > uhm-grace.txt > blockdhcp.txt),
-#   called at the start and end of the run
-# - check_mac_ip_ranges(): separate guard, mac-*.txt IPs landing inside a
-#   reserved range, called alongside check_duplicate()
-# - Configuration read from pydhcp.env (network, ACL paths, lease values)
-#   and uhm.env (the uhm keys), in that order
-# - Optional WPAD/PAC support (see WPAD/PAC OPTION below)
-# - UniFi Hotspot integration
-# - Grace period for unknown MACs before blocking
-# - Lease removal queue: drains the queue file written by uhmd during the
-#   safe stop->modify->start cycle
-#
-# REQUIREMENTS:
-# - pydhcpd installed and running
-# - ACL directories and files as defined in pydhcp.env
-# - Root privileges
-#
-# ACL FORMATS:
-# Standard (mac-*.txt, blockdhcp.txt):
-# a;MAC;IP;HOSTNAME;
-#
-# Hotspot voucher (uhm-auth.txt):
-# a;MAC;IP;HOSTNAME;END_TIME_EPOCH;
-#
-# Grace (uhm-grace.txt):
-# a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
-#
-# The leading "a" means "active" and marks a well-formed entry -- any other
-# leading character is malformed (see normalize_acl_lists() below). There is
-# no opposite value: to deactivate an entry, comment out the whole line with
-# "#" instead of editing the "a" -- but only in mac-*.txt and uhm-auth.txt,
-# the only two lists that ever produce a fixed-address host{} block in
-# pydhcpd.conf (a commented entry there joins the blockdhcp deny class
-# instead). blockdhcp.txt (already terminal), uhm-grace.txt (purely
-# temporary) and uhm-queue.txt (a working list, no a;/#a; syntax at all)
-# reject a leading "#" as malformed, same as any other invalid line.
-#
-# MALFORMED LINES:
-# A malformed line in mac-*.txt or uhm-auth.txt aborts the run, naming the
-# file and the line number. In blockdhcp.txt, uhm-grace.txt and
-# uhm-queue.txt it is dropped from the file and the run continues.
-#
-# NOTES:
-# - Designed for environments enforcing DHCP-based access control
-# - Incorrect ACL data may disrupt IP assignments
-#
-# UNIFI HOTSPOT MODULE:
-# Integration layer that:
-# - Classifies pydhcpd.leases entries: managed (mac-limited.txt,
-#   mac-unlimited.txt), voucher-authorized (uhm-auth), blocked (blockdhcp),
-#   grace-period (uhm-grace), or new
-# - New and uhm-grace clients keep their pydhcpd pool lease (no fixed-address
-#   injection). Only uhm-auth clients receive a fixed hotspot-range IP.
-# - Grace period (BLOCKDHCP_GRACE_SECONDS): any MAC detected in
-#   pydhcpd.leases that is not in an authoritative ACL is added to
-#   uhm-grace.txt with a timestamp. Regardless of reconnections, once the
-#   timer expires the MAC moves permanently to blockdhcp.txt. The only exit
-#   is manual removal or addition to mac-*.
-#
-# WPAD/PAC OPTION (option 252)
-# If you need WPAD/PAC for proxy auto-configuration:
-# 1. Install and configure Apache2
-# 2. Create virtual host on the WPAD_PORT of pydhcp.env (default 18100)
-# 3. Create wpad.pac file in Apache document root
-# 4. Set WPAD_ENABLED=true in pydhcp.env
-# The lines are only written if http://SERVER_IP:WPAD_PORT/wpad.pac answers 200
-#
-# LOG: /var/log/uhm.log, shared with the rest of the reload chain
+# ENV: /etc/pydhcp/pydhcp.env, /etc/uhm/uhm.env
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 
@@ -565,6 +481,26 @@ check_duplicate() {
 
     # -- uhm-auth.txt vs itself (MAC/IP/hostname) and vs mac-*.txt (MAC) -----
     dedup_uhm_auth
+
+    # -- reservations vs each other (MAC/IP): fatal, admin fixes by hand -----
+    # Only active "a;" rows become host{} blocks, so commented rows are out
+    local resv_lines resv_field resv_name dup_values dup_value resv_error=0
+    resv_lines=$(grep -hE '^a;' "$UHM_MACAUTH" "${acl_mac_files[@]}" 2>/dev/null || true)
+    for resv_field in 2 3; do
+        case $resv_field in 2) resv_name="MAC" ;; 3) resv_name="IP" ;; esac
+        dup_values=$(printf '%s\n' "$resv_lines" | cut -d';' -f${resv_field} \
+            | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+        [[ -z "$dup_values" ]] && continue
+        while IFS= read -r dup_value; do
+            [[ -z "$dup_value" ]] && continue
+            log "ERROR: duplicate reservation $resv_name ${dup_value:0:20}"
+            resv_error=1
+        done <<< "$dup_values"
+    done
+    if (( resv_error )); then
+        log "ERROR: uhm-auth.txt reservation conflict -- abort"
+        exit 1
+    fi
 
     # -- uhm-grace.txt vs itself, mac-*.txt, uhm-auth.txt (MAC only) ---------
     dedup_mac_vs "$UHM_GRACE" "uhm-grace.txt" "${acl_mac_files[@]}" "$UHM_MACAUTH"

@@ -3,36 +3,17 @@
 #
 ################################################################################
 #
-# uhmreload - Reload wrapper
+# uhmreload -- Reload wrapper
 #
 # DESCRIPTION:
-# invoked by uhmd after ACL changes, or on its own safety-net cadence
-# (RELOAD_SAFETY_INTERVAL_SECONDS in uhm.env, default 1h) -- no cron
-# entry needed. Can also be run manually for troubleshooting, but only while
-# uhmd.service is active -- it aborts otherwise (see the guard below).
-# Runs uhmleases.sh (lease/ACL rebuild) then uhmiptables.sh (firewall
-# rules), in that order. The two are not treated the same on failure:
-# - uhmleases.sh: missing, or a genuine execution failure, aborts the reload
-#   (ERROR + exit 1). It is the core ACL/lease reconciliation step --
-#   nothing downstream can be trusted without it.
-# - uhmiptables.sh: missing only warns and continues (the reload still
-#   counts as done). uhmsetup.sh deploys it as a minimal working template,
-#   so a normal install always has it. A genuine execution failure (script
-#   exists, runs, exits non-zero) still aborts (ERROR + exit 1) -- only
-#   its absence is tolerated.
-# Owner and mode of both scripts are restored to what uhmsetup.sh deployed
-# (755 for uhmleases.sh, 750 for uhmiptables.sh) before running them.
+# Runs uhmleases.sh and then uhmiptables.sh after an ACL change. Invoked by
+# uhmd; aborts if uhmd.service is not active.
 #
-# TIMEOUTS (uhm.env):
-# uhmd.sh invokes this script with no time limit of its own -- it just waits
-# for uhmreload.sh to finish. Each step below is bounded individually
-# instead: UHM_LEASES_TIMEOUT_SECONDS (default 120) and
-# UHM_IPTABLES_TIMEOUT_SECONDS (default 60). A step that exceeds its limit is
-# killed, its trace saved to /var/log/<step>-failure.trace, and the reload
-# aborts (ERROR logged).
+# USAGE:
+# uhmreload.sh    (no arguments)
 #
-# LOG: /var/log/uhm.log, shared with uhmleases.sh
-#      Rotation, /etc/logrotate.d/uhm, is installed by uhmsetup.sh only
+# ENV: /etc/uhm/uhm.env
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 

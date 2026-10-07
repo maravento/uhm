@@ -228,6 +228,7 @@ var API='../api.php';
 var ALL=[],CUR=[],fOff=0,live=true,pTmr=null,grep=false,loading=false,nrc=0;
 var PI=1000,MR=5000,RC=1000;
 var ctrl=null;
+var pCtrl=null,pTo=null,pGen=0,PT=15000;
 function fj(url){if(ctrl)ctrl.abort();ctrl=new AbortController();return fetch(url,{signal:ctrl.signal}).then(function(r){return r.json()})}
 
 // Theme follows the panel shell: the stored key on load, a postMessage
@@ -288,20 +289,25 @@ window.uhRL=function(){
   }).catch(function(e){if(e&&e.name==='AbortError')return;loading=false});
 };
 
+function pRel(){if(pTo){clearTimeout(pTo);pTo=null}pCtrl=null}
 function poll(){
-  if(!live||grep)return;
+  if(!live||grep||pCtrl)return;
   var tw=document.getElementById('uhTW'),sp=tw.scrollTop;
-  fetch(API+'?g=log&a=tail&pos='+fOff+'&lines=200').then(function(r){return r.json()}).then(function(d){
+  var c=new AbortController(),g=pGen;pCtrl=c;
+  pTo=setTimeout(function(){c.abort()},PT);
+  fetch(API+'?g=log&a=tail&pos='+fOff+'&lines=200',{signal:c.signal}).then(function(r){return r.json()}).then(function(d){
+    if(g!==pGen)return;
+    pRel();
     if(!d.rows||!d.rows.length)return;
     var nr=bi(d.rows.reverse());fOff=d.pos;
     if(!nr.length)return;
     ALL=nr.concat(ALL);if(ALL.length>MR)ALL=ALL.slice(0,MR);nrc+=nr.length;
     if(sp>50){document.getElementById('uhNC').textContent=nrc;document.getElementById('uhNB').style.display='block'}
     else{uhAF(nr.length);ucs()}
-  }).catch(function(){});
+  }).catch(function(){if(pCtrl===c)pRel()});
 }
 function sP(){cP();pTmr=setInterval(poll,PI)}
-function cP(){if(pTmr){clearInterval(pTmr);pTmr=null}}
+function cP(){if(pTmr){clearInterval(pTmr);pTmr=null}pGen++;if(pCtrl)pCtrl.abort();pRel()}
 
 window.uhTL=function(){
   live=!live;var el=document.getElementById('uhLB'),dt=document.getElementById('uhDt'),ll=document.getElementById('uhLL');

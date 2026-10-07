@@ -6,36 +6,16 @@
 # uhmiptables -- firewall placeholder for uhm
 #
 # DESCRIPTION:
-# This is a PLACEHOLDER, not the real ruleset. It enables IPv4 forwarding and
-# masquerades the LAN out the WAN interface, and nothing else: no ACL, no
-# ipsets, no port filtering, no policies. Without it clients get a lease and
-# reach nothing, so uhm needs this much to work.
+# PLACEHOLDER, not the real ruleset: it only enables IPv4 forwarding and
+# masquerades the LAN out the WAN interface. The full reference
+# implementation is uhmiptables_example.txt, in this same directory.
+# Runs as root.
 #
-# Access control still applies: uhm enforces it at the DHCP layer, through the
-# blockdhcp deny class uhmleases.sh writes into pydhcpd.conf. That does not
-# depend on this file.
+# USAGE:
+# uhmiptables.sh    (no arguments; normally invoked by uhmreload.sh)
 #
-# TO INSTALL THE REAL RULESET:
-# uhmiptables_example.txt, in this same directory, is the full reference
-# implementation (ACL classification, MAC2IP, captive portal, proxy
-# redirection). To adopt it, replace this file with it:
-#
-#   cd /etc/uhm/tools
-#   cp uhmiptables.sh uhmiptables.sh.bak
-#   cp uhmiptables_example.txt uhmiptables.sh
-#   chmod 750 uhmiptables.sh
-#
-# Then read it through and adapt it: it assumes a squid proxy on this host,
-# and its rules for the limited and hotspot classes send traffic to it. See
-# the README for what each section expects.
-#
-# Rules live in the UHM_NAT and UHM_FWD chains, flushed and rebuilt on every
-# run so they never accumulate. Nothing outside those two chains is touched,
-# and no policy is changed, so an existing firewall keeps working.
-#
-# DEPENDENCIES: iptables, procps (sysctl), iproute2
-#
-# Runs as root -- it writes kernel settings and firewall rules.
+# ENV: /etc/pydhcp/pydhcp.env
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 
