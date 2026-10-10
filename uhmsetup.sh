@@ -111,7 +111,7 @@ repo_service="${repo_config}/service/uhmd.service"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmunifi or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip)
+apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect)
 
 # Discovered runtime values (filled during install)
 
@@ -144,7 +144,6 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
@@ -336,20 +335,42 @@ load_pydhcp_conf() {
 # Ask helpers, each one validating its own answer
 ask() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
-    read -rp " ${prompt_text} [${default_value}]: " user_answer
+    read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
     printf -v "$target_var" '%s' "${user_answer:-$default_value}"
 }
 
 ask_number() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
-        read -rp " ${prompt_text} [${default_value}]: " user_answer
+        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 )); then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
         info "'$user_answer' is not valid, enter a positive integer -- retry"
+    done
+}
+
+ask_interface_number() {
+    local prompt_text="$1" default_value="$2" target_var="$3" max_value="$4" user_answer
+    while true; do
+        read -rp " ${prompt_text} [1-${max_value}] [Default: ${default_value}]: " user_answer
+        user_answer="${user_answer:-$default_value}"
+        if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 && user_answer <= max_value )); then
+            printf -v "$target_var" '%s' "$user_answer"
+            break
+        fi
+        info "Invalid selection, try again -- retry"
+    done
+}
+
+list_interfaces() {
+    local iface_index iface_state iface_ip
+    for iface_index in "${!iface_list[@]}"; do
+        iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
+        iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
+        printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
     done
 }
 
@@ -364,7 +385,7 @@ sys.exit(0 if ipaddress.IPv4Address(sys.argv[1]) <= ipaddress.IPv4Address(sys.ar
 ask_ip() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
-        read -rp " ${prompt_text} [${default_value}]: " user_answer
+        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_IPV4 ]]; then
             printf -v "$target_var" '%s' "$user_answer"
@@ -578,11 +599,13 @@ run_setup_wizard() {
             echo "Invalid selection -- enter the number of one of the SSIDs listed above."
         done
         if [[ -z "$cfg_essid" ]]; then
-            err "no SSID selected from the list"
-            abort "re-run and pick one of the SSIDs shown -- abort"
+            warn "no SSID selected from the list -- alert"
+            warn "set UHM_ESSID in $config_file before starting uhm -- alert"
         fi
     else
-        { err "no SSID detected on the UniFi controller"; abort "configure a guest SSID, then retry -- abort"; }
+        cfg_essid=""
+        warn "no SSID detected on the UniFi controller -- alert"
+        warn "set UHM_ESSID in $config_file before starting uhm -- alert"
     fi
 
     step "Dependency check"
@@ -799,11 +822,6 @@ deploy_scripts() {
         [[ "$(basename "$repo_file")" == "uhmiptables.sh" ]] && continue
         install -m 755 -o root -g root "$repo_file" "${tools_dir}/"
     done
-    # Remove any copy left at the pre-restructure locations (directly under
-    # $hotspot_dir / $tools_dir instead of core/), so at most one copy of
-    # each script exists on disk. uhmwatch.sh's own pre-restructure location
-    # is tools/ (where it lived before becoming mandatory), not $hotspot_dir.
-    rm -f "${hotspot_dir}/uhmd.sh" "${tools_dir}/uhmreload.sh" "${tools_dir}/uhmleases.sh" "${tools_dir}/uhmwatch.sh"
     info "Scripts deployed to ${hotspot_dir}"
 }
 
@@ -827,7 +845,7 @@ deploy_uhmiptables() {
 # rule that lets www-data reach uhmtool.sh, and the Listen directives.
 # uhmtool.sh itself is already deployed by deploy_scripts().
 install_web() {
-    local dep_pkg net_prefix
+    local dep_pkg
 
     for dep_pkg in apache2 libapache2-mod-php; do
         if ! dpkg -s "$dep_pkg" &>/dev/null; then
@@ -836,13 +854,6 @@ install_web() {
         fi
     done
 
-    if [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]; then
-        net_prefix="${BASH_REMATCH[1]}"
-    else
-        warn "cannot derive prefix from $SERV_MASK, web panel -- alert"
-        return 1
-    fi
-
     mkdir -p "$web_root"
     cp -a "${repo_web}/." "$web_root/"
     chown -R root:root "$web_root"
@@ -850,7 +861,6 @@ install_web() {
     find "$web_root" -type f -exec chmod 644 {} +
 
     install -m 644 -o root -g root "${repo_uhmweb}/uhmweb.conf" "$vhost_dest"
-    sed -i "s|192.168.0.0/24|${SERV_SUBNET}/${net_prefix}|g" "$vhost_dest"
 
     install -m 440 -o root -g root "${repo_uhmweb}/uhmweb.sudoers" "$sudoers_dest"
     if ! visudo -c -f "$sudoers_dest" &>/dev/null; then
@@ -861,7 +871,6 @@ install_web() {
 
     [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
     sed -i -E "/^Listen [^[:space:]]*:${web_port}\$/d; /^Listen ${web_port}\$/d" "$apache_ports"
-    echo "Listen ${SERVER_IP}:${web_port}" >> "$apache_ports"
     echo "Listen 127.0.0.1:${web_port}" >> "$apache_ports"
 
     a2enmod headers &>/dev/null || true
@@ -1052,12 +1061,10 @@ deregister_cron() {
     # uhmd triggers its own safety-net reload internally (see
     # RELOAD_SAFETY_INTERVAL_SECONDS in uhmd.sh) -- no external cron
     # entry should exist. Removes a leftover @hourly uhmreload.sh entry if
-    # found, matching both the current core/uhmreload.sh path and the
-    # pre-restructure tools/uhmreload.sh path.
-    local ureload_path_new="${hotspot_dir}/core/uhmreload.sh"
-    local ureload_path_old="${hotspot_dir}/tools/uhmreload.sh"
-    if crontab -l 2>/dev/null | grep -qF -e "$ureload_path_new" -e "$ureload_path_old"; then
-        crontab -l 2>/dev/null | { grep -vF -e "$ureload_path_new" -e "$ureload_path_old" || true; } | crontab - || true
+    # found.
+    local ureload_path="${core_dir}/uhmreload.sh"
+    if crontab -l 2>/dev/null | grep -qF "$ureload_path"; then
+        crontab -l 2>/dev/null | { grep -vF "$ureload_path" || true; } | crontab - || true
         info "Removed stale @hourly uhmreload.sh cron entry"
         info "  (now handled by uhmd.sh internally)"
     fi
@@ -1119,7 +1126,7 @@ install_pydhcp() {
     [[ -r "${pydhcp_path}/pysetup.sh" ]] \
         || { err "pysetup.sh not found in $pydhcp_path"; abort "remove that directory and re-run -- abort"; }
 
-    ( cd "$pydhcp_path" && bash pysetup.sh ) \
+    ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" bash pysetup.sh ) \
         || { err "pydhcp install failed"; abort "see ${pydhcp_path}/pysetup.log -- abort"; }
 
     systemctl is-active --quiet pydhcpd 2>/dev/null \
@@ -1168,6 +1175,76 @@ do_install() {
     check_repo_files
     check_preinstalled
     check_port tcp 4048 "web interface"
+
+    step "Network interface"
+    mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
+    if [[ ${#iface_list[@]} -eq 0 ]]; then
+        abort "no network interfaces found -- abort"
+    fi
+    list_interfaces
+    echo ""
+    ask_interface_number "Select LAN interface number" "1" lan_iface_choice "${#iface_list[@]}"
+    lan_iface="${iface_list[$((lan_iface_choice-1))]}"
+    lan_ip="$(ip -4 -o addr show dev "$lan_iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    [[ -n "$lan_ip" ]] || abort "interface $lan_iface has no IPv4 address -- abort"
+    info "LAN interface: $lan_iface ($lan_ip)"
+
+    step "UniFi dependency"
+    if dpkg -s unifi &>/dev/null || [[ -f /var/lib/uosserver/server.conf ]]; then
+        info "UniFi already installed"
+    else
+        local unifi_reply unifi_choice unifi_action
+        read -rp " UniFi is not installed. Install it now? (y/N) " unifi_reply
+        case "$unifi_reply" in
+            [Yy]*) ;;
+            *) abort "UniFi is required, install it then re-run -- abort" ;;
+        esac
+
+        echo "1) UniFi Network Application"
+        echo "2) UniFi OS Server"
+        read -rp " Select an option (1-2): " unifi_choice
+        case "$unifi_choice" in
+            1) unifi_action="install-network" ;;
+            2) unifi_action="install-osserver" ;;
+            *) abort "invalid option -- abort" ;;
+        esac
+
+        local unifisetup_tmp
+        unifisetup_tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -- abort"; }
+        info "Downloading unifisetup.sh..."
+        if ! curl -fsSL "https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh" -o "$unifisetup_tmp"; then
+            rm -f "$unifisetup_tmp"
+            { err "failed to download unifisetup.sh"; abort "check network access to GitHub -- abort"; }
+        fi
+        chmod +x "$unifisetup_tmp"
+        local unifi_expect
+        unifi_expect=$(mktemp) || abort "cannot create temp file in /tmp -- abort"
+        cat > "$unifi_expect" <<EOF
+set timeout -1
+spawn bash "$unifisetup_tmp" "$unifi_action"
+expect {
+    -re {\[([0-9]+)\][ \t]+$lan_iface[ \t(]} {
+        send "\$expect_out(1,string)\r"
+        exp_continue
+    }
+    eof {}
+}
+catch wait result
+exit [lindex \$result 3]
+EOF
+        expect -f "$unifi_expect" || true
+        rm -f "$unifi_expect"
+        rm -f "$unifisetup_tmp"
+
+        if ! dpkg -s unifi &>/dev/null && [[ ! -f /var/lib/uosserver/server.conf ]]; then
+            abort "UniFi install did not complete, check unifisetup.log -- abort"
+        fi
+
+        echo ""
+        echo "Enter that URL and set up your local account."
+        read -n1 -rsp " Press any key once you've done that, to continue... "
+        echo ""
+    fi
 
     step "pydhcp"
     install_pydhcp
@@ -1251,11 +1328,7 @@ do_update() {
     step "Preflight"
     check_repo_files
 
-    # Accepts either the current core/ layout or the pre-restructure layout
-    # (uhmd.sh directly under $hotspot_dir, uhmreload.sh/uhmleases.sh under
-    # $tools_dir), so an update from an old install isn't mistaken for a
-    # fresh one.
-    if [[ ! -d "$hotspot_dir" ]] || { [[ ! -f "${core_dir}/uhmd.sh" ]] && [[ ! -f "${hotspot_dir}/uhmd.sh" ]]; }; then
+    if [[ ! -d "$hotspot_dir" ]] || [[ ! -f "${core_dir}/uhmd.sh" ]]; then
         { err "uhm not installed"; abort "run without --update first -- abort"; }
     fi
 
@@ -1273,7 +1346,6 @@ do_update() {
     # alone: it is a separate project this update never modifies, and
     # stopping it would cut DHCP for the whole LAN, not just the hotspot.
     local uwatch_path="${core_dir}/uhmwatch.sh"
-    local uwatch_path_legacy="${tools_dir}/uhmwatch.sh"
     local uhmd_was_active=0 ualert_was_active=0 uwatch_was_active=0
     systemctl is-active --quiet uhmd 2>/dev/null && uhmd_was_active=1
     if [[ -f /etc/systemd/system/uhmalert.service ]]; then
@@ -1281,8 +1353,8 @@ do_update() {
     fi
     if grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null; then
         uwatch_was_active=1
-    elif crontab -l 2>/dev/null | awk -v p="$uwatch_path" -v pl="$uwatch_path_legacy" \
-        '((index($0,p)>0 || index($0,pl)>0) && substr($0,1,1)!="#"){found_entry=1} END{exit !found_entry}'; then
+    elif crontab -l 2>/dev/null | awk -v p="$uwatch_path" \
+        '(index($0,p)>0 && substr($0,1,1)!="#"){found_entry=1} END{exit !found_entry}'; then
         uwatch_was_active=1
     fi
 
@@ -1293,12 +1365,9 @@ do_update() {
         systemctl stop uhmalert && info "uhmalert stopped for update" || warn "Could not stop uhmalert, continuing anyway -- alert"
     fi
     if (( uwatch_was_active )); then
-        # Remove the active line outright (whichever path it used, current
-        # or the pre-restructure tools/ one) instead of just commenting it
-        # out -- Resume below re-registers a clean entry at the current
-        # path via `uhmwatch.sh install`, which also self-migrates away
-        # any stale legacy-path entry. Simpler and correct across the
-        # core/-relocation than trying to text-surgery two possible paths.
+        # Remove the active line outright instead of just commenting it
+        # out -- Resume below re-registers a clean entry via
+        # `uhmwatch.sh install`.
         bash "${core_dir}/uhmwatch.sh" uninstall >/dev/null 2>&1 || true
         info "uhmwatch cron entry removed for update"
         info "  (re-registered on resume)"
@@ -1357,16 +1426,13 @@ do_update() {
         systemctl start uhmalert && info "uhmalert restarted" || { warn "Could not restart uhmalert"; warn "check it with: systemctl status uhmalert -- alert"; }
     fi
     if (( uwatch_was_active )); then
-        # Re-registers a clean entry at the current core/ path -- also
-        # self-migrates away any stale legacy tools/ entry, though Pause
-        # above already removed the one this run knew was active.
+        # Re-registers a clean entry, since Pause above removed it.
         bash "${core_dir}/uhmwatch.sh" install
         info "uhmwatch cron entry restored"
     elif ! grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null \
-        && ! crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
-        # No entry at all (active or commented) -- this install predates
-        # uhmwatch becoming mandatory. Install it now rather than leaving
-        # an update-in-place without it.
+        && ! crontab -l 2>/dev/null | grep -qF "$uwatch_path"; then
+        # No entry at all, active or commented. Install it now rather
+        # than leaving an update-in-place without it.
         bash "${core_dir}/uhmwatch.sh" install
         info "uhmwatch installed (was missing, now mandatory)"
     fi
@@ -1460,18 +1526,8 @@ perform_remove() {
 
     # Cron entries
     step "Cron"
-    # Matches both the current core/uhmreload.sh path and the pre-restructure
-    # tools/uhmreload.sh path.
-    local ureload_path="${hotspot_dir}/core/uhmreload.sh"
-    local ureload_path_old="${hotspot_dir}/tools/uhmreload.sh"
     rm -f /etc/cron.d/uhm
     info "Cron entries removed"
-
-    # legacy entries in root's crontab, from versions before /etc/cron.d
-    for legacy_path in "$ureload_path" "$ureload_path_old" "$uwatch_path" "$uwatch_path_legacy"; do
-        [ -n "$legacy_path" ] || continue
-        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
-    done
 
     # uhmalert (optional component)
     step "uhmalert"
@@ -1488,9 +1544,8 @@ perform_remove() {
     # regardless -- defensive check in case it was manually uninstalled)
     step "uhmwatch"
     local uwatch_path="${core_dir}/uhmwatch.sh"
-    local uwatch_path_legacy="${tools_dir}/uhmwatch.sh"
-    if crontab -l 2>/dev/null | grep -qF -e "$uwatch_path" -e "$uwatch_path_legacy"; then
-        crontab -l 2>/dev/null | grep -vF -e "$uwatch_path" -e "$uwatch_path_legacy" | crontab - || true
+    if crontab -l 2>/dev/null | grep -qF "$uwatch_path"; then
+        crontab -l 2>/dev/null | grep -vF "$uwatch_path" | crontab - || true
         info "uhmwatch cron entry removed"
     else
         info "No uhmwatch cron entry found"

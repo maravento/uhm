@@ -113,10 +113,6 @@ done
 # ------------------------------------------------------------------------------
 
 target_path="/etc/uhm/core/uhmwatch.sh"
-# Pre-restructure location -- uhmwatch.sh lived under tools/ before it
-# became mandatory. install_module() migrates a crontab entry still
-# pointing there instead of leaving it stale (see below).
-legacy_target_path="/etc/uhm/tools/uhmwatch.sh"
 
 # validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
@@ -165,12 +161,6 @@ install_module() {
     cron_d_set "$target_path" "* * * * * root $target_path"
     echo "Cron entry registered: * * * * * root $target_path"
 
-    # legacy entries in root's crontab, from versions before /etc/cron.d
-    for legacy_path in "$target_path" "$legacy_target_path"; do
-        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
-    done
-    rm -f "$legacy_target_path"
-
     echo ""
     echo "Installed. First run happens on the next minute mark."
     echo "Check the log with: tail -f $log_file"
@@ -185,11 +175,6 @@ uninstall_module() {
     echo "Removing uhmwatch cron entry..."
     cron_d_set "$target_path" ""
     echo "Cron entry removed. The uhmwatch.sh script was not deleted."
-
-    # legacy entries in root's crontab, from versions before /etc/cron.d
-    for legacy_path in "$target_path" "$legacy_target_path"; do
-        crontab -l 2>/dev/null | { grep -vF "$legacy_path" || true; } | crontab - 2>/dev/null || true
-    done
 }
 
 # ------------------------------------------------------------------------------

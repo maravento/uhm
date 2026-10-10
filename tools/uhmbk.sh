@@ -105,17 +105,11 @@ register_cron() {
     cron_d_set "$installed_path" "@monthly root $installed_path"
     log "INFO: cron entry registered, runs @monthly"
     log "INFO: $installed_path"
-
-    # legacy entry in root's crontab, from versions before /etc/cron.d
-    crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab - 2>/dev/null || true
 }
 
 deregister_cron() {
     cron_d_set "$installed_path" ""
     log "INFO: cron entry removed, archives kept"
-
-    # legacy entry in root's crontab, from versions before /etc/cron.d
-    crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab - 2>/dev/null || true
 }
 
 case "${1:-}" in
