@@ -1205,7 +1205,11 @@ class "blockdhcp" {
     clean_acl
     log "INFO: stopping pydhcpd"
     trap 'rm -f "${temp_files[@]}" 2>/dev/null; systemctl reset-failed pydhcpd 2>/dev/null; systemctl is-active --quiet pydhcpd || systemctl start pydhcpd' EXIT
-    systemctl stop pydhcpd
+    systemctl stop pydhcpd || {
+        local stop_rc=$?
+        log "ERROR: pydhcpd stop failed, leases not rebuilt -- abort"
+        exit "$stop_rc"
+    }
     drain_lease_queue
     log "INFO: processing leases"
     read_leases
