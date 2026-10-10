@@ -40,11 +40,20 @@
 
 ### ⚠️ WARNING
 
-| Description | Descripción |
-|-------------|-------------|
-| Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions at your own risk. | Probado en Ubuntu 24.04/26.04 LTS. El uso en otras versiones o distribuciones queda bajo tu responsabilidad. |
-| Install UHM on a clean system. `uhmsetup.sh` installs `pydhcp` as the DHCP server and `apache2` for the web panel and WPAD (optional); it also configures the firewall. If the panel or WPAD is enabled, the installer modifies `/etc/apache2/ports.conf`, creates a VirtualHost under `sites-available/`, and adds a rule under `sudoers.d/`. | Se recomienda instalar UHM en un sistema limpio. `uhmsetup.sh` instala `pydhcp` como servidor DHCP y `apache2` para el panel web y WPAD (opcional); también configura el firewall. Al habilitar el panel o WPAD, el instalador modifica `/etc/apache2/ports.conf`, crea un VirtualHost en `sites-available/` y añade una regla en `sudoers.d/`. |
-| Before installing, the script checks for conflicting software. It stops if it finds another DHCP or web server (`isc-dhcp-server`, `kea-dhcp4-server`, `udhcpd`, `nginx`, `lighttpd`, or `caddy`), `firewalld`, or an active `ufw`. It only warns about `dnsmasq`. `apache2` and `squid` are not conflicts: UHM installs `apache2`, and the reference firewall rules expect `squid`. | Antes de instalar, el script busca programas que podrían entrar en conflicto. Si encuentra otro servidor DHCP o web (`isc-dhcp-server`, `kea-dhcp4-server`, `udhcpd`, `nginx`, `lighttpd` o `caddy`), `firewalld` o un `ufw` activo, detiene la instalación. Si encuentra `dnsmasq`, solo muestra una advertencia. `apache2` y `squid` no se consideran conflictos: UHM instala el primero y las reglas de firewall de referencia contemplan el segundo. |
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions at your own risk.</p>
+      <p>Install UHM on a clean system. <code>uhmsetup.sh</code> installs <code>pydhcp</code> as the DHCP server and <code>apache2</code> for the web panel and WPAD (optional); it also configures the firewall. If the panel or WPAD is enabled, the installer modifies <code>/etc/apache2/ports.conf</code>, creates a VirtualHost under <code>sites-available/</code>, and adds a rule under <code>sudoers.d/</code>.</p>
+      <p>Before installing, the script checks for conflicting software. It stops if it finds another DHCP or web server (<code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code>, <code>udhcpd</code>, <code>nginx</code>, <code>lighttpd</code>, or <code>caddy</code>), <code>firewalld</code>, or an active <code>ufw</code>. It only warns about <code>dnsmasq</code>. <code>apache2</code> and <code>squid</code> are not conflicts: UHM installs <code>apache2</code>, and the reference firewall rules expect <code>squid</code>.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Probado en Ubuntu 24.04/26.04 LTS. El uso en otras versiones o distribuciones queda bajo tu responsabilidad.</p>
+      <p>Se recomienda instalar UHM en un sistema limpio. <code>uhmsetup.sh</code> instala <code>pydhcp</code> como servidor DHCP y <code>apache2</code> para el panel web y WPAD (opcional); también configura el firewall. Al habilitar el panel o WPAD, el instalador modifica <code>/etc/apache2/ports.conf</code>, crea un VirtualHost en <code>sites-available/</code> y añade una regla en <code>sudoers.d/</code>.</p>
+      <p>Antes de instalar, el script busca programas que podrían entrar en conflicto. Si encuentra otro servidor DHCP o web (<code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code>, <code>udhcpd</code>, <code>nginx</code>, <code>lighttpd</code> o <code>caddy</code>), <code>firewalld</code> o un <code>ufw</code> activo, detiene la instalación. Si encuentra <code>dnsmasq</code>, solo muestra una advertencia. <code>apache2</code> y <code>squid</code> no se consideran conflictos: UHM instala el primero y las reglas de firewall de referencia contemplan el segundo.</p>
+    </td>
+  </tr>
+</table>
 
 ### Hardware
 
@@ -1688,7 +1697,7 @@ uhm/                      # as cloned -- see note above
       <code>2026-07-23 22:01:31 INFO: mac-*.txt changed, reloading now</code><br>
       <code>2026-07-23 22:01:31 INFO: invoking /etc/uhm/core/uhmreload.sh</code>
       <br><br>
-      La primera línea indica que el supervisor detectó el cambio. La segunda muestra que el paso de recarga lo procesó en el ciclo siguiente; después aparece la invocación de `uhmreload.sh`. Si no aparece ese segundo mensaje, puede haber un problema.
+      La primera línea indica que el supervisor detectó el cambio. La segunda muestra que el paso de recarga lo procesó en el ciclo siguiente; después aparece la invocación de <code>uhmreload.sh</code>. Si no aparece ese segundo mensaje, puede haber un problema.
       <br><br>
       <b>authorize_managed_macs</b> <br>
       <br>
@@ -2213,10 +2222,18 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 
 ##### ⚠️ WARNING
 
-|  |  |
-|---|---|
-| `uhmleases.sh` fully rebuilds `/etc/pydhcp/core/pydhcpd.conf` on every run from its ACL files and `uhm.env`. Any manual edits to `pydhcpd.conf` — including custom lease times, pools, or directives — will be lost. If you manage `pydhcpd.conf` manually, do not use `uhmleases.sh`. | `uhmleases.sh` reconstruye completamente `/etc/pydhcp/core/pydhcpd.conf` en cada ejecución a partir de sus archivos ACL y `uhm.env`. Cualquier edición manual a `pydhcpd.conf` — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona `pydhcpd.conf` manualmente, no utilice `uhmleases.sh`. |
-| **Deactivating a managed MAC**: commenting out a line in a `mac-*.txt` file (prefixing it with `#`) keeps it in place, IP included, but gives it the exact same treatment as a `blockdhcp.txt` entry — `uhmleases.sh` adds it to the `"blockdhcp"` DHCP class in `pydhcpd.conf`, so `pydhcpd` denies it a lease outright. It never physically enters `blockdhcp.txt`. | **Desactivar una MAC gestionada**: comentar una línea en un archivo `mac-*.txt` (agregando `#` al inicio) la deja en su lugar, con su IP incluida, pero recibe exactamente el mismo tratamiento que una entrada de `blockdhcp.txt` — `uhmleases.sh` la agrega a la clase DHCP `"blockdhcp"` en `pydhcpd.conf`, así que `pydhcpd` le niega la lease directamente. Nunca entra físicamente a `blockdhcp.txt`. |
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p><code>uhmleases.sh</code> fully rebuilds <code>/etc/pydhcp/core/pydhcpd.conf</code> on every run from its ACL files and <code>uhm.env</code>. Any manual edits to <code>pydhcpd.conf</code> — including custom lease times, pools, or directives — will be lost. If you manage <code>pydhcpd.conf</code> manually, do not use <code>uhmleases.sh</code>.</p>
+      <p><strong>Deactivating a managed MAC</strong>: commenting out a line in a <code>mac-*.txt</code> file (prefixing it with <code>#</code>) keeps it in place, IP included, but gives it the exact same treatment as a <code>blockdhcp.txt</code> entry — <code>uhmleases.sh</code> adds it to the <code>&quot;blockdhcp&quot;</code> DHCP class in <code>pydhcpd.conf</code>, so <code>pydhcpd</code> denies it a lease outright. It never physically enters <code>blockdhcp.txt</code>.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p><code>uhmleases.sh</code> reconstruye completamente <code>/etc/pydhcp/core/pydhcpd.conf</code> en cada ejecución a partir de sus archivos ACL y <code>uhm.env</code>. Cualquier edición manual a <code>pydhcpd.conf</code> — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona <code>pydhcpd.conf</code> manualmente, no utilice <code>uhmleases.sh</code>.</p>
+      <p><strong>Desactivar una MAC gestionada</strong>: comentar una línea en un archivo <code>mac-*.txt</code> (agregando <code>#</code> al inicio) la deja en su lugar, con su IP incluida, pero recibe exactamente el mismo tratamiento que una entrada de <code>blockdhcp.txt</code> — <code>uhmleases.sh</code> la agrega a la clase DHCP <code>&quot;blockdhcp&quot;</code> en <code>pydhcpd.conf</code>, así que <code>pydhcpd</code> le niega la lease directamente. Nunca entra físicamente a <code>blockdhcp.txt</code>.</p>
+    </td>
+  </tr>
+</table>
 
 ##### Duplicate guard (`check_duplicate`)
 
@@ -2400,9 +2417,16 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 sudo bash /etc/uhm/tools/uhmunifi.sh
 ```
 
-| Description | Descripción |
-|---|---|
-| Startup (login + fetch), then a short top-level menu: | Arranque (login + fetch), luego un menú principal corto: |
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Startup (login + fetch), then a short top-level menu:</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Arranque (login + fetch), luego un menú principal corto:</p>
+    </td>
+  </tr>
+</table>
 
 ```text
 2026-07-30 15:04:01 uhmunifi start...
@@ -2452,9 +2476,16 @@ ACTIONS
  Select option [b]:
 ```
 
-| Description | Descripción |
-|---|---|
-| None of the six actions above ever touch a `mac-*.txt` MAC -- only the VOUCHER/UNKNOWN categories from ToolView's Guest sessions report are ever eligible. | Ninguna de las seis acciones de arriba toca jamás una MAC de `mac-*.txt` -- solo las categorías VOUCHER/UNKNOWN del reporte Guest sessions de ToolView son elegibles. |
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p>None of the six actions above ever touch a <code>mac-*.txt</code> MAC -- only the VOUCHER/UNKNOWN categories from ToolView's Guest sessions report are ever eligible.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Ninguna de las seis acciones de arriba toca jamás una MAC de <code>mac-*.txt</code> -- solo las categorías VOUCHER/UNKNOWN del reporte Guest sessions de ToolView son elegibles.</p>
+    </td>
+  </tr>
+</table>
 
 ### uhmalert
 

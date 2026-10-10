@@ -407,7 +407,7 @@ acl_read() {
         return 0
     fi
 
-    line_count=$(grep -c '' "$acl_file" 2>/dev/null || echo 0)
+    line_count=$(grep -c '' "$acl_file" 2>/dev/null) || line_count=0
     jq -Rsc --arg name "$acl_name" --arg path "$acl_file" --argjson lines "$line_count" \
         '{name: $name, path: $path, lines: $lines, content: .}' < "$acl_file"
 }
@@ -472,7 +472,7 @@ acl_write() {
     chmod 600 "$acl_file"
     flock -u 201
 
-    line_number=$(grep -c '' "$acl_file" 2>/dev/null || echo 0)
+    line_number=$(grep -c '' "$acl_file" 2>/dev/null) || line_number=0
     jq -cn --arg name "$acl_name" --argjson lines "$line_number" \
         '{saved: true, name: $name, lines: $lines}'
 }
