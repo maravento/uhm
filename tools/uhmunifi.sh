@@ -148,34 +148,14 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_key="${env_key%%[[:space:]]*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: $env_key malformed in $(basename "$conf_file") -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_SITE|UNIFI_TYPE|UNIFI_CERT_PIN|UHM_ESSID|UHM_MACAUTH|ACL_MAC_PATH)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH ACL_MAC_PATH'
 
 # LOAD
 # pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
 # own keys win if a name ever collides.
-load_conf "$pydhcp_env" || true
-load_conf "$uhm_env" || true
+load_uhm_env "$pydhcp_env" "$env_keys" key || true
+load_uhm_env "$uhm_env" "$env_keys" key || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all

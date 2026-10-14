@@ -84,29 +84,8 @@ bare_mac_pattern="^${UH_MAC_RE}\$"
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { json_error "$(basename "$conf_file") not found"; exit 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_key="${env_key%%[[:space:]]*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            json_error "$env_key malformed in $(basename "$conf_file")"
-            exit 1
-        fi
-        case "$env_key" in
-            BLOCKDHCP_GRACE_SECONDS|UHM_MACAUTH|UHM_GRACE|UHM_QUEUE|UHM_ESSID|ACL_BLOCK_FILE|ACL_MAC_PATH|PYDHCPD_LEASES|\
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+env_keys='BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
 json_error() {
     jq -cn --arg message "$1" '{error: $message}'
@@ -157,8 +136,8 @@ load_env() {
     done
 
     # LOAD
-    load_conf "$pydhcp_env"
-    load_conf "$uhm_env"
+    load_uhm_env "$pydhcp_env" "$env_keys" json
+    load_uhm_env "$uhm_env" "$env_keys" json
 
     # KEY CHECK
     # Collect every failure first, then decide -- a single error reports them all

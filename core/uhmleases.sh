@@ -590,42 +590,15 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # them, so a tampered or maliciously replaced env file cannot execute code.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|UHM_PATH|\
-            ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|UHM_MACAUTH|ACL_BLOCK_FILE|\
-            UHM_GRACE|BLOCKDHCP_GRACE_SECONDS|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
-            PING_TIMEOUT_SECONDS|UHM_INI_RANGE|UHM_END_RANGE|PYDHCPD_LEASES|\
-            UHM_QUEUE|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH UHM_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_MACAUTH ACL_BLOCK_FILE UHM_GRACE BLOCKDHCP_GRACE_SECONDS CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS UHM_INI_RANGE UHM_END_RANGE PYDHCPD_LEASES UHM_QUEUE DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
 # single source of truth for them. uhm.env is read after, so the uhm keys
 # win if a name ever collides.
 
 # LOAD
-load_conf "$pydhcp_env" || true
-load_conf "$uhm_env" || true
+load_uhm_env "$pydhcp_env" "$env_keys" line || true
+load_uhm_env "$uhm_env" "$env_keys" line || true
 
 # KEY CHECK
 

@@ -11,11 +11,12 @@
 # Requires root.
 #
 # USAGE:
-# sudo bash uhmsetup.sh            Install (default; aborts if already
-#                                  installed -- use --update or --remove)
-# sudo bash uhmsetup.sh --update   Update scripts only (preserves config/ACLs)
-# sudo bash uhmsetup.sh --remove   Uninstall
-# sudo bash uhmsetup.sh --help     Usage
+# sudo bash uhmsetup.sh --install     Install (aborts if already installed)
+# sudo bash uhmsetup.sh --update      Update scripts only (preserves config/ACLs)
+# sudo bash uhmsetup.sh --uninstall   Uninstall
+# sudo bash uhmsetup.sh --status      Report services, port, config and log
+# sudo bash uhmsetup.sh               Interactive menu
+# sudo bash uhmsetup.sh --help        Usage
 #
 # LOG: uhmsetup.log, in the directory this script is run from
 #
@@ -34,13 +35,14 @@ usage() {
 Usage: sudo bash $(basename "$0") [OPTION]
 
 Modes:
-  (none)       Install uhm (default). Aborts if already installed --
-               use --update or --remove instead. Also aborts if the
-               detected UniFi Network version (package "unifi", classic
-               or embedded in unifi-os) is below the minimum tested
-               (>= 10.4.57).
+  --install    Install uhm. Aborts if already installed -- use --update
+               or --uninstall instead. Also aborts if the detected UniFi
+               Network version (package "unifi", classic or embedded in
+               unifi-os) is below the minimum tested (>= 10.4.57).
   --update     Update scripts only (preserves config, ACLs, firewall).
-  --remove     Uninstall uhm (interactive, with confirmations).
+  --uninstall  Uninstall uhm (interactive, with confirmations).
+  --status     Report services, panel port, config and log.
+  (none)       Open the interactive menu.
   --help, -h   Show this help.
 
 Run from inside the cloned uhm repository. See the README for details.
@@ -187,6 +189,7 @@ check_repo_files() {
     [[ -r "${repo_core}/uhmleases.sh" ]] || { err "missing core/uhmleases.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "missing core/uhmwatch.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_tools" ]] || { err "missing tools/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
+    [[ -r "${repo_tools}/uhmenv.sh" ]] || { err "missing tools/uhmenv.sh"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_acl" ]] || { err "missing acl/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_web" ]] || { err "missing web/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
     [[ -d "$repo_config" ]] || { err "missing config/ directory"; abort "run uhmsetup.sh from inside the cloned repo -- abort"; }
@@ -266,29 +269,8 @@ detect_dhcp_backend() {
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_MASK|SERV_SUBNET|SERV_BROADCAST|SERV_DNS|\
-            SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|\
-            WPAD_ENABLED|WPAD_PORT)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$repo_tools/uhmenv.sh"
+env_keys='SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK WPAD_ENABLED WPAD_PORT'
 
 # Reads pydhcp's own network values (server IP, mask, subnet, broadcast, DNS,
 # blockdhcp pool range) from pydhcp_env instead of asking for them again --
@@ -317,7 +299,7 @@ load_pydhcp_conf() {
 
     # Load only these known keys instead of sourcing the whole file, so a
     # tampered pydhcp.env cannot execute code.
-    load_conf "$pydhcp_env"
+    load_uhm_env "$pydhcp_env" "$env_keys" line
 
     local check_var
     for check_var in SERVER_IP SERV_SUBNET SERV_BROADCAST \
@@ -807,22 +789,30 @@ deploy_acl_files() {
 }
 
 deploy_scripts() {
+    install -m 644 -o root -g root "${repo_tools}/uhmenv.sh" "${tools_dir}/uhmenv.sh"
+    info "updated tools/uhmenv.sh"
     install -m 755 -o root -g root "$repo_uhmd" "${core_dir}/uhmd.sh"
+    info "updated core/uhmd.sh"
     install -m 755 -o root -g root "${repo_core}/uhmreload.sh" "${core_dir}/uhmreload.sh"
+    info "updated core/uhmreload.sh"
     install -m 755 -o root -g root "${repo_core}/uhmleases.sh" "${core_dir}/uhmleases.sh"
+    info "updated core/uhmleases.sh"
     # uhmwatch.sh lives under core/ (not tools/) because it is mandatory,
     # not an optional utility -- deployed explicitly here for that reason,
     # same as the other three core scripts above.
     install -m 755 -o root -g root "${repo_core}/uhmwatch.sh" "${core_dir}/uhmwatch.sh"
+    info "updated core/uhmwatch.sh"
     local repo_file
     for repo_file in "${repo_tools}/"*.sh; do
         # uhmiptables.sh is the administrator's own file once customized, so it
         # is deployed by deploy_uhmiptables() below (only when absent) instead
         # of being overwritten here on every run.
-        [[ "$(basename "$repo_file")" == "uhmiptables.sh" ]] && continue
+        case "$(basename "$repo_file")" in
+            uhmiptables.sh|uhmenv.sh) continue ;;
+        esac
         install -m 755 -o root -g root "$repo_file" "${tools_dir}/"
+        info "updated tools/$(basename "$repo_file")"
     done
-    info "Scripts deployed to ${hotspot_dir}"
 }
 
 deploy_uhmiptables() {
@@ -983,9 +973,9 @@ EOF
 
 remove_wpad() {
     local wpad_port
-    # do_remove never loads pydhcp.env, so the port has to be read here or
+    # do_uninstall never loads pydhcp.env, so the port has to be read here or
     # the Listen line below would be deleted by its default value alone.
-    load_conf "$pydhcp_env" || true
+    load_uhm_env "$pydhcp_env" "$env_keys" line || true
     wpad_port="${WPAD_PORT:-18100}"
     a2dissite wpad &>/dev/null || true
     rm -f "$wpad_vhost_dest"
@@ -1159,6 +1149,7 @@ install_apache2() {
 # ------------------------------------------------------------------------------
 
 do_install() {
+    check_apt_deps
     echo ""
     echo "------------------------------------------------------"
     echo "uhm -- installer"
@@ -1320,6 +1311,8 @@ EOF
 # ------------------------------------------------------------------------------
 
 do_update() {
+    check_apt_deps
+    detect_dhcp_backend
     echo ""
     echo "------------------------------------------------------"
     echo "uhm -- update"
@@ -1329,12 +1322,16 @@ do_update() {
     check_repo_files
 
     if [[ ! -d "$hotspot_dir" ]] || [[ ! -f "${core_dir}/uhmd.sh" ]]; then
-        { err "uhm not installed"; abort "run without --update first -- abort"; }
+        { err "uhm not installed"; abort "use --install to install first -- abort"; }
     fi
 
     step "Backup"
     if [[ -x "$uhmbk_script" ]]; then
-        "$uhmbk_script" || warn "backup failed, continuing -- alert"
+        if "$uhmbk_script"; then
+            info "backup taken with uhmbk.sh"
+        else
+            warn "backup failed, continuing -- alert"
+        fi
     else
         warn "$uhmbk_script not found, no backup taken -- alert"
     fi
@@ -1351,10 +1348,13 @@ do_update() {
     if [[ -f /etc/systemd/system/uhmalert.service ]]; then
         systemctl is-active --quiet uhmalert 2>/dev/null && ualert_was_active=1
     fi
-    if grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null; then
+    if awk -v p="$uwatch_path" \
+        'index($0,p)>0 && $0 !~ /^[[:space:]]*#/ {found_entry=1}
+         END {exit !found_entry}' /etc/cron.d/uhm 2>/dev/null; then
         uwatch_was_active=1
     elif crontab -l 2>/dev/null | awk -v p="$uwatch_path" \
-        '(index($0,p)>0 && substr($0,1,1)!="#"){found_entry=1} END{exit !found_entry}'; then
+        'index($0,p)>0 && $0 !~ /^[[:space:]]*#/ {found_entry=1}
+         END {exit !found_entry}'; then
         uwatch_was_active=1
     fi
 
@@ -1369,8 +1369,7 @@ do_update() {
         # out -- Resume below re-registers a clean entry via
         # `uhmwatch.sh install`.
         bash "${core_dir}/uhmwatch.sh" uninstall >/dev/null 2>&1 || true
-        info "uhmwatch cron entry removed for update"
-        info "  (re-registered on resume)"
+        info "uhmwatch cron entry removed, restored on resume"
     fi
 
     step "Deploy updated scripts"
@@ -1384,9 +1383,9 @@ do_update() {
         chown -R root:root "$web_root"
         find "$web_root" -type d -exec chmod 755 {} +
         find "$web_root" -type f -exec chmod 644 {} +
-        info "Web interface updated in $web_root"
+        info "updated web code in $web_root"
     else
-        info "Web interface not installed -- skip"
+        info "web interface not installed -- skip"
     fi
 
     step "ACL data files"
@@ -1466,7 +1465,7 @@ do_update() {
 # REMOVE
 # ------------------------------------------------------------------------------
 
-do_remove() {
+do_uninstall() {
     echo ""
     echo "------------------------------------------------------"
     echo "uhm -- uninstaller"
@@ -1613,36 +1612,98 @@ perform_remove() {
 }
 
 # ------------------------------------------------------------------------------
-# MAIN
+# STATUS
 # ------------------------------------------------------------------------------
 
-main() {
-    log "uhmsetup start..."
-    case "${1:-}" in
-        ""|install)
-            check_apt_deps
-            do_install
-            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
-            exit 0
-            ;;
-        --update|update)
-            check_apt_deps
-            detect_dhcp_backend
-            do_update
-            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
-            exit 0
-            ;;
-        --remove|remove|--uninstall|uninstall)
-            do_remove
-            log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
-            exit 0
-            ;;
-        *)
-            err "Unknown option: $1 -- abort"
-            usage
-            exit 1
-            ;;
-    esac
+do_status() {
+    echo ""
+    echo "=== uhm Services ==="
+    local unit
+    for unit in uhmd uhmalert; do
+        if [[ ! -f "/etc/systemd/system/${unit}.service" ]]; then
+            echo "$unit: NOT INSTALLED"
+        elif systemctl is-active --quiet "$unit"; then
+            echo "$unit: RUNNING"
+        else
+            echo "$unit: STOPPED"
+        fi
+    done
+
+    echo ""
+    echo "=== Panel Port ==="
+    if ss -tln 2>/dev/null | grep -qE ":${web_port}[[:space:]]"; then
+        echo ":$web_port OPEN"
+    else
+        echo ":$web_port CLOSED"
+    fi
+
+    echo ""
+    echo "=== Config ==="
+    if [[ -f "$config_file" ]]; then
+        echo "$config_file present"
+    else
+        echo "$config_file not found"
+    fi
+
+    echo ""
+    echo "=== Log ==="
+    if [[ -f "$uhm_log_file" ]]; then
+        echo "$uhm_log_file (last 10):"
+        tail -10 "$uhm_log_file" | sed 's/^/ /'
+    else
+        echo "$uhm_log_file not found"
+    fi
+    echo ""
 }
 
-main "$@"
+# ------------------------------------------------------------------------------
+# MENU
+# ------------------------------------------------------------------------------
+
+# Interactive menu shown when the script runs without arguments
+show_menu() {
+    local menu_option
+    while true; do
+        echo ""
+        echo "uhm installer"
+        echo "-------------"
+        echo "1) Install"
+        echo "2) Update"
+        echo "3) Uninstall"
+        echo "4) Status"
+        echo "5) Exit"
+        echo ""
+        read -p "Select option [5]: " menu_option
+        menu_option="${menu_option:-5}"
+        case "$menu_option" in
+            1) do_install; break ;;
+            2) do_update; break ;;
+            3) do_uninstall; break ;;
+            4) do_status; break ;;
+            5) exit 0 ;;
+            *) info "invalid option -- retry" ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# ACTIONS
+# ------------------------------------------------------------------------------
+
+# Run the action given on the command line, or fall back to the menu
+log "uhmsetup start..."
+
+case "${1:-}" in
+    --install) do_install ;;
+    --update) do_update ;;
+    --uninstall) do_uninstall ;;
+    --status) do_status ;;
+    "") show_menu ;;
+    *)
+        err "unknown option $1 -- abort"
+        usage
+        exit 1
+        ;;
+esac
+
+log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"

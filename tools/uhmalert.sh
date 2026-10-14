@@ -157,6 +157,7 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
     if [[ "$self_path" != "$target_path" ]]; then
         echo "Deploying script to $target_path..."
         mkdir -p "$(dirname "$target_path")"
+        install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh"
         install -m 755 -o root -g root "$self_path" "$target_path"
     fi
 
@@ -267,30 +268,11 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UHM_NTFY_TOPIC|UHM_API_FAIL_THRESHOLD|UHM_ALERT_QUIET_PERIOD_SECONDS|POLL_INTERVAL)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+env_keys='UHM_NTFY_TOPIC UHM_API_FAIL_THRESHOLD UHM_ALERT_QUIET_PERIOD_SECONDS POLL_INTERVAL'
 
 # LOAD
-load_conf "$config_file" || true
+load_uhm_env "$config_file" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all

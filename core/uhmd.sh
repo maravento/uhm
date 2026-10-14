@@ -268,43 +268,15 @@ unset env_owner env_perms
 # so a tampered or maliciously replaced config file cannot execute code.
 # Canonical parser, identical in every script of the project: a malformed
 # line aborts.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_key="${env_key%%[[:space:]]*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: $env_key malformed in $(basename "$conf_file") -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            UNIFI_CONTROLLER_URL|UNIFI_USERNAME|UNIFI_PASSWORD|UNIFI_TYPE|UNIFI_SITE|UNIFI_CERT_PIN|\
-            SERVER_IP|SERV_SUBNET|SERV_MASK|UHM_PATH|\
-            UHM_INI_RANGE|UHM_END_RANGE|\
-            UHM_RELOAD|UHM_GRACE|UHM_MACAUTH|ACL_BLOCK_FILE|ACL_MAC_PATH|ACL_PATH|\
-            UHM_QUEUE|PYDHCPD_LEASES|POLL_INTERVAL|STARTUP_GRACE_SECONDS|\
-            RELOAD_SAFETY_INTERVAL_SECONDS|AUTHORIZED_LEASE_TIME|\
-            UHM_LEASES_TIMEOUT_SECONDS|UHM_IPTABLES_TIMEOUT_SECONDS)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_MAC_PATH ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS'
 
 # LOAD
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
 # single source of truth for them. uhm.env is read after, so uhm's own keys
 # win if a name ever collides.
-load_conf "$pydhcp_env" || true
-load_conf "$config_file" || true
+load_uhm_env "$pydhcp_env" "$env_keys" key || true
+load_uhm_env "$config_file" "$env_keys" key || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all

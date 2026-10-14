@@ -5,8 +5,6 @@
 [![Stargazers](https://img.shields.io/github/stars/maravento/uhm?label=Stargazers)](https://github.com/maravento/uhm/stargazers)
 [![Twitter Follow](https://img.shields.io/twitter/follow/maraventostudio.svg)](https://twitter.com/maraventostudio)
 
-<!-- markdownlint-disable MD033 -->
-
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -33,6 +31,8 @@
     </td>
   </tr>
 </table>
+
+<!-- markdownlint-disable MD033 -->
 
 ## REQUIREMENTS
 
@@ -194,7 +194,245 @@ sudo apt install -y bash curl jq iptables ipset cron python3 openssl coreutils u
 >
 > Para iniciar, UHM necesita que el controlador UniFi permita iniciar sesión y que `pydhcpd` esté activo. Si alguno sigue sin estar disponible al terminar el período de gracia, `uhmd` termina. También necesita encontrar `uhmreload.sh` para arrancar. Si falta `uhmiptables.sh`, la recarga registra una advertencia y continúa sin aplicar las reglas del firewall. Si el script existe pero falla al ejecutarse, la recarga se interrumpe y el firewall puede quedar incompleto; aun así, el daemon puede seguir funcionando y clasificando clientes.
 
+## REPOSITORY STRUCTURE
+
+---
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      This is the structure of the repository after cloning it with <code>git clone ... && cd uhm</code>. <b>It does not correspond to the structure of the installation.</b> <br>
+      <br>
+      <code>uhmsetup.sh</code> is used only from the clone and <b>is never deployed to the installed system</b>. <br>
+      <br>
+      The files under <code>core/</code> and <code>tools/</code> are deployed by <code>uhmsetup.sh</code> into their respective subdirectories inside <code>/etc/uhm/</code>. That includes <code>tools/uhmiptables_example.txt</code>, deployed read-only and never executed, so the administrator can copy it over the placeholder without the clone. <br>
+      <br>
+      The files under <code>config/</code> go to their system locations instead, not to <code>/etc/uhm/</code>: the unit to <code>/etc/systemd/system/</code>, the two vhosts to <code>/etc/apache2/sites-available/</code> and the sudo rule to <code>/etc/sudoers.d/</code>. And <code>web/</code> goes to <code>/var/www/uhm</code>, only if the panel is accepted. <br>
+      <br>
+      In other words, the clone holds the files needed to perform the installation, while <code>/etc/uhm/</code> holds the files used by the running installation.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Esta es la estructura del repositorio después de clonarlo con <code>git clone ... && cd uhm</code>. <b>No es la estructura del sistema instalado.</b> <br>
+      <br>
+      <code>uhmsetup.sh</code> se utiliza únicamente desde el clon y <b>nunca se despliega en el sistema instalado</b>. <br>
+      <br>
+      El instalador copia los archivos de <code>core/</code> y <code>tools/</code> en sus respectivos subdirectorios de <code>/etc/uhm/</code>. También copia <code>tools/uhmiptables_example.txt</code> como archivo de solo lectura; no lo ejecuta. Así, puedes copiarlo sobre la configuración inicial del firewall sin conservar el clon. <br>
+      <br>
+      Los archivos de <code>config/</code> se instalan en sus rutas del sistema, no en <code>/etc/uhm/</code>: la unidad de servicio en <code>/etc/systemd/system/</code>, los VirtualHost en <code>/etc/apache2/sites-available/</code> y la regla de <code>sudo</code> en <code>/etc/sudoers.d/</code>. Los archivos de <code>web/</code> se copian a <code>/var/www/uhm</code> solo si aceptas instalar el panel. <br>
+      <br>
+      En resumen, el clon contiene los archivos del instalador; <code>/etc/uhm/</code> contiene los archivos que usa UHM una vez instalado.
+    </td>
+  </tr>
+</table>
+
+```
+uhm/                      # as cloned -- see note above
+├── acl/                     # UHM's own data files -- empty templates in the repo,
+│                            # deployed once by uhmsetup.sh and never overwritten again
+│   ├── uhm-auth.txt              # authenticated clients, each with a voucher (fixed hotspot IP)
+│   ├── uhm-grace.txt             # clients still in the grace period, no voucher yet
+│   └── uhm-queue.txt             # MACs queued for lease removal, drained on the next run
+│
+├── config/                  # server configuration, one directory per component --
+│                            # none of it is ever published under a web root
+│   ├── service/
+│   │   └── uhmd.service          # systemd unit for uhmd
+│   ├── uhmweb/
+│   │   ├── uhmweb.conf           # Apache vhost on port 4048
+│   │   └── uhmweb.sudoers        # sudo rule that lets www-data reach uhmtool.sh
+│   └── wpad/
+│       └── wpad.conf             # Apache vhost on WPAD_PORT (default 18100)
+│
+├── core/                    # the reload mechanism, plus uhmwatch -- UHM cannot
+│                            # function correctly without any of these four
+│   ├── uhmd.sh                   # main daemon: polls the UniFi API and manages ACLs (systemd)
+│   ├── uhmleases.sh              # rebuilds pydhcpd.conf and manages DHCP leases/ACLs,
+│   │                             # with UniFi Hotspot support built in
+│   ├── uhmreload.sh              # helper called by uhmd after an ACL change -- runs
+│   │                             # uhmleases.sh, then reloads the affected services
+│   └── uhmwatch.sh               # mandatory service supervisor for uhmd, pydhcpd and the UniFi
+│                                 # backend -- installed automatically by uhmsetup.sh
+│                                 # with its own cron entry; lives here, not in tools/,
+│                                 # because it's mandatory
+│
+├── tools/                   # shared configuration reader and utilities
+│   ├── uhmenv.sh                 # required shared Bash reader (sourced, not executed)
+│   ├── uhmalert.sh               # optional tool that monitors the log and sends
+│   │                             # notifications via ntfy.sh
+│   ├── uhmbk.sh                  # backs up uhm's own files into /etc/bak/uhm,
+│   │                             # run monthly through cron
+│   ├── uhmiptables.sh            # firewall placeholder (IPv4 forwarding + NAT only)
+│   │                             # -- deployed only if missing, never overwritten
+│   ├── uhmiptables_example.txt   # full reference ruleset (ipsets, iptables, redirects)
+│   │                             # -- deployed read-only next to the placeholder;
+│   │                             # copy it over uhmiptables.sh and adapt it
+│   ├── uhmtool.sh                # JSON backend for the web interface -- reads the log,
+│   │                             # the ACL files and the UniFi API, and writes back an
+│   │                             # ACL file after validating it
+│   └── uhmunifi.sh               # audits UniFi clients and vouchers, and checks one
+│                                 # MAC's live UniFi state
+│
+├── web/                     # web interface -- deployed to /var/www/uhm only when
+│                            # the panel is accepted during install
+│   ├── aclview/index.php         # ACL tab: editor for the ACL lists
+│   ├── logview/index.php         # LogView tab: real-time viewer for uhmd
+│   ├── toolview/index.php        # Tool tab: local ACL and UniFi reports
+│   ├── api.php                   # single endpoint, calls uhmtool.sh through sudo
+│   └── index.html                # panel shell: three tabs, light and dark theme
+│
+└── uhmsetup.sh              # installer / updater / uninstaller (interactive);
+                             # run from here, never deployed to /etc/uhm/
+```
+
+### ACL / data files — path ownership
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <code>UHM</code> integrates three independent components: <b>UniFi</b>, <code>pydhcp</code> and the <code>iptables</code>/<code>ipset</code> configuration defined by the administrator. Each one keeps its own ACLs and its own location. <br>
+      <br>
+      <code>UHM</code> reads and writes the ACLs in their respective locations and never moves, renames or relocates files belonging to another component.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <code>UHM</code> integra tres componentes independientes: <b>UniFi</b>, <code>pydhcp</code> y la configuración de <code>iptables</code>/<code>ipset</code> definida por el administrador. Cada uno mantiene sus propias ACL y su propia ubicación. <br>
+      <br>
+      <code>UHM</code> lee y escribe las ACL en sus respectivas ubicaciones y nunca mueve, renombra ni reubica archivos que pertenecen a otro componente.
+    </td>
+  </tr>
+</table>
+
+```
+/etc/uhm/acl/                # UHM's OWN data files (generated by this project;
+                             # shipped as empty templates in the repo's acl/ folder,
+                             # deployed once by uhmsetup.sh, never overwritten again)
+├── uhm-auth.txt                  # voucher-authorized clients (fixed hotspot IP)
+├── uhm-queue.txt                 # internal working file (uhmd.sh / uhmleases.sh only)
+└── uhm-grace.txt                 # grace-period clients (no voucher yet)
+
+/etc/acl/mac/                # pydhcp's namespace -- NOT generated by UHM
+├── mac-limited.txt               # user-maintained; UHM only reads it
+└── mac-unlimited.txt             # user-maintained; UHM only reads it
+
+/etc/pydhcp/acl/             # pydhcp's own namespace -- NOT generated by UHM
+└── blockdhcp.txt                 # permanently blocked MACs; pydhcp/pyleases.sh concept,
+                                  # reused (not owned) by uhmleases.sh
+```
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <code>UHM</code> works with ACLs belonging to three independent components: UHM, <code>pydhcp</code> and the administrator's <code>iptables</code>/<code>ipset</code> configuration. <br>
+      <br>
+      The paths <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>) and <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>), as well as the variables naming the files they contain, are configurable in <code>uhm.env</code>. This lets <code>UHM</code> respect the paths the administrator already uses for <code>pydhcp</code> and <code>iptables</code>, without imposing its own. <br>
+      <br>
+      <code>uhm.env</code> is located directly in <code>/etc/uhm/</code>. It is not inside <code>/etc/uhm/acl/</code> because it is a configuration file, not a data list. <br>
+      <br>
+      The only ACL path that belongs to UHM is: <br>
+      <code>/etc/uhm/acl/</code> <br>
+      <br>
+      That path is part of the installation and is kept or removed along with UHM, as applies during an update or an uninstall. <br>
+      <br>
+      <b>Variable names</b> <br>
+      <br>
+      The variables pointing at UHM's own three lists are named after the file they refer to and use the <code>UHM_</code> prefix:
+      <ul>
+        <li><code>UHM_MACAUTH</code></li>
+        <li><code>UHM_GRACE</code></li>
+        <li><code>UHM_QUEUE</code></li>
+      </ul>
+      The variables pointing at files belonging to other projects keep the <code>ACL_</code> prefix:
+      <ul>
+        <li><code>ACL_MAC_LIMITED</code></li>
+        <li><code>ACL_MAC_UNLIMITED</code></li>
+        <li><code>ACL_BLOCK_FILE</code></li>
+        <li><code>ACL_MAC_PATH</code></li>
+        <li><code>ACL_DHCP_PATH</code></li>
+        <li><code>ACL_PATH</code></li>
+      </ul>
+      The prefix identifies who owns the file and therefore determines whether UHM may create it. <br>
+      <br>
+      <code>uhmd.sh</code> and <code>uhmleases.sh</code> can create UHM's own three lists empty when they do not exist. UHM never creates <code>blockdhcp.txt</code> nor any <code>mac-*.txt</code> file, because those files belong to other components. <br>
+      <br>
+      If <code>blockdhcp.txt</code> does not exist, <code>uhmd.sh</code> aborts and states that it must be created through <code>pysetup.sh</code>, the installer of <code>pydhcp</code>.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <code>UHM</code> trabaja con ACL pertenecientes a tres componentes independientes: UHM, <code>pydhcp</code> y la configuración de <code>iptables</code>/<code>ipset</code> del administrador. <br>
+      <br>
+      Las rutas <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>) y <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>), así como las variables que indican los archivos que contienen, son configurables en <code>uhm.env</code>. Esto permite que <code>UHM</code> respete las rutas que el administrador ya utiliza para <code>pydhcp</code> e <code>iptables</code>, sin imponer rutas propias. <br>
+      <br>
+      <code>uhm.env</code> se encuentra directamente en <code>/etc/uhm/</code>. No está dentro de <code>/etc/uhm/acl/</code> porque es un archivo de configuración, no una lista de datos. <br>
+      <br>
+      La única ruta de ACL que pertenece a UHM es: <br>
+      <code>/etc/uhm/acl/</code> <br>
+      <br>
+      Esta ruta forma parte de la instalación y se conserva o elimina junto con UHM, según corresponda durante una actualización o desinstalación. <br>
+      <br>
+      <b>Nombres de las variables</b> <br>
+      <br>
+      Las variables que apuntan a las tres listas propias de UHM se nombran según el archivo al que hacen referencia y utilizan el prefijo <code>UHM_</code>:
+      <ul>
+        <li><code>UHM_MACAUTH</code></li>
+        <li><code>UHM_GRACE</code></li>
+        <li><code>UHM_QUEUE</code></li>
+      </ul>
+      Las variables que apuntan a archivos pertenecientes a otros proyectos conservan el prefijo <code>ACL_</code>:
+      <ul>
+        <li><code>ACL_MAC_LIMITED</code></li>
+        <li><code>ACL_MAC_UNLIMITED</code></li>
+        <li><code>ACL_BLOCK_FILE</code></li>
+        <li><code>ACL_MAC_PATH</code></li>
+        <li><code>ACL_DHCP_PATH</code></li>
+        <li><code>ACL_PATH</code></li>
+      </ul>
+      El prefijo identifica la propiedad del archivo y, por tanto, determina si UHM puede crearlo. <br>
+      <br>
+      <code>uhmd.sh</code> y <code>uhmleases.sh</code> pueden crear vacías las tres listas propias de UHM cuando no existen. En cambio, UHM nunca crea <code>blockdhcp.txt</code> ni ningún archivo <code>mac-*.txt</code>, porque esos archivos pertenecen a otros componentes. <br>
+      <br>
+      Si <code>blockdhcp.txt</code> no existe, <code>uhmd.sh</code> aborta e indica que debe ser creado mediante <code>pysetup.sh</code>, el instalador de <code>pydhcp</code>.
+    </td>
+  </tr>
+</table>
+
+### ACL priority order
+
+| ACL | Priority Level | Description | Descripción |
+|---|---|---|---|
+| `mac-unlimited.txt` | 1 | List maintained by hand by the administrator. Designed for communications hardware, servers and other essential equipment, not subject to firewall restrictions. A malformed line aborts with `ERROR`. | Lista mantenida manualmente por el administrador. Está diseñada para hardware de comunicaciones, servidores y otros equipos esenciales, no sujetos a restricciones del firewall. Una línea malformada aborta con `ERROR`. |
+| `mac-limited.txt` | 2 | List maintained by hand by the administrator. Designed for equipment joining the local network. May be subject to firewall, proxy and other restrictions. A malformed line aborts with `ERROR`. | Lista mantenida manualmente por el administrador. Está diseñada para los equipos que se integran a una red local. Puede estar sujeta a restricciones de firewall, proxy, etc. Una línea malformada aborta con `ERROR`. |
+| `uhm-auth.txt` | 3 | List operated by the `UHM` daemon. Designed for clients that entered with a valid UniFi voucher. May be subject to firewall, proxy and other restrictions. A malformed line aborts with `ERROR`. | Lista operada por el demonio `UHM`. Está diseñada para los clientes que ingresan con voucher válido de UniFi. Puede estar sujeta a restricciones de firewall, proxy, etc. Una línea malformada aborta con `ERROR`. |
+| `uhm-grace.txt` | 0 | List operated by the `UHM` daemon. Designed for clients seen on the network that have not entered a voucher yet, during their grace period. Authorizes nothing on its own. A malformed line is dropped with `INFO` and the reload continues. | Lista operada por el demonio `UHM`. Está diseñada para los clientes vistos en la red que aún no ingresan un voucher, durante su período de gracia. No autoriza nada por sí sola. Una línea malformada se elimina con `INFO` y el reload continúa. |
+| `blockdhcp.txt` | 0 | List managed by the `pydhcp` daemon and written by `uhmleases.sh`. It identifies clients that must not receive a DHCP lease. It grants no access by itself. A malformed line is logged and removed; the reload continues. | Lista gestionada por el demonio `pydhcp` y escrita por `uhmleases.sh`. Identifica a los clientes que no deben recibir una concesión DHCP. No concede acceso por sí sola. Si una línea no tiene el formato esperado, se registra y elimina; la recarga continúa. |
+| `uhm-queue.txt` | 0 | Internal list used by the `UHM` daemon to hold MAC addresses whose DHCP leases must be removed during the next reload. The list is cleared after processing. It grants no access. A malformed line is logged and removed; the reload continues. | Lista interna que usa el daemon de `UHM` para guardar las direcciones MAC cuyas concesiones DHCP deben retirarse en la próxima recarga. Se vacía después de procesarlas. No concede acceso. Si una línea no tiene el formato esperado, se registra y elimina; la recarga continúa. |
+
+> Lines starting with `#` are treated as deactivated and get blocked. Only applies to the ACLs with Priority Level 1, 2 and 3.
+>
+> Las líneas que comienzan con `#` se consideran desactivadas y serán bloqueadas. Solo aplica a las ACL con Priority Level 1, 2 y 3.
+
 ## HOW TO USE
+
+---
+
+### Actions
+
+<table>
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <code>uhmsetup.sh</code> takes one action per run. Without arguments it opens the interactive menu, with the same four actions and an exit option.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <code>uhmsetup.sh</code> ejecuta una acción por vez. Sin argumentos abre el menú interactivo, con las mismas cuatro acciones y una opción de salida.
+    </td>
+  </tr>
+</table>
+
+| Action | Description | Descripción |
+|---|---|---|
+| `sudo bash uhmsetup.sh` | Opens the interactive menu | Abre el menú interactivo |
+| `sudo bash uhmsetup.sh --install` | Installs uhm. Aborts if already installed | Instala uhm. Aborta si ya está instalado |
+| `sudo bash uhmsetup.sh --update` | Updates the scripts and preserves the configuration, the ACL lists and the firewall | Actualiza los scripts y conserva la configuración, las listas ACL y el firewall |
+| `sudo bash uhmsetup.sh --uninstall` | Uninstalls uhm, with two confirmations up front | Desinstala uhm, con dos confirmaciones al inicio |
+| `sudo bash uhmsetup.sh --status` | Reports the services, the panel port, the configuration file and the last log lines. Modifies nothing | Informa los servicios, el puerto del panel, el archivo de configuración y las últimas líneas del log. No modifica nada |
+| `sudo bash uhmsetup.sh --help` | Shows the usage. Works without root | Muestra el uso. Funciona sin root |
 
 ---
 
@@ -282,7 +520,7 @@ sudo apt install -y bash curl jq iptables ipset cron python3 openssl coreutils u
 ```bash
 git clone --depth=1 https://github.com/maravento/uhm.git
 cd uhm
-sudo bash uhmsetup.sh
+sudo bash uhmsetup.sh --install
 ```
 
 <table>
@@ -605,7 +843,7 @@ sudo bash uhmsetup.sh --update
 
 ```bash
 cd uhm
-sudo bash uhmsetup.sh --remove
+sudo bash uhmsetup.sh --uninstall
 ```
 
 ##### Uninstaller actions
@@ -642,10 +880,10 @@ sudo bash uhmsetup.sh --remove
 | `/var/www/uhm/` | Web interface (optional) | Interfaz web (opcional) |
 | `/etc/apache2/sites-available/uhmweb.conf` | Apache VirtualHost on port 4048 (optional) | VirtualHost de Apache en el puerto 4048 (opcional) |
 | `/etc/sudoers.d/uhmweb` | Sudo rule for `www-data` (optional) | Regla de sudo para `www-data` (opcional) |
-| `/etc/cron.d/uhm` | Every cron entry of the project, one file. Created by `uhmwatch.sh` when it registers its own per-minute entry; removed by `uhmsetup.sh --remove` | Todas las entradas de cron del proyecto, en un solo archivo. Lo crea `uhmwatch.sh` al registrar su entrada de cada minuto; lo elimina `uhmsetup.sh --remove` |
+| `/etc/cron.d/uhm` | Every cron entry of the project, one file. Created by `uhmwatch.sh` when it registers its own per-minute entry; removed by `uhmsetup.sh --uninstall` | Todas las entradas de cron del proyecto, en un solo archivo. Lo crea `uhmwatch.sh` al registrar su entrada de cada minuto; lo elimina `uhmsetup.sh --uninstall` |
 | `/etc/uhm/tools/uhmbk.sh` | Project backup tool, with its own monthly cron entry | Herramienta de respaldo del proyecto, con su propia entrada mensual de cron |
 | `/etc/uhm/tools/uhmalert.sh` | Alert sender: watches `uhm.log` and pushes a notification per `WARNING`/`ERROR` | Emisor de alertas: vigila `uhm.log` y envía una notificación por cada `WARNING`/`ERROR` |
-| `/etc/systemd/system/uhmalert.service` | Systemd unit for the alert sender. Created by `uhmalert.sh` itself, not by the installer; `uhmsetup.sh --remove` deletes it if present | Unidad systemd del emisor de alertas. La crea `uhmalert.sh`, no el instalador; `uhmsetup.sh --remove` la elimina si existe |
+| `/etc/systemd/system/uhmalert.service` | Systemd unit for the alert sender. Created by `uhmalert.sh` itself, not by the installer; `uhmsetup.sh --uninstall` deletes it if present | Unidad systemd del emisor de alertas. La crea `uhmalert.sh`, no el instalador; `uhmsetup.sh --uninstall` la elimina si existe |
 | `/etc/uhm/tools/uhmiptables.sh` | Firewall ruleset. Deployed only when absent, so a customized copy is never overwritten | Reglas de firewall. Se despliega solo si falta, para no sobrescribir una copia personalizada |
 | `/etc/uhm/tools/uhmiptables_example.txt` | Reference ruleset, deployed read-only and never executed | Reglas de referencia, desplegadas como solo lectura y nunca ejecutadas |
 | `/etc/apache2/sites-available/wpad.conf` | Apache VirtualHost serving `wpad.pac` on `WPAD_PORT` (optional, WPAD only) | VirtualHost de Apache que sirve `wpad.pac` en `WPAD_PORT` (opcional, solo WPAD) |
@@ -1087,10 +1325,10 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      To change the configuration, edit <code>/etc/uhm/uhm.env</code>. To start over, uninstall UHM with <code>uhmsetup.sh --remove</code> and then run the installer again. Deleting only the configuration file is not enough; the installer will not run again while the deployed scripts remain.
+      To change the configuration, edit <code>/etc/uhm/uhm.env</code>. To start over, uninstall UHM with <code>uhmsetup.sh --uninstall</code> and then run the installer again. Deleting only the configuration file is not enough; the installer will not run again while the deployed scripts remain.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Para cambiar la configuración, edita directamente <code>/etc/uhm/uhm.env</code>. Si quieres empezar de cero, primero desinstala UHM con <code>uhmsetup.sh --remove</code> y luego ejecuta de nuevo el instalador. Borrar solo el archivo de configuración no basta: el instalador no vuelve a ejecutarse mientras sigan instalados los scripts.
+      Para cambiar la configuración, edita directamente <code>/etc/uhm/uhm.env</code>. Si quieres empezar de cero, primero desinstala UHM con <code>uhmsetup.sh --uninstall</code> y luego ejecuta de nuevo el instalador. Borrar solo el archivo de configuración no basta: el instalador no vuelve a ejecutarse mientras sigan instalados los scripts.
     </td>
   </tr>
 </table>
@@ -1100,8 +1338,8 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 sudo nano /etc/uhm/uhm.env
 
 # Or: force a fresh interactive setup
-cd uhm && sudo bash uhmsetup.sh --remove
-sudo bash uhmsetup.sh
+cd uhm && sudo bash uhmsetup.sh --uninstall
+sudo bash uhmsetup.sh --install
 ```
 
 <table>
@@ -1114,220 +1352,6 @@ sudo bash uhmsetup.sh
     </td>
   </tr>
 </table>
-
-## REPOSITORY STRUCTURE
-
----
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      This is the structure of the repository after cloning it with <code>git clone ... && cd uhm</code>. <b>It does not correspond to the structure of the installation.</b> <br>
-      <br>
-      <code>uhmsetup.sh</code> is used only from the clone and <b>is never deployed to the installed system</b>. <br>
-      <br>
-      The files under <code>core/</code> and <code>tools/</code> are deployed by <code>uhmsetup.sh</code> into their respective subdirectories inside <code>/etc/uhm/</code>. That includes <code>tools/uhmiptables_example.txt</code>, deployed read-only and never executed, so the administrator can copy it over the placeholder without the clone. <br>
-      <br>
-      The files under <code>config/</code> go to their system locations instead, not to <code>/etc/uhm/</code>: the unit to <code>/etc/systemd/system/</code>, the two vhosts to <code>/etc/apache2/sites-available/</code> and the sudo rule to <code>/etc/sudoers.d/</code>. And <code>web/</code> goes to <code>/var/www/uhm</code>, only if the panel is accepted. <br>
-      <br>
-      In other words, the clone holds the files needed to perform the installation, while <code>/etc/uhm/</code> holds the files used by the running installation.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      Esta es la estructura del repositorio después de clonarlo con <code>git clone ... && cd uhm</code>. <b>No es la estructura del sistema instalado.</b> <br>
-      <br>
-      <code>uhmsetup.sh</code> se utiliza únicamente desde el clon y <b>nunca se despliega en el sistema instalado</b>. <br>
-      <br>
-      El instalador copia los archivos de <code>core/</code> y <code>tools/</code> en sus respectivos subdirectorios de <code>/etc/uhm/</code>. También copia <code>tools/uhmiptables_example.txt</code> como archivo de solo lectura; no lo ejecuta. Así, puedes copiarlo sobre la configuración inicial del firewall sin conservar el clon. <br>
-      <br>
-      Los archivos de <code>config/</code> se instalan en sus rutas del sistema, no en <code>/etc/uhm/</code>: la unidad de servicio en <code>/etc/systemd/system/</code>, los VirtualHost en <code>/etc/apache2/sites-available/</code> y la regla de <code>sudo</code> en <code>/etc/sudoers.d/</code>. Los archivos de <code>web/</code> se copian a <code>/var/www/uhm</code> solo si aceptas instalar el panel. <br>
-      <br>
-      En resumen, el clon contiene los archivos del instalador; <code>/etc/uhm/</code> contiene los archivos que usa UHM una vez instalado.
-    </td>
-  </tr>
-</table>
-
-```
-uhm/                      # as cloned -- see note above
-├── acl/                     # UHM's own data files -- empty templates in the repo,
-│                            # deployed once by uhmsetup.sh and never overwritten again
-│   ├── uhm-auth.txt              # authenticated clients, each with a voucher (fixed hotspot IP)
-│   ├── uhm-grace.txt             # clients still in the grace period, no voucher yet
-│   └── uhm-queue.txt             # MACs queued for lease removal, drained on the next run
-│
-├── config/                  # server configuration, one directory per component --
-│                            # none of it is ever published under a web root
-│   ├── service/
-│   │   └── uhmd.service          # systemd unit for uhmd
-│   ├── uhmweb/
-│   │   ├── uhmweb.conf           # Apache vhost on port 4048
-│   │   └── uhmweb.sudoers        # sudo rule that lets www-data reach uhmtool.sh
-│   └── wpad/
-│       └── wpad.conf             # Apache vhost on WPAD_PORT (default 18100)
-│
-├── core/                    # the reload mechanism, plus uhmwatch -- UHM cannot
-│                            # function correctly without any of these four
-│   ├── uhmd.sh                   # main daemon: polls the UniFi API and manages ACLs (systemd)
-│   ├── uhmleases.sh              # rebuilds pydhcpd.conf and manages DHCP leases/ACLs,
-│   │                             # with UniFi Hotspot support built in
-│   ├── uhmreload.sh              # helper called by uhmd after an ACL change -- runs
-│   │                             # uhmleases.sh, then reloads the affected services
-│   └── uhmwatch.sh               # mandatory service supervisor for uhmd, pydhcpd and the UniFi
-│                                 # backend -- installed automatically by uhmsetup.sh
-│                                 # with its own cron entry; lives here, not in tools/,
-│                                 # because it's mandatory
-│
-├── tools/                   # independent, optional utilities -- UHM runs
-│                            # fine without any of these
-│   ├── uhmalert.sh               # optional tool that monitors the log and sends
-│   │                             # notifications via ntfy.sh
-│   ├── uhmbk.sh                  # backs up uhm's own files into /etc/bak/uhm,
-│   │                             # run monthly through cron
-│   ├── uhmiptables.sh            # firewall placeholder (IPv4 forwarding + NAT only)
-│   │                             # -- deployed only if missing, never overwritten
-│   ├── uhmiptables_example.txt   # full reference ruleset (ipsets, iptables, redirects)
-│   │                             # -- deployed read-only next to the placeholder;
-│   │                             # copy it over uhmiptables.sh and adapt it
-│   ├── uhmtool.sh                # JSON backend for the web interface -- reads the log,
-│   │                             # the ACL files and the UniFi API, and writes back an
-│   │                             # ACL file after validating it
-│   └── uhmunifi.sh               # audits UniFi clients and vouchers, and checks one
-│                                 # MAC's live UniFi state
-│
-├── web/                     # web interface -- deployed to /var/www/uhm only when
-│                            # the panel is accepted during install
-│   ├── aclview/index.php         # ACL tab: editor for the ACL lists
-│   ├── logview/index.php         # LogView tab: real-time viewer for uhmd
-│   ├── toolview/index.php        # Tool tab: local ACL and UniFi reports
-│   ├── api.php                   # single endpoint, calls uhmtool.sh through sudo
-│   └── index.html                # panel shell: three tabs, light and dark theme
-│
-└── uhmsetup.sh              # installer / updater / uninstaller (interactive);
-                             # run from here, never deployed to /etc/uhm/
-```
-
-### ACL / data files — path ownership
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <code>UHM</code> integrates three independent components: <b>UniFi</b>, <code>pydhcp</code> and the <code>iptables</code>/<code>ipset</code> configuration defined by the administrator. Each one keeps its own ACLs and its own location. <br>
-      <br>
-      <code>UHM</code> reads and writes the ACLs in their respective locations and never moves, renames or relocates files belonging to another component.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <code>UHM</code> integra tres componentes independientes: <b>UniFi</b>, <code>pydhcp</code> y la configuración de <code>iptables</code>/<code>ipset</code> definida por el administrador. Cada uno mantiene sus propias ACL y su propia ubicación. <br>
-      <br>
-      <code>UHM</code> lee y escribe las ACL en sus respectivas ubicaciones y nunca mueve, renombra ni reubica archivos que pertenecen a otro componente.
-    </td>
-  </tr>
-</table>
-
-```
-/etc/uhm/acl/                # UHM's OWN data files (generated by this project;
-                             # shipped as empty templates in the repo's acl/ folder,
-                             # deployed once by uhmsetup.sh, never overwritten again)
-├── uhm-auth.txt                  # voucher-authorized clients (fixed hotspot IP)
-├── uhm-queue.txt                 # internal working file (uhmd.sh / uhmleases.sh only)
-└── uhm-grace.txt                 # grace-period clients (no voucher yet)
-
-/etc/acl/mac/                # pydhcp's namespace -- NOT generated by UHM
-├── mac-limited.txt               # user-maintained; UHM only reads it
-└── mac-unlimited.txt             # user-maintained; UHM only reads it
-
-/etc/pydhcp/acl/             # pydhcp's own namespace -- NOT generated by UHM
-└── blockdhcp.txt                 # permanently blocked MACs; pydhcp/pyleases.sh concept,
-                                  # reused (not owned) by uhmleases.sh
-```
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <code>UHM</code> works with ACLs belonging to three independent components: UHM, <code>pydhcp</code> and the administrator's <code>iptables</code>/<code>ipset</code> configuration. <br>
-      <br>
-      The paths <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>) and <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>), as well as the variables naming the files they contain, are configurable in <code>uhm.env</code>. This lets <code>UHM</code> respect the paths the administrator already uses for <code>pydhcp</code> and <code>iptables</code>, without imposing its own. <br>
-      <br>
-      <code>uhm.env</code> is located directly in <code>/etc/uhm/</code>. It is not inside <code>/etc/uhm/acl/</code> because it is a configuration file, not a data list. <br>
-      <br>
-      The only ACL path that belongs to UHM is: <br>
-      <code>/etc/uhm/acl/</code> <br>
-      <br>
-      That path is part of the installation and is kept or removed along with UHM, as applies during an update or an uninstall. <br>
-      <br>
-      <b>Variable names</b> <br>
-      <br>
-      The variables pointing at UHM's own three lists are named after the file they refer to and use the <code>UHM_</code> prefix:
-      <ul>
-        <li><code>UHM_MACAUTH</code></li>
-        <li><code>UHM_GRACE</code></li>
-        <li><code>UHM_QUEUE</code></li>
-      </ul>
-      The variables pointing at files belonging to other projects keep the <code>ACL_</code> prefix:
-      <ul>
-        <li><code>ACL_MAC_LIMITED</code></li>
-        <li><code>ACL_MAC_UNLIMITED</code></li>
-        <li><code>ACL_BLOCK_FILE</code></li>
-        <li><code>ACL_MAC_PATH</code></li>
-        <li><code>ACL_DHCP_PATH</code></li>
-        <li><code>ACL_PATH</code></li>
-      </ul>
-      The prefix identifies who owns the file and therefore determines whether UHM may create it. <br>
-      <br>
-      <code>uhmd.sh</code> and <code>uhmleases.sh</code> can create UHM's own three lists empty when they do not exist. UHM never creates <code>blockdhcp.txt</code> nor any <code>mac-*.txt</code> file, because those files belong to other components. <br>
-      <br>
-      If <code>blockdhcp.txt</code> does not exist, <code>uhmd.sh</code> aborts and states that it must be created through <code>pysetup.sh</code>, the installer of <code>pydhcp</code>.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <code>UHM</code> trabaja con ACL pertenecientes a tres componentes independientes: UHM, <code>pydhcp</code> y la configuración de <code>iptables</code>/<code>ipset</code> del administrador. <br>
-      <br>
-      Las rutas <code>ACL_MAC_PATH</code> (<code>/etc/acl/mac</code>) y <code>ACL_DHCP_PATH</code> (<code>/etc/pydhcp/acl</code>), así como las variables que indican los archivos que contienen, son configurables en <code>uhm.env</code>. Esto permite que <code>UHM</code> respete las rutas que el administrador ya utiliza para <code>pydhcp</code> e <code>iptables</code>, sin imponer rutas propias. <br>
-      <br>
-      <code>uhm.env</code> se encuentra directamente en <code>/etc/uhm/</code>. No está dentro de <code>/etc/uhm/acl/</code> porque es un archivo de configuración, no una lista de datos. <br>
-      <br>
-      La única ruta de ACL que pertenece a UHM es: <br>
-      <code>/etc/uhm/acl/</code> <br>
-      <br>
-      Esta ruta forma parte de la instalación y se conserva o elimina junto con UHM, según corresponda durante una actualización o desinstalación. <br>
-      <br>
-      <b>Nombres de las variables</b> <br>
-      <br>
-      Las variables que apuntan a las tres listas propias de UHM se nombran según el archivo al que hacen referencia y utilizan el prefijo <code>UHM_</code>:
-      <ul>
-        <li><code>UHM_MACAUTH</code></li>
-        <li><code>UHM_GRACE</code></li>
-        <li><code>UHM_QUEUE</code></li>
-      </ul>
-      Las variables que apuntan a archivos pertenecientes a otros proyectos conservan el prefijo <code>ACL_</code>:
-      <ul>
-        <li><code>ACL_MAC_LIMITED</code></li>
-        <li><code>ACL_MAC_UNLIMITED</code></li>
-        <li><code>ACL_BLOCK_FILE</code></li>
-        <li><code>ACL_MAC_PATH</code></li>
-        <li><code>ACL_DHCP_PATH</code></li>
-        <li><code>ACL_PATH</code></li>
-      </ul>
-      El prefijo identifica la propiedad del archivo y, por tanto, determina si UHM puede crearlo. <br>
-      <br>
-      <code>uhmd.sh</code> y <code>uhmleases.sh</code> pueden crear vacías las tres listas propias de UHM cuando no existen. En cambio, UHM nunca crea <code>blockdhcp.txt</code> ni ningún archivo <code>mac-*.txt</code>, porque esos archivos pertenecen a otros componentes. <br>
-      <br>
-      Si <code>blockdhcp.txt</code> no existe, <code>uhmd.sh</code> aborta e indica que debe ser creado mediante <code>pysetup.sh</code>, el instalador de <code>pydhcp</code>.
-    </td>
-  </tr>
-</table>
-
-### ACL priority order
-
-| ACL | Priority Level | Description | Descripción |
-|---|---|---|---|
-| `mac-unlimited.txt` | 1 | List maintained by hand by the administrator. Designed for communications hardware, servers and other essential equipment, not subject to firewall restrictions. A malformed line aborts with `ERROR`. | Lista mantenida manualmente por el administrador. Está diseñada para hardware de comunicaciones, servidores y otros equipos esenciales, no sujetos a restricciones del firewall. Una línea malformada aborta con `ERROR`. |
-| `mac-limited.txt` | 2 | List maintained by hand by the administrator. Designed for equipment joining the local network. May be subject to firewall, proxy and other restrictions. A malformed line aborts with `ERROR`. | Lista mantenida manualmente por el administrador. Está diseñada para los equipos que se integran a una red local. Puede estar sujeta a restricciones de firewall, proxy, etc. Una línea malformada aborta con `ERROR`. |
-| `uhm-auth.txt` | 3 | List operated by the `UHM` daemon. Designed for clients that entered with a valid UniFi voucher. May be subject to firewall, proxy and other restrictions. A malformed line aborts with `ERROR`. | Lista operada por el demonio `UHM`. Está diseñada para los clientes que ingresan con voucher válido de UniFi. Puede estar sujeta a restricciones de firewall, proxy, etc. Una línea malformada aborta con `ERROR`. |
-| `uhm-grace.txt` | 0 | List operated by the `UHM` daemon. Designed for clients seen on the network that have not entered a voucher yet, during their grace period. Authorizes nothing on its own. A malformed line is dropped with `INFO` and the reload continues. | Lista operada por el demonio `UHM`. Está diseñada para los clientes vistos en la red que aún no ingresan un voucher, durante su período de gracia. No autoriza nada por sí sola. Una línea malformada se elimina con `INFO` y el reload continúa. |
-| `blockdhcp.txt` | 0 | List managed by the `pydhcp` daemon and written by `uhmleases.sh`. It identifies clients that must not receive a DHCP lease. It grants no access by itself. A malformed line is logged and removed; the reload continues. | Lista gestionada por el demonio `pydhcp` y escrita por `uhmleases.sh`. Identifica a los clientes que no deben recibir una concesión DHCP. No concede acceso por sí sola. Si una línea no tiene el formato esperado, se registra y elimina; la recarga continúa. |
-| `uhm-queue.txt` | 0 | Internal list used by the `UHM` daemon to hold MAC addresses whose DHCP leases must be removed during the next reload. The list is cleared after processing. It grants no access. A malformed line is logged and removed; the reload continues. | Lista interna que usa el daemon de `UHM` para guardar las direcciones MAC cuyas concesiones DHCP deben retirarse en la próxima recarga. Se vacía después de procesarlas. No concede acceso. Si una línea no tiene el formato esperado, se registra y elimina; la recarga continúa. |
-
-> Lines starting with `#` are treated as deactivated and get blocked. Only applies to the ACLs with Priority Level 1, 2 and 3.
->
-> Las líneas que comienzan con `#` se consideran desactivadas y serán bloqueadas. Solo aplica a las ACL con Priority Level 1, 2 y 3.
 
 ## UNIFI HARDWARE VS UHM
 
@@ -1889,14 +1913,14 @@ uhm/                      # as cloned -- see note above
       <br>
       <code>uhmd.sh</code> and <code>uhmd.service</code> run the daemon. Whenever an ACL changes, the daemon calls <code>uhmreload.sh</code>, which runs <code>uhmleases.sh</code> to synchronize the ACLs and DHCP leases. <br>
       <br>
-      <code>tools/</code>, the next section, holds independent and optional utilities. <code>uhmiptables.sh</code> is the only exception living under <code>tools/</code>: it is needed to enforce the firewall, but its absence does not prevent <code>uhmd</code> from starting or from classifying clients correctly. See Failure handling under <code>uhmreload</code> below.
+      <code>tools/</code>, the next section, holds the required shared reader <code>uhmenv.sh</code> and independent utilities. <code>uhmiptables.sh</code> is needed to enforce the firewall, but its absence does not prevent <code>uhmd</code> from starting or from classifying clients correctly. See Failure handling under <code>uhmreload</code> below.
     </td>
     <td style="width: 50%; vertical-align: top;">
       <code>core/</code> contiene los componentes principales de UHM. Consulta la sección Scope. <br>
       <br>
       <code>uhmd.sh</code> y <code>uhmd.service</code> ejecutan el daemon. Cuando cambia una ACL, el daemon llama a <code>uhmreload.sh</code>, que ejecuta <code>uhmleases.sh</code> para sincronizar las ACL y las concesiones DHCP. <br>
       <br>
-      <code>tools/</code>, la sección siguiente, contiene utilidades independientes y opcionales. <code>uhmiptables.sh</code> es la única excepción que vive bajo <code>tools/</code>: es necesario para aplicar el firewall, pero su ausencia no impide que <code>uhmd</code> arranque ni que clasifique clientes correctamente. Ver Failure handling bajo <code>uhmreload</code> más abajo.
+      <code>tools/</code>, la sección siguiente, contiene el lector compartido obligatorio <code>uhmenv.sh</code> y utilidades independientes. <code>uhmiptables.sh</code> es necesario para aplicar el firewall, pero su ausencia no impide que <code>uhmd</code> arranque ni que clasifique clientes correctamente. Ver Failure handling bajo <code>uhmreload</code> más abajo.
     </td>
   </tr>
 </table>
@@ -2298,10 +2322,23 @@ Grace         : a;MAC;IP;HOSTNAME;FIRST_SEEN_EPOCH;
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Independent, optional utilities.
+      Shared configuration reader and independent, optional utilities.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Utilidades independientes y opcionales.
+      Lector compartido de configuración y utilidades independientes y opcionales.
+    </td>
+  </tr>
+</table>
+
+### uhmenv.sh
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Shared Bash reader installed at <code>/etc/uhm/tools/uhmenv.sh</code> (root:root, 644). The installer, core scripts, configuration-reading tools and reference firewall load it with <code>source</code>. Each caller declares its own allowed keys. The reader parses <code>key=value</code> without executing the configuration, preserves passwords literally and retains the caller's log or JSON errors. File permissions and key validation remain with the caller. Installation and update deploy it before consumers; self-installing tools also copy it. Do not run it separately or schedule it in cron.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Lector Bash compartido instalado en <code>/etc/uhm/tools/uhmenv.sh</code> (root:root, 644). El instalador, los scripts principales, las herramientas que leen configuración y el firewall de referencia lo cargan mediante <code>source</code>. Cada script declara sus claves permitidas. El lector interpreta <code>clave=valor</code> sin ejecutar la configuración, conserva literalmente las contraseñas y mantiene los errores de log o JSON del script. Los permisos y la validación de claves permanecen en el script. La instalación y la actualización despliegan el lector antes de sus consumidores; las herramientas que se instalan solas también lo copian. No se ejecuta por separado ni se programa en cron.
     </td>
   </tr>
 </table>
@@ -3064,6 +3101,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
       <ul>
         <li>May include third-party components.</li>
         <li>Does not accept Pull Requests. Changes must be proposed via Issues.</li>
+        <li>This project does not support backward compatibility. New versions may require configuration changes or reinstallation.</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -3071,6 +3109,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
       <ul>
         <li>Puede incluir componentes de terceros.</li>
         <li>No acepta Pull Requests. Los cambios deben proponerse mediante Issues.</li>
+        <li>Este proyecto no soporta retrocompatibilidad. Las nuevas versiones pueden requerir cambios de configuración o una reinstalación.</li>
       </ul>
     </td>
   </tr>
