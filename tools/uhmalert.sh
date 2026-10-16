@@ -41,17 +41,23 @@ esac
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
 
 # log file perms (as installed by uhmsetup.sh)
 log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
@@ -101,14 +107,19 @@ insert_after_last_delimiter() {
     local conf_file="$1" env_block="$2" last_line tmp_file
     last_line=$(grep -n '^# =\{5,\}$' "$conf_file" | tail -1 | cut -d: -f1)
     if [[ -z "$last_line" ]]; then
-        printf '\n%s\n' "$env_block" >> "$conf_file"
+        printf '\n%s\n' "$env_block" >> "$conf_file" \
+            || { log "ERROR: cannot write $(basename "$conf_file") -- abort"; exit 1; }
         return
     fi
     tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
-    head -n "$last_line" "$conf_file" > "$tmp_file"
-    printf '\n%s\n' "$env_block" >> "$tmp_file"
-    tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file"
-    mv "$tmp_file" "$conf_file"
+    if ! { head -n "$last_line" "$conf_file" > "$tmp_file" \
+        && printf '\n%s\n' "$env_block" >> "$tmp_file" \
+        && tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file" \
+        && mv "$tmp_file" "$conf_file"; }; then
+        rm -f "$tmp_file"
+        log "ERROR: cannot write $(basename "$conf_file") -- abort"
+        exit 1
+    fi
 }
 
 install_module() {
@@ -146,23 +157,28 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
     # >> append) so upgrading an older install doesn't scatter these
     # variables to the end of the file, past unrelated later sections.
     if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$config_file"; then
-        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$config_file"
+        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$config_file" \
+            || { log "ERROR: cannot write $(basename "$config_file") -- abort"; exit 1; }
     fi
     if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$config_file"; then
-        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$config_file"
+        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$config_file" \
+            || { log "ERROR: cannot write $(basename "$config_file") -- abort"; exit 1; }
     fi
 
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
         echo "Deploying script to $target_path..."
-        mkdir -p "$(dirname "$target_path")"
-        install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh"
-        install -m 755 -o root -g root "$self_path" "$target_path"
+        if ! { mkdir -p "$(dirname "$target_path")" \
+            && install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh" \
+            && install -m 755 -o root -g root "$self_path" "$target_path"; }; then
+            log "ERROR: cannot deploy uhmalert to $target_path -- abort"
+            exit 1
+        fi
     fi
 
     echo "Writing systemd unit ($unit_path)..."
-    cat > "$unit_path" <<'UNITEOF'
+    if ! cat > "$unit_path" <<'UNITEOF'
 [Unit]
 Description=UniFi Hotspot Connectivity Alert Watcher
 After=network.target uhmd.service
@@ -186,10 +202,17 @@ RestrictSUIDSGID=yes
 [Install]
 WantedBy=multi-user.target
 UNITEOF
+    then
+        log "ERROR: cannot write $(basename "$unit_path") -- abort"
+        exit 1
+    fi
 
-    systemctl daemon-reload
-    systemctl enable uhmalert.service
-    systemctl restart uhmalert.service
+    if ! { systemctl daemon-reload \
+        && systemctl enable uhmalert.service \
+        && systemctl restart uhmalert.service; }; then
+        log "ERROR: cannot start uhmalert.service -- abort"
+        exit 1
+    fi
 
     echo ""
     echo "Installed and started. Check with: systemctl status uhmalert"
@@ -197,7 +220,7 @@ UNITEOF
     echo "=================================="
     echo "ntfy topic: $gen_topic"
     echo "=================================="
-    echo "Install the free 'ntfy' app (Android/iOS) and subscribe to the"
+    echo "Install free 'ntfy' app (Android/iOS) and subscribe to the"
     echo "topic above to start receiving alerts on this device."
     echo ""
 }
@@ -206,8 +229,10 @@ uninstall_module() {
     echo "Stopping and disabling uhmalert.service..."
     systemctl stop uhmalert.service 2>/dev/null || true
     systemctl disable uhmalert.service 2>/dev/null || true
-    rm -f "$unit_path"
-    systemctl daemon-reload
+    if ! { rm -f "$unit_path" && systemctl daemon-reload; }; then
+        log "ERROR: cannot remove $(basename "$unit_path") -- abort"
+        exit 1
+    fi
     echo "uhmalert.service removed. The uhmalert.sh script was not deleted."
 }
 
@@ -377,13 +402,13 @@ notify() {
 # timestamp. printf's %()T is bash's own strftime, no subprocess involved.
 on_term() {
     printf -v term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
-    echo "$term_ts uhmalert done at: $term_ts" | tee -a "$log_file" 2>/dev/null || true
+    printf '%s uhmalert done at: %s\n' "$term_ts" "$term_ts"
     exit 0
 }
 trap on_term TERM INT
 
 # start
-log "uhmalert start..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmalert start..."
 
 exec 3< <(tail -n0 -F "$log_file" 2>/dev/null)
 
@@ -489,10 +514,9 @@ while true; do
         log "ERROR: uhmalert lost log monitoring (tail died) -- abort"
         exit 1
     else
-        # read timed out: no new line for a full gap_limit window. Recovery
-        # (if any) was already evaluated by the pre-read check above; this
-        # is just a safety-net reset.
+        # read timed out: no new line for a full gap_limit window. The streak
+        # is reset, but not alert_sent: the window can close during the read,
+        # and the pre-read check above still owes that recovery notice.
         fail_streak=0
-        alert_sent=0
     fi
 done

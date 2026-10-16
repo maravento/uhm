@@ -58,7 +58,7 @@ esac
 
 # root check
 if [[ "$(id -u)" != "0" ]]; then
-    echo "ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
@@ -67,7 +67,7 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$script_lock")
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
@@ -119,11 +119,13 @@ apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 c
 
 # Output helpers
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" >/dev/null 2>&1 || true
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
 }
-info() { printf ' \e[32m \e[0m %s\n' "$*"; log "INFO: $*"; }
-warn() { printf ' \e[33m!\e[0m %s\n' "$*"; log "WARNING: $*"; }
-err() { printf ' \e[31m \e[0m %s\n' "$*" >&2; log "ERROR: $*"; }
+info() { log "INFO: $*"; }
+warn() { log "WARNING: $*"; }
+err() { log "ERROR: $*"; }
 step() { printf '\n-- %s ---------------------------------------------\n' "$*"; }
 abort() { err "$*"; exit 1; }
 
@@ -159,7 +161,7 @@ UH_UINT='^(0|[1-9][0-9]*)$'
 # no delimiter line at all (empty/malformed file).
 insert_after_last_delimiter() {
     local conf_file="$1" env_block="$2" last_line tmp_file
-    last_line=$(grep -n '^# =\{5,\}$' "$conf_file" | tail -1 | cut -d: -f1)
+    last_line=$(awk '/^# =====+$/{last=NR} END{if(last) print last}' "$conf_file")
     if [[ -z "$last_line" ]]; then
         printf '\n%s\n' "$env_block" >> "$conf_file"
         return
@@ -245,8 +247,7 @@ check_preinstalled() {
     check_conflicts "firewall"    firewalld
     warn_overlap "dhcp" dnsmasq
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "^Status: active"; then
-        err "ufw is active, conflicts with uhm's iptables rules"
-        abort "disable it with: ufw disable -- abort"
+        err "ufw active; disable it before UHM -- abort"
     fi
     info "No conflicting packages found"
 }
@@ -339,7 +340,9 @@ ask_interface_number() {
     while true; do
         read -rp " ${prompt_text} [1-${max_value}] [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 && user_answer <= max_value )); then
+        if [[ "$user_answer" =~ $UH_UINT ]] \
+           && [ "${#user_answer}" -le "${#max_value}" ] \
+           && [ "$user_answer" -ge 1 ] && [ "$user_answer" -le "$max_value" ]; then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
@@ -521,7 +524,7 @@ run_setup_wizard() {
             continue
         fi
         if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
-            info "Range ${cfg_ini_range}-${cfg_end_range} includes the server IP"
+            info "Range ${cfg_ini_range}-${cfg_end_range} includes server IP"
             info "(${SERVER_IP}), choose a different range -- retry"
             continue
         fi
@@ -575,18 +578,18 @@ run_setup_wizard() {
         cfg_essid="${ssid_list[0]}"
         info "SSID detected: $cfg_essid"
     elif (( ${#ssid_list[@]} > 1 )); then
-        echo "Multiple SSIDs found -- select the one used by the captive portal:"
+        echo "Multiple SSIDs found -- select one used by captive portal:"
         select cfg_essid in "${ssid_list[@]}"; do
             [[ -n "$cfg_essid" ]] && break
-            echo "Invalid selection -- enter the number of one of the SSIDs listed above."
+            echo "Invalid selection -- enter number of one of SSIDs listed above."
         done
         if [[ -z "$cfg_essid" ]]; then
-            warn "no SSID selected from the list -- alert"
+            warn "no SSID selected from list -- alert"
             warn "set UHM_ESSID in $config_file before starting uhm -- alert"
         fi
     else
         cfg_essid=""
-        warn "no SSID detected on the UniFi controller -- alert"
+        warn "no SSID detected on UniFi controller -- alert"
         warn "set UHM_ESSID in $config_file before starting uhm -- alert"
     fi
 
@@ -647,9 +650,9 @@ run_setup_wizard() {
     ask_number "Grace period before blocking unknown MACs in seconds (BLOCKDHCP_GRACE_SECONDS)" "86400" cfg_grace_seconds
 
     step "Managed MAC lists (optional)"
-    echo "mac-*.txt files allow specific devices to bypass the captive portal"
+    echo "mac-*.txt files allow specific devices to bypass captive portal"
     echo "automatically (corporate laptops, APs, printers, switches, etc.)."
-    echo "They bypass entirely at the DHCP level (uhmleases.sh) -- the daemon"
+    echo "They bypass entirely at DHCP level (uhmleases.sh) -- daemon"
     echo "itself never authorizes them in UniFi."
     echo "Files are stored in /etc/acl/mac/ and managed manually."
     mkdir -p /etc/acl/mac
@@ -967,7 +970,7 @@ EOF
         echo "WPAD_ENABLED=true" >> "$pydhcp_env"
     fi
     info "WPAD enabled: http://${SERVER_IP}:${wpad_port}/wpad.pac"
-    info "  option 252 is announced after the next uhmreload.sh run"
+    info "  option 252 is announced after next uhmreload.sh run"
     return 0
 }
 
@@ -1047,26 +1050,13 @@ EOF
     fi
 }
 
-deregister_cron() {
-    # uhmd triggers its own safety-net reload internally (see
-    # RELOAD_SAFETY_INTERVAL_SECONDS in uhmd.sh) -- no external cron
-    # entry should exist. Removes a leftover @hourly uhmreload.sh entry if
-    # found.
-    local ureload_path="${core_dir}/uhmreload.sh"
-    if crontab -l 2>/dev/null | grep -qF "$ureload_path"; then
-        crontab -l 2>/dev/null | { grep -vF "$ureload_path" || true; } | crontab - || true
-        info "Removed stale @hourly uhmreload.sh cron entry"
-        info "  (now handled by uhmd.sh internally)"
-    fi
-}
-
 final_sanity_check() {
     step "Sanity check"
     local issue_list=0
 
     if [[ ! -x "$uhm_iptables_dest" ]]; then
         warn "uhmiptables.sh is missing or not executable"
-        warn "ACL changes will not reach the firewall -- alert"
+        warn "ACL changes will not reach firewall -- alert"
         (( issue_list++ )) || true
     fi
 
@@ -1105,7 +1095,7 @@ install_pydhcp() {
 
     echo ""
     echo "uhm needs pydhcp as its DHCP backend. Its installer runs next and"
-    echo "asks for the network values uhm reads afterwards from pydhcp.env."
+    echo "asks for network values uhm reads afterwards from pydhcp.env."
     echo ""
 
     if [[ ! -d "$pydhcp_path" ]]; then
@@ -1204,9 +1194,11 @@ do_install() {
         unifisetup_tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -- abort"; }
         info "Downloading unifisetup.sh..."
         if ! curl -fsSL "https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh" -o "$unifisetup_tmp"; then
+            log "PARTIAL: unifisetup.sh"
             rm -f "$unifisetup_tmp"
             { err "failed to download unifisetup.sh"; abort "check network access to GitHub -- abort"; }
         fi
+        log "SAVED: unifisetup.sh"
         chmod +x "$unifisetup_tmp"
         local unifi_expect
         unifi_expect=$(mktemp) || abort "cannot create temp file in /tmp -- abort"
@@ -1284,9 +1276,6 @@ EOF
     fi
     install_wpad || true
 
-    step "Cron"
-    deregister_cron
-
     final_sanity_check
 
     trap - EXIT
@@ -1352,10 +1341,6 @@ do_update() {
         'index($0,p)>0 && $0 !~ /^[[:space:]]*#/ {found_entry=1}
          END {exit !found_entry}' /etc/cron.d/uhm 2>/dev/null; then
         uwatch_was_active=1
-    elif crontab -l 2>/dev/null | awk -v p="$uwatch_path" \
-        'index($0,p)>0 && $0 !~ /^[[:space:]]*#/ {found_entry=1}
-         END {exit !found_entry}'; then
-        uwatch_was_active=1
     fi
 
     if (( uhmd_was_active )); then
@@ -1415,7 +1400,7 @@ do_update() {
             warn "check it with: systemctl status uhmd -- alert"
         fi
     else
-        info "uhmd was not active before the update, left stopped"
+        info "uhmd was not active before update, left stopped"
     fi
 
     step "Resume services"
@@ -1428,16 +1413,11 @@ do_update() {
         # Re-registers a clean entry, since Pause above removed it.
         bash "${core_dir}/uhmwatch.sh" install
         info "uhmwatch cron entry restored"
-    elif ! grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null \
-        && ! crontab -l 2>/dev/null | grep -qF "$uwatch_path"; then
-        # No entry at all, active or commented. Install it now rather
-        # than leaving an update-in-place without it.
+    elif ! grep -qF "$uwatch_path" /etc/cron.d/uhm 2>/dev/null; then
+        # No current entry exists. Install the mandatory current entry.
         bash "${core_dir}/uhmwatch.sh" install
         info "uhmwatch installed (was missing, now mandatory)"
     fi
-
-    step "Cron"
-    deregister_cron
 
     echo ""
     echo "------------------------------------------------------"
@@ -1449,12 +1429,9 @@ do_update() {
     echo "- ACL data files (*.txt)"
     echo "- Logrotate config"
     echo ""
-    echo "Paused for the update, then resumed to their prior state:"
+    echo "Paused for update, then resumed to their prior state:"
     echo "- uhmd.service, uhmalert.service (if it was active)"
-    echo "- uhmwatch cron entry (if it was active, or installed"
-    echo "  now if this update predates it becoming mandatory)"
-    echo ""
-    echo "Stale @hourly uhmreload.sh cron entry removed if present"
+    echo "- uhmwatch cron entry (if it was active)"
     echo ""
 
     echo "------------------------------------------------------"
@@ -1475,12 +1452,12 @@ do_uninstall() {
     info "This will permanently remove, without asking again:"
     info "  - uhmd.service: stopped, disabled, unit file removed"
     info "  - cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
-    info "  - the uhmwatch cron entry"
+    info "  - uhmwatch cron entry"
     info "  - uhmalert.service if installed"
-    info "  - the web panel, its vhost and sudo rule, if installed"
+    info "  - web panel, its vhost and sudo rule, if installed"
     info "  - ${logrotate_file}"
     info "  - ${hotspot_dir}"
-    info "    including uhm.env, the ACL lists and YOUR uhmiptables.sh"
+    info "    including uhm.env, ACL lists and YOUR uhmiptables.sh"
     info "    Run ${uhmbk_script} first if you want a backup"
     info "  - ${uhm_log_file}, rotated logs"
     info "  - uhmunifi.log and reload failure traces"
@@ -1488,16 +1465,21 @@ do_uninstall() {
     info "Package dependencies"
     info "  (curl, jq, iptables, ipset, etc.) are NOT removed."
     echo ""
-    confirm "Proceed with uninstall? This cannot be undone." "n" || { info "Aborted by user."; exit 0; }
+    confirm "Proceed with uninstall? This cannot be undone." "n" || {
+        info "Aborted by user."
+        log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        exit 0
+    }
 
     local confirm_answer
     echo ""
     echo "Final confirmation required."
-    echo "Type the word YES (uppercase) to remove uhm:"
+    echo "Type word YES (uppercase) to remove uhm:"
     echo ""
     read -rp " > " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user."
+        log "uhmsetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
     fi
     echo ""
@@ -1542,14 +1524,6 @@ perform_remove() {
     # uhmwatch (mandatory component, but --remove uninstalls everything
     # regardless -- defensive check in case it was manually uninstalled)
     step "uhmwatch"
-    local uwatch_path="${core_dir}/uhmwatch.sh"
-    if crontab -l 2>/dev/null | grep -qF "$uwatch_path"; then
-        crontab -l 2>/dev/null | grep -vF "$uwatch_path" | crontab - || true
-        info "uhmwatch cron entry removed"
-    else
-        info "No uhmwatch cron entry found"
-    fi
-
     # Web interface (optional component)
     step "Web interface"
     remove_web

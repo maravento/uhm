@@ -27,17 +27,23 @@ set -euo pipefail
 # path for cron
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root -- abort" >&2
-    exit 1
-fi
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
@@ -77,11 +83,23 @@ cron_d_set() {
     local cron_file="/etc/cron.d/uhm"
     local cron_tmp
 
-    cron_tmp=$(mktemp)
-    [ -f "$cron_file" ] && { grep -vF "$match" "$cron_file" > "$cron_tmp" || true; }
-    [ -n "$line" ] && printf '%s\n' "$line" >> "$cron_tmp"
+    cron_tmp=$(mktemp) || return 1
+    if [ -f "$cron_file" ]; then
+        grep -vF "$match" "$cron_file" > "$cron_tmp" || {
+            [ "$?" -eq 1 ] || { rm -f "$cron_tmp"; return 1; }
+        }
+    fi
+    if [ -n "$line" ]; then
+        printf '%s\n' "$line" >> "$cron_tmp" || {
+            rm -f "$cron_tmp"
+            return 1
+        }
+    fi
     if [ -s "$cron_tmp" ]; then
-        install -m 644 -o root -g root "$cron_tmp" "$cron_file"
+        if ! install -m 644 -o root -g root "$cron_tmp" "$cron_file"; then
+            rm -f "$cron_tmp"
+            return 1
+        fi
     else
         rm -f "$cron_file"
     fi
@@ -112,26 +130,27 @@ deregister_cron() {
     log "INFO: cron entry removed, archives kept"
 }
 
+# Start
+log "uhmbk start..."
+
 case "${1:-}" in
     install)
         register_cron
+        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     uninstall)
         deregister_cron
+        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     "")
         ;;
     *)
-        log "ERROR: use no argument, 'install' or 'uninstall'"
-        log "ERROR: unknown action '$1' -- abort"
+        log "ERROR: '$1' invalid; install/uninstall or none -- abort"
         exit 1
         ;;
 esac
-
-# Start
-log "uhmbk start..."
 
 # ------------------------------------------------------------------------------
 # BACKUP
@@ -163,8 +182,7 @@ do
 done
 
 if (( ${#backup_list[@]} == 0 )); then
-    log "ERROR: none of the expected paths exist"
-    log "ERROR: is uhm installed? -- abort"
+    log "ERROR: cannot find UHM installation paths -- abort"
     exit 1
 fi
 
@@ -177,8 +195,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     chmod 600 "$backup_part"
     if ! mv -f "$backup_part" "$backup_zip"; then
         rm -f "$backup_part"
-        log "ERROR: cannot name archive $(basename "$backup_zip")"
-        log "ERROR: check free space and permissions -- abort"
+        log "ERROR: $(basename "$backup_zip") failed; check space/permissions -- abort"
         exit 1
     fi
     log "INFO: backup written to $(basename "$backup_zip")"
@@ -190,8 +207,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     fi
 else
     rm -f "$backup_part"
-    log "ERROR: cannot write archive $(basename "$backup_zip")"
-    log "ERROR: check free space and permissions -- abort"
+    log "ERROR: cannot write archive $(basename "$backup_zip") -- check free space and permissions -- abort"
     exit 1
 fi
 

@@ -23,17 +23,23 @@ set -euo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
 
 # log file perms (as installed by uhmsetup.sh)
 log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
@@ -279,7 +285,7 @@ normalize_acl_file() {
     sed -i '/^$/d' "$acl_file"
 
     if [[ -n "$line_pattern" ]]; then
-        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("$tmp_file")
         while IFS= read -r acl_line || [ -n "$acl_line" ]; do
             line_number=$((line_number + 1))
@@ -371,9 +377,9 @@ dedup_mac_vs() {
         other_macs=$( { grep -hE '^#?a;' "$@" 2>/dev/null || true; } | awk -F';' '{print tolower($2)}' | sort -u )
     fi
     local tmp_file dropped_count mac_addr
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${tmp_file}")
-    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${dropped_count}")
     awk -F';' -v others="$other_macs" -v outfile="$tmp_file" -v dropfile="$dropped_count" '
         BEGIN {
@@ -416,9 +422,9 @@ dedup_uhm_auth() {
         mac_wins=$( { grep -hE '^#?a;' "${acl_mac_files[@]}" 2>/dev/null || true; } | awk -F';' '{print tolower($2)}' | sort -u )
     fi
     local tmp_file dropped_count mac_addr
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${tmp_file}")
-    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${dropped_count}")
     awk -F';' -v macwins_list="$mac_wins" -v outfile="$tmp_file" -v dropfile="$dropped_count" '
         BEGIN {
@@ -628,7 +634,8 @@ if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
 elif [[ -z "${WPAD_PORT:-}" ]]; then
     key_errors+=("WPAD_PORT not set")
 elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
-     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+     || [ "${#WPAD_PORT}" -gt 5 ] \
+     || [ "$WPAD_PORT" -lt 1 ] || [ "$WPAD_PORT" -gt 65535 ]; then
     key_errors+=("WPAD_PORT invalid port")
 fi
 for env_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK \
@@ -803,22 +810,18 @@ pool_start = ipaddress.IPv4Address(sys.argv[2])
 pool_end = ipaddress.IPv4Address(sys.argv[3])
 hotspot_start = ipaddress.IPv4Address(sys.argv[4])
 hotspot_end = ipaddress.IPv4Address(sys.argv[5])
-pool = 'blk=%s-%s' % (pool_start, pool_end)
-hotspot = 'hs=%s-%s' % (hotspot_start, hotspot_end)
 if pool_start <= server_ip <= pool_end:
-    print('SERVER_IP=%s in block-pool range|%s' % (server_ip, pool))
+    print('SERVER_IP overlaps DHCP block range')
 elif hotspot_start <= server_ip <= hotspot_end:
-    print('SERVER_IP=%s in hotspot range|%s' % (server_ip, hotspot))
+    print('SERVER_IP overlaps hotspot range')
 elif pool_start <= hotspot_end and hotspot_start <= pool_end:
-    print('%s overlaps hotspot|%s' % (pool, hotspot))
+    print('DHCP block range overlaps hotspot range')
 " "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "$UHM_INI_RANGE" "$UHM_END_RANGE" 2>/dev/null)
 if [[ -n "$range_conflict" ]]; then
-    IFS='|' read -r conflict_head conflict_tail <<< "$range_conflict"
-    log "ERROR: $conflict_head"
-    log "ERROR: $conflict_tail -- abort"
+    log "ERROR: $range_conflict -- abort"
     exit 1
 fi
-unset range_conflict conflict_head conflict_tail
+unset range_conflict
 
 # ------------------------------------------------------------------------------
 # DHCPD CONFIG
@@ -873,7 +876,7 @@ check_mac_ip_ranges
 expire_grace_entries() {
     [ ! -f "$UHM_GRACE" ] && return
     local file_temp now_epoch lease_age acl_status mac_addr client_ip client_name entry_epoch
-    file_temp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    file_temp=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${file_temp}")
     now_epoch=$(date +%s)
     # Malformed lines (bad status/MAC/epoch) are discarded here, not kept --
@@ -917,7 +920,7 @@ expire_grace_entries() {
 is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
     dhcp_conf="$DHCPDv4_CONF"
-    dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create temp file in /etc/pydhcp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create config temp; check /etc/pydhcp -- abort"; exit 1; }
     temp_files+=("$dhcp_conf_temp")
 
     # Log lines below do not carry the function name -- they use short,
@@ -933,7 +936,7 @@ is_pydhcp() {
         set +o pipefail
 
         local temp_leases
-        temp_leases=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        temp_leases=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("$temp_leases")
         local current_lease=""
         local lease_content=""
@@ -1224,7 +1227,7 @@ drain_lease_queue() {
     [[ ! -f "$dhcpd_leases" ]] && { : > "$UHM_QUEUE"; return; }
 
     local tmp_file removed_count=0
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${tmp_file}")
     local queue_macs
     queue_macs=$(tr '[:upper:]' '[:lower:]' < "$UHM_QUEUE" | sort -u)

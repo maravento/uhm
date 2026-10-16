@@ -28,10 +28,22 @@ set -uo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhmunifi.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
 # File-only variant -- the startup fetch summary is recorded here without
 # also echoing to the terminal, since it happens before the menu is shown
@@ -40,12 +52,6 @@ log_only() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$log_file" 2>/dev/null || true
 }
 
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
-
 # prevent overlapping runs
 # Taken before the log is truncated: a second instance must not wipe the
 # log of the session already running, so it reports on stderr instead.
@@ -53,12 +59,12 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$script_lock")
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
 if ! : > "$log_file" 2>/dev/null; then
-    echo "ERROR: cannot write $log_file -- abort" >&2
+    echo "$(date '%Y-%m-%d %H:%M:%S') ERROR: cannot write $log_file -- abort" >&2
     exit 1
 fi
 
@@ -113,7 +119,6 @@ is_managed_mac() {
     done
     return 1
 }
-run_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
 # ------------------------------------------------------------------------------
 # ENV
@@ -248,8 +253,7 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$auth_token" ]; then
-            log "ERROR: check credentials/URL in uhm.env, or controller down"
-            log "ERROR: UniFi login failed -- abort"
+            log "ERROR: UniFi login failed; check uhm.env URL/login -- abort"
             exit 1
         fi
         session_cookie="TOKEN=${auth_token}"
@@ -272,8 +276,7 @@ do_login() {
     fi
 
     if [ -z "$session_cookie" ]; then
-        log "ERROR: check credentials/URL in uhm.env, or controller down"
-        log "ERROR: UniFi login failed -- abort"
+        log "ERROR: UniFi login failed; check uhm.env URL/login -- abort"
         exit 1
     fi
 }
@@ -303,8 +306,8 @@ api_get() {
     http_code=$(echo "$raw_response" | grep '__CODE__:' | cut -d: -f2 | tr -d '\r\n')
     response_body=$(echo "$raw_response" | grep -v '__CODE__:')
     if [[ "$http_code" == "401" ]]; then
-        log "INFO: session expired, re-authenticating"
-        do_login
+        log "INFO: session expired, re-authenticating" >&2
+        do_login >&2
         raw_response=$(curl -s "${tls_opts[@]}" -X GET \
             --connect-timeout 10 --max-time 30 \
             -w "\n__CODE__:%{http_code}" \
@@ -330,8 +333,8 @@ api_post() {
         "$api_base_url/$1")
     http_code=$(echo "$raw_response" | grep '__CODE__:' | cut -d: -f2 | tr -d '\r\n')
     if [[ "$http_code" == "401" ]]; then
-        log "INFO: session expired, re-authenticating"
-        do_login
+        log "INFO: session expired, re-authenticating" >&2
+        do_login >&2
         raw_response=$(curl -s "${tls_opts[@]}" -X POST \
             --connect-timeout 10 --max-time 30 \
             -w "\n__CODE__:%{http_code}" \
@@ -450,7 +453,7 @@ print_mac_status() {
     fi
 
     if [[ "$sta_authorized" == "false" && "$is_guest" == "true" ]]; then
-        echo "unauthorized on a Guest WLAN -- held at the captive portal"
+        echo "unauthorized on a Guest WLAN -- held at captive portal"
     fi
 }
 
@@ -573,7 +576,7 @@ interactive_forget_no_voucher() {
     done)
 
     if [ ${#novoucher_macs[@]} -eq 0 ]; then
-        log "INFO: No clients found matching the criteria."
+        log "INFO: No clients found matching criteria."
         return
     fi
 
@@ -766,7 +769,7 @@ interactive_revoke_by_code() {
 
     echo ""
     echo "NOTE: This list shows vouchers currently reported by stat/voucher."
-    echo "Vouchers deleted manually from the UniFi UI will not appear here"
+    echo "Vouchers deleted manually from UniFi UI will not appear here"
     echo "but can still be revoked -- enter their code directly if you know it."
     echo ""
     local target_code
@@ -997,7 +1000,7 @@ interactive_purge_all() {
 
     echo ""
     echo "Final confirmation required."
-    echo "Type the word YES (uppercase) to execute the purge:"
+    echo "Type word YES (uppercase) to execute purge:"
     echo ""
     read -rp " > " confirm_answer
     [[ "$confirm_answer" != "YES" ]] && log "INFO: Cancelled." && return

@@ -124,7 +124,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 <script>
 (function(){
 var API='../api.php';
-var current='',dirty=false;
+var current='',dirty=false,loadVersion=0;
 
 // Line formats are the ones uhmleases.sh enforces; shown here so a manual
 // edit is written right the first time.
@@ -214,7 +214,9 @@ function loadList(){
 
 function loadFile(name){
   clearMessage();
+  var version=++loadVersion;
   fetch(API+'?g=acl&a=read&name='+encodeURIComponent(name)).then(function(r){return r.json()}).then(function(d){
+    if(version!==loadVersion)return;
     if(d.error){showMessage(d.error,'err');return}
     current=d.name;
     ta.value=d.content||'';
@@ -222,18 +224,22 @@ function loadFile(name){
     document.getElementById('uhHint').textContent=hintFor(current.indexOf('mac-')===0?'mac':current);
     setDirty(false);
     renderGutter(0);
-  }).catch(function(){showMessage('cannot reach the API','err')});
+  }).catch(function(){
+    if(version===loadVersion)showMessage('cannot reach the API','err');
+  });
 }
 
 function saveFile(){
   if(!current)return;
   var button=document.getElementById('uhSave');
+  if(button.disabled)return;
   button.disabled=true;
   clearMessage();
-  fetch(API+'?g=acl&a=write&name='+encodeURIComponent(current),{
+  var savedName=current,savedContent=ta.value;
+  fetch(API+'?g=acl&a=write&name='+encodeURIComponent(savedName),{
     method:'POST',
     headers:{'Content-Type':'text/plain'},
-    body:ta.value
+    body:savedContent
   }).then(function(r){return r.json()}).then(function(d){
     button.disabled=false;
     if(d.error){
@@ -246,7 +252,7 @@ function saveFile(){
       return;
     }
     showMessage('Saved '+d.name+'.txt -- '+d.lines+' lines','ok');
-    setDirty(false);
+    if(current===savedName&&ta.value===savedContent)setDirty(false);
     renderGutter(0);
   }).catch(function(){button.disabled=false;showMessage('cannot reach the API','err')});
 }

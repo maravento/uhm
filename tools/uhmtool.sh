@@ -261,15 +261,15 @@ log_grep() {
 
     if [[ -z "$search_term" ]]; then
         json_error "empty search term"
-        return 0
+        return 1
     fi
     if [[ ! "$search_term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
         json_error "invalid search term"
-        return 0
+        return 1
     fi
     if [[ ! -f "$uhm_log_file" ]]; then
         json_error "log file not found"
-        return 0
+        return 1
     fi
 
     file_size=$(stat -c%s "$uhm_log_file" 2>/dev/null || echo 0)
@@ -288,13 +288,14 @@ log_tail() {
 
     if [[ ! -f "$uhm_log_file" ]]; then
         json_error "log file not found"
-        return 0
+        return 1
     fi
     file_size=$(stat -c%s "$uhm_log_file" 2>/dev/null || echo 0)
 
-    [[ "$byte_pos" =~ $UH_UINT ]] || byte_pos=0
+    [[ "$byte_pos" =~ $UH_UINT ]] \
+        && [ "$byte_pos" -le "$file_size" ] 2>/dev/null || byte_pos=0
     [[ "$log_lines" =~ $UH_UINT ]] || log_lines=200
-    (( log_lines > 5000 )) && log_lines=5000
+    { [ "${#log_lines}" -gt 4 ] || [ "$log_lines" -gt 5000 ]; } && log_lines=5000
     (( log_lines < 50 )) && log_lines=50
 
     if (( byte_pos == 0 )) || (( byte_pos > file_size )); then
@@ -379,11 +380,11 @@ acl_read() {
 
     if ! acl_file=$(acl_path_of "$acl_name") || [ -z "$acl_file" ]; then
         json_error "unknown ACL file"
-        return 0
+        return 1
     fi
     if [ ! -f "$acl_file" ]; then
         json_error "$(basename "$acl_file") not found"
-        return 0
+        return 1
     fi
 
     line_count=$(grep -c '' "$acl_file" 2>/dev/null) || line_count=0
@@ -400,22 +401,22 @@ acl_write() {
 
     if ! acl_file=$(acl_path_of "$acl_name") || [ -z "$acl_file" ]; then
         json_error "unknown ACL file"
-        return 0
+        return 1
     fi
     if [ ! -f "$acl_file" ]; then
         json_error "$(basename "$acl_file") not found"
-        return 0
+        return 1
     fi
 
-    new_content=$(cat)
+    new_content=$(cat) || { json_error "cannot read ACL content"; return 1; }
     byte_count=${#new_content}
     if (( byte_count > max_upload_bytes )); then
         json_error "content too large"
-        return 0
+        return 1
     fi
 
     line_pattern=$(acl_pattern_of "$acl_name")
-    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$tmp_file")
 
     while IFS= read -r acl_line || [ -n "$acl_line" ]; do
@@ -425,7 +426,7 @@ acl_write() {
         if ! [[ "$acl_line" =~ $line_pattern ]]; then
             jq -cn --argjson line "$line_number" --arg content "$acl_line" \
                 '{error: "malformed line", line: $line, content: $content}'
-            return 0
+            return 1
         fi
         if [[ "$acl_name" != "uhm-queue" ]]; then
             local malformed_ip
@@ -433,22 +434,36 @@ acl_write() {
             if [[ -n "$malformed_ip" ]] && ! [[ "$malformed_ip" =~ $UH_IPV4 ]]; then
                 jq -cn --argjson line "$line_number" --arg content "$acl_line" \
                     '{error: "invalid IP", line: $line, content: $content}'
-                return 0
+                return 1
             fi
         fi
-        printf '%s\n' "$acl_line" >> "$tmp_file"
+        if [[ "$acl_name" == "uhm-auth" || "$acl_name" == "uhm-grace" ]]; then
+            local entry_epoch
+            entry_epoch=$(printf '%s' "$acl_line" | cut -d';' -f5)
+            if ! [[ "$entry_epoch" =~ $UH_UINT ]]; then
+                jq -cn --argjson line "$line_number" --arg content "$acl_line" \
+                    '{error: "invalid epoch", line: $line, content: $content}'
+                return 1
+            fi
+        fi
+        printf '%s\n' "$acl_line" >> "$tmp_file" \
+            || { json_error "cannot write ACL content"; return 1; }
     done <<< "$new_content"
 
     # Same lock the daemon takes while it mutates the ACL files, on the same
     # descriptor 201, so a web save and a cycle never overlap.
     (umask 077; : >> "$cycle_lock")
     exec 201>"$cycle_lock"
-    flock -w 10 201 || { json_error "ACL file busy"; return 0; }
+    flock -w 10 201 || { json_error "ACL file busy"; return 1; }
 
-    cp -f "$acl_file" "${acl_file}.bak"
-    cat "$tmp_file" > "$acl_file"
-    chown root:root "$acl_file"
-    chmod 600 "$acl_file"
+    if ! { cp -f "$acl_file" "${acl_file}.bak" \
+        && cat "$tmp_file" > "$acl_file" \
+        && chown root:root "$acl_file" \
+        && chmod 600 "$acl_file"; }; then
+        flock -u 201
+        json_error "cannot save $(basename "$acl_file")"
+        return 1
+    fi
     flock -u 201
 
     line_number=$(grep -c '' "$acl_file" 2>/dev/null) || line_number=0
@@ -535,7 +550,7 @@ report_mac() {
 
     if ! [[ "$mac_addr" =~ $UH_MAC ]]; then
         json_error "invalid MAC format"
-        return 0
+        return 1
     fi
     report_mac_object "$mac_addr" | jq -c '{rows: [.]}'
 }
@@ -545,7 +560,7 @@ report_grace() {
     local total_entries=0 expired_count=0 tmp_file
 
     now_epoch=$(date +%s)
-    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$tmp_file")
 
     while IFS=';' read -r acl_status mac_addr client_ip client_name grace_ts rest_of_line; do
@@ -594,8 +609,8 @@ report_consistency() {
     local cnt_grace=0 cnt_block=0 cnt_acl=0 cnt_hotspot=0 cnt_leases=0 total_warnings=0
     local mac_object warn_count
 
-    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    rows_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    rows_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$tmp_file" "$rows_file")
 
     collect_all_macs "$tmp_file"
@@ -629,15 +644,15 @@ report_search() {
 
     if [[ -z "$search_query" ]]; then
         json_error "empty search term"
-        return 0
+        return 1
     fi
     if [[ ! "$search_query" =~ ^[[:alnum:].:_-]+$ ]]; then
         json_error "invalid search term"
-        return 0
+        return 1
     fi
 
-    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    rows_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    tmp_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    rows_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$tmp_file" "$rows_file")
 
     for acl_file in "$UHM_MACAUTH" "$UHM_GRACE" "$ACL_BLOCK_FILE"; do
@@ -653,9 +668,14 @@ report_search() {
     done
     shopt -u nullglob
 
-    grep -iF -- "$search_query" "$PYDHCPD_LEASES" \
-        | grep -ioE "$UH_MAC_RE" \
-        | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
+    awk -v query="${search_query,,}" '
+        /^lease [0-9.]+ \{$/ { mac=""; found=0 }
+        { if (index(tolower($0), query)) found=1 }
+        /^[[:space:]]*hardware[[:space:]]+ethernet[[:space:]]+/ {
+            mac=$3; sub(/;$/, "", mac)
+        }
+        /^}$/ { if (found && mac != "") print tolower(mac) }
+    ' "$PYDHCPD_LEASES" >> "$tmp_file"
 
     mapfile -t found_macs < <(sort -u "$tmp_file" | grep -E "$UH_MAC")
     for mac_addr in "${found_macs[@]+"${found_macs[@]}"}"; do
@@ -713,7 +733,7 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
         if [ -z "$auth_token" ]; then
             json_error "UniFi login failed"
-            exit 0
+            exit 1
         fi
         session_cookie="TOKEN=${auth_token}"
         jwt_payload=$(echo "$auth_token" | cut -d'.' -f2 | tr '_-' '/+')
@@ -731,7 +751,7 @@ do_login() {
 
     if [ -z "$session_cookie" ]; then
         json_error "UniFi login failed"
-        exit 0
+        exit 1
     fi
 }
 
@@ -775,13 +795,13 @@ unifi_status() {
     local sta_json guest_json voucher_json
     local sta_file guest_file voucher_file
 
-    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
-    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
-    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 1; }
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 1; }
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 1; }
 
-    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$sta_file" "$guest_file" "$voucher_file")
     printf '%s' "$sta_json" > "$sta_file"
     printf '%s' "$guest_json" > "$guest_file"
@@ -803,14 +823,14 @@ unifi_authorized() {
     local sta_json guest_json voucher_json auth_file
     local sta_file guest_file voucher_file
 
-    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
-    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
-    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 1; }
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 1; }
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 1; }
 
-    auth_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    auth_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    sta_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    voucher_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$auth_file" "$sta_file" "$guest_file" "$voucher_file")
     awk -F';' '$1=="a"{print tolower($2)"\t"$3"\t"$4"\t"$5}' "$UHM_MACAUTH" > "$auth_file"
     printf '%s' "$sta_json" > "$sta_file"
@@ -842,7 +862,7 @@ unifi_authorized() {
 unifi_vouchers() {
     local voucher_json
 
-    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 0; }
+    voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 1; }
     jq -c '{rows: [(.data // [])[] | {code: .code, quota: (.quota // 0), used: (.used // 0),
         duration: (.duration // 0), note: (.note // ""), create_time: (.create_time // 0)}]}' <<< "$voucher_json"
 }
@@ -853,9 +873,9 @@ unifi_vouchers() {
 unifi_guests() {
     local guest_json managed_file guest_file
 
-    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 0; }
-    managed_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
-    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 0; }
+    guest_json=$(unifi_fetch "stat/guest") || { printf '%s\n' "$guest_json"; exit 1; }
+    managed_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
+    guest_file=$(mktemp) || { json_error "cannot create temp file"; return 1; }
     temp_files+=("$managed_file" "$guest_file")
     managed_macs | sort -u > "$managed_file"
     printf '%s' "$guest_json" > "$guest_file"
@@ -876,7 +896,7 @@ unifi_guests() {
 unifi_unauthorized() {
     local sta_json
 
-    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 0; }
+    sta_json=$(unifi_fetch "stat/sta") || { printf '%s\n' "$sta_json"; exit 1; }
     jq -c --arg essid "${UHM_ESSID:-}" \
         '{rows: [(.data // [])[] | select((.essid // "") == $essid and (.authorized // false) == false)
           | {mac: (.mac // "" | ascii_downcase), ip: (.ip // ""), hostname: (.hostname // ""),
@@ -903,31 +923,43 @@ tool_group="${1:-}"
 tool_action="${2:-}"
 
 case "$tool_group" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+
+# start
+# Both messages go to stderr: stdout carries the JSON document, and
+# web/api.php discards stderr, so neither reaches the consumer.
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool start..." >&2
+
+case "$tool_group" in
     log)
         case "$tool_action" in
-            tail) log_tail "${3:-0}" "${4:-200}" ;;
-            grep) log_grep "${3:-}" ;;
-            status) log_status ;;
-            *) json_error "unknown log action" ;;
+            tail) log_tail "${3:-0}" "${4:-200}" || exit 1 ;;
+            grep) log_grep "${3:-}" || exit 1 ;;
+            status) log_status || exit 1 ;;
+            *) json_error "unknown log action"; exit 1 ;;
         esac
         ;;
     acl)
         load_env
         case "$tool_action" in
-            list) acl_list ;;
-            read) acl_read "${3:-}" ;;
-            write) acl_write "${3:-}" ;;
-            *) json_error "unknown acl action" ;;
+            list) acl_list || exit 1 ;;
+            read) acl_read "${3:-}" || exit 1 ;;
+            write) acl_write "${3:-}" || exit 1 ;;
+            *) json_error "unknown acl action"; exit 1 ;;
         esac
         ;;
     report)
         load_env
         case "$tool_action" in
-            mac) report_mac "${3:-}" ;;
-            grace) report_grace ;;
-            consistency) report_consistency ;;
-            search) report_search "${3:-}" ;;
-            *) json_error "unknown report action" ;;
+            mac) report_mac "${3:-}" || exit 1 ;;
+            grace) report_grace || exit 1 ;;
+            consistency) report_consistency || exit 1 ;;
+            search) report_search "${3:-}" || exit 1 ;;
+            *) json_error "unknown report action"; exit 1 ;;
         esac
         ;;
     unifi)
@@ -935,20 +967,24 @@ case "$tool_group" in
         unifi_require_config
         do_login
         case "$tool_action" in
-            status) unifi_status ;;
-            authorized) unifi_authorized ;;
-            vouchers) unifi_vouchers ;;
-            guests) unifi_guests ;;
-            unauthorized) unifi_unauthorized ;;
-            *) json_error "unknown unifi action" ;;
+            status) unifi_status || exit 1 ;;
+            authorized) unifi_authorized || exit 1 ;;
+            vouchers) unifi_vouchers || exit 1 ;;
+            guests) unifi_guests || exit 1 ;;
+            unauthorized) unifi_unauthorized || exit 1 ;;
+            *) json_error "unknown unifi action"; exit 1 ;;
         esac
-        ;;
-    -h|--help)
-        usage
         ;;
     *)
         json_error "unknown group"
+        exit 1
         ;;
 esac
+
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool done at: $(date '+%Y-%m-%d %H:%M:%S')" >&2
 
 exit 0

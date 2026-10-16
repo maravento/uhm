@@ -243,7 +243,7 @@ window.addEventListener('message',function(ev){
 });
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function hl(s,q){if(!q)return s;try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return s.split(/(<[^>]+>)/).map(function(part){return part.charAt(0)==='<'?part:part.replace(r,'<span class="hl">$1</span>')}).join('')}catch(e){return s}}
+function hl(s,q){if(!q)return s;try{var r=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');return s.split(/(<[^>]+>|&(?:#\d+|#x[\da-fA-F]+|[A-Za-z][A-Za-z0-9]*);)/).map(function(part){return /^(<|&)/.test(part)?part:part.replace(r,'<span class="hl">$1</span>')}).join('')}catch(e){return s}}
 var UH_MAC_RE=/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/gi;
 function cm(m,q){var s=esc(m);s=s.replace(UH_MAC_RE,'<span class="mc">$1</span>');s=s.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g,'<span class="ip">$1</span>');s=s.replace(/\b(authorized|voucher|guest|sta|managed)\b/gi,'<span class="kw-ok">$1</span>');s=s.replace(/\b(unauthorized|expired|evicting)\b/gi,'<span class="kw-w">$1</span>');s=s.replace(/\b(pending|skipping|reload)\b/gi,'<span class="kw-n">$1</span>');s=s.replace(/(^|\|)(auth|newauth|unlimited)=/gi,'$1<span class="fld-ok">$2</span>=');s=s.replace(/(^|\|)(grace|revoked|blockdhcp)=/gi,'$1<span class="fld-w">$2</span>=');s=s.replace(/(^|\|)(vouchers|limited|hotspot)=/gi,'$1<span class="fld-i">$2</span>=');return q?hl(s,q):s}
 function bi(rows){return rows.map(function(r){r._i=(r.ts+' '+r.level+' '+r.msg).toLowerCase();return r})}
@@ -298,6 +298,7 @@ function poll(){
   fetch(API+'?g=log&a=tail&pos='+fOff+'&lines=200',{signal:c.signal}).then(function(r){return r.json()}).then(function(d){
     if(g!==pGen)return;
     pRel();
+    if(d.rotated){ALL=[];nrc=0;fOff=d.pos;uhAF(0);ucs()}
     if(!d.rows||!d.rows.length)return;
     var nr=bi(d.rows.reverse());fOff=d.pos;
     if(!nr.length)return;

@@ -26,17 +26,17 @@ set -euo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
@@ -152,7 +152,8 @@ if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
 elif [[ -z "${WPAD_PORT:-}" ]]; then
     key_errors+=("WPAD_PORT not set")
 elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
-     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+     || [ "${#WPAD_PORT}" -gt 5 ] \
+     || [ "$WPAD_PORT" -lt 1 ] || [ "$WPAD_PORT" -gt 65535 ]; then
     key_errors+=("WPAD_PORT invalid port")
 fi
 if (( ${#key_errors[@]} > 0 )); then
@@ -284,6 +285,44 @@ unset required_file
 if [ ! -d "$acl_mac_path" ] || [ -z "$(ls -A "$acl_mac_path" 2>/dev/null)" ]; then
     log "ERROR: $acl_mac_path missing or empty -- abort"
     exit 1
+fi
+
+# REQUIRED DIRS
+# This script writes its own lists here, so an empty dir is enough
+if [ ! -d "$acl_ipt_path" ]; then
+    if mkdir -p "$acl_ipt_path"; then
+        log "WARNING: $acl_ipt_path was missing -- alert"
+    else
+        log "ERROR: cannot create $acl_ipt_path -- abort"
+        exit 1
+    fi
+fi
+for ipt_file in "$path_ips" "$path_macs"; do
+    if [ ! -e "$ipt_file" ]; then
+        if ! touch "$ipt_file"; then
+            log "ERROR: cannot create $ipt_file -- abort"
+            exit 1
+        fi
+        log "WARNING: $ipt_file was missing -- alert"
+    fi
+    if [ ! -f "$ipt_file" ]; then
+        log "ERROR: not a regular file: $ipt_file -- abort"
+        exit 1
+    fi
+done
+unset ipt_file
+
+# PORT LIST
+blockports_file="$acl_ipt_path/blockports.txt"
+blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/ipt/blockports.txt"
+if [ ! -f "$blockports_file" ]; then
+    if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
+        chown root:root "$blockports_file"
+    else
+        rm -f "$blockports_file"
+        log "ERROR: cannot download $blockports_file -- abort"
+        exit 1
+    fi
 fi
 
 # MAC SETS
@@ -812,23 +851,13 @@ done
 # - BTC/ETH (8332,8333,8545,30303) - TCP
 # - IPP (631) - TCP
 
-blockports_file="$acl_ipt_path/blockports.txt"
-blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/ipt/blockports.txt"
-if [ ! -f "$blockports_file" ]; then
-    if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
-        chown root:root "$blockports_file"
-    else
-        log "WARNING: cannot download $blockports_file -- alert"
-    fi
-fi
-
 if ! ipset list blockports &>/dev/null; then
     ipset create blockports bitmap:port range 0-65535 -exist
 else
     ipset flush blockports
 fi
 for blocked_ports in $(sort -V -u "$blockports_file" 2>/dev/null); do
-    [[ "$blocked_ports" =~ $UH_UINT ]] && (( blocked_ports <= 65535 )) && ipset add blockports "$blocked_ports" -exist
+    [[ "$blocked_ports" =~ $UH_UINT ]] && [ "${#blocked_ports}" -le 5 ] && [ "$blocked_ports" -le 65535 ] && ipset add blockports "$blocked_ports" -exist
 done
 for proto_name in tcp udp; do
     #iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -p "$proto_name" -m set --match-set blockports dst -m hashlimit --hashlimit-name blockports-drop --hashlimit-above 3/min --hashlimit-burst 3 --hashlimit-mode srcip,dstport -j NFLOG --nflog-prefix "BLOCKPORT DROP: "

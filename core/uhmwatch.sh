@@ -43,17 +43,23 @@ esac
 # path for cron
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
 
 # log file perms (as installed by uhmsetup.sh)
 log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
@@ -132,11 +138,23 @@ cron_d_set() {
     local cron_file="/etc/cron.d/uhm"
     local cron_tmp
 
-    cron_tmp=$(mktemp)
-    [ -f "$cron_file" ] && { grep -vF "$match" "$cron_file" > "$cron_tmp" || true; }
-    [ -n "$line" ] && printf '%s\n' "$line" >> "$cron_tmp"
+    cron_tmp=$(mktemp) || return 1
+    if [ -f "$cron_file" ]; then
+        grep -vF "$match" "$cron_file" > "$cron_tmp" || {
+            [ "$?" -eq 1 ] || { rm -f "$cron_tmp"; return 1; }
+        }
+    fi
+    if [ -n "$line" ]; then
+        printf '%s\n' "$line" >> "$cron_tmp" || {
+            rm -f "$cron_tmp"
+            return 1
+        }
+    fi
     if [ -s "$cron_tmp" ]; then
-        install -m 644 -o root -g root "$cron_tmp" "$cron_file"
+        if ! install -m 644 -o root -g root "$cron_tmp" "$cron_file"; then
+            rm -f "$cron_tmp"
+            return 1
+        fi
     else
         rm -f "$cron_file"
     fi
@@ -154,18 +172,21 @@ install_module() {
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
         echo "Deploying script to $target_path..."
-        mkdir -p "$(dirname "$target_path")"
-        mkdir -p "$(dirname "$target_path")/../tools"
-        install -m 644 -o root -g root "$(dirname "$self_path")/../tools/uhmenv.sh" "$(dirname "$target_path")/../tools/uhmenv.sh"
-        install -m 755 -o root -g root "$self_path" "$target_path"
+        if ! { mkdir -p "$(dirname "$target_path")" \
+            && mkdir -p "$(dirname "$target_path")/../tools" \
+            && install -m 644 -o root -g root "$(dirname "$self_path")/../tools/uhmenv.sh" "$(dirname "$target_path")/../tools/uhmenv.sh" \
+            && install -m 755 -o root -g root "$self_path" "$target_path"; }; then
+            log "ERROR: cannot deploy to $target_path -- abort"
+            exit 1
+        fi
     fi
 
-    cron_d_set "$target_path" "* * * * * root $target_path"
+    cron_d_set "$target_path" "* * * * * root $target_path" || { log "ERROR: cannot write uhm cron -- abort"; exit 1; }
     echo "Cron entry registered: * * * * * root $target_path"
 
     echo ""
-    echo "Installed. First run happens on the next minute mark."
-    echo "Check the log with: tail -f $log_file"
+    echo "Installed. First run happens on next minute mark."
+    echo "Check log with: tail -f $log_file"
     echo ""
 }
 
@@ -175,7 +196,7 @@ install_module() {
 
 uninstall_module() {
     echo "Removing uhmwatch cron entry..."
-    cron_d_set "$target_path" ""
+    cron_d_set "$target_path" "" || { log "ERROR: cannot write uhm cron -- abort"; exit 1; }
     echo "Cron entry removed. The uhmwatch.sh script was not deleted."
 }
 
@@ -183,13 +204,20 @@ uninstall_module() {
 # ACTIONS
 # ------------------------------------------------------------------------------
 
+# start -- console only: this script runs every minute via cron, so writing
+# the start/end pair to uhm.log would add ~2880 lines a day of routine noise
+# to the same log uhmalert.sh reads to detect real failures.
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch start..."
+
 case "${1:-}" in
     install)
         install_module
+        echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     uninstall)
         uninstall_module
+        echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
 esac
@@ -327,7 +355,6 @@ check_uhmd() {
         systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
             log "INFO: uhmd restarted"
-            clear_recovery_attempt "uhmd.service"
         else
             log "WARNING: uhmd restart FAILED -- alert"
         fi
@@ -352,7 +379,6 @@ check_ualert() {
         systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
             log "INFO: uhmalert restarted"
-            clear_recovery_attempt "uhmalert.service"
         else
             log "WARNING: uhmalert restart FAILED -- alert"
         fi
@@ -383,7 +409,6 @@ check_pydhcpd() {
         systemctl reset-failed pydhcpd.service 2>/dev/null || true
         if systemctl restart pydhcpd.service; then
             log "INFO: pydhcpd restarted"
-            clear_recovery_attempt "pydhcpd.service"
         else
             log "WARNING: pydhcpd restart FAILED -- alert"
         fi
@@ -450,7 +475,6 @@ check_uosserver() {
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
             log "INFO: uosserver started"
-            clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver start FAILED -- alert"
         fi
@@ -482,7 +506,6 @@ check_uosserver() {
             systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
                 log "INFO: uosserver restarted"
-                clear_recovery_attempt "uosserver.service"
             else
                 log "WARNING: uosserver restart FAILED -- alert"
             fi
@@ -525,13 +548,11 @@ check_uosserver() {
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
             log "INFO: uosserver restarted (login failed)"
-            clear_recovery_attempt "uosserver.service"
         else
             log "WARNING: uosserver restart FAILED -- alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd and uhmwatch cron -- alert"
+        log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -- alert"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env, UOS is responding -- alert"
@@ -549,7 +570,6 @@ check_unifi_classic() {
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
             log "INFO: unifi started"
-            clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service start FAILED -- alert"
         fi
@@ -577,7 +597,6 @@ check_unifi_classic() {
             systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
                 log "INFO: unifi restarted"
-                clear_recovery_attempt "unifi.service"
             else
                 log "WARNING: unifi.service restart FAILED -- alert"
             fi
@@ -620,13 +639,11 @@ check_unifi_classic() {
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
             log "INFO: unifi restarted (login failed)"
-            clear_recovery_attempt "unifi.service"
         else
             log "WARNING: unifi.service restart FAILED -- alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: rate limited (HTTP 429), not a credentials issue"
-        log "WARNING: stop uhmd and uhmwatch cron -- alert"
+        log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -- alert"
     else
         log "WARNING: credentials rejected (HTTP $http_code)"
         log "WARNING: check uhm.env, unifi.service is responding -- alert"
@@ -636,11 +653,6 @@ check_unifi_classic() {
 # ------------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------------
-
-# start -- console only: this script runs every minute via cron, so writing
-# the start/end pair to uhm.log would add ~2880 lines a day of routine noise
-# to the same log uhmalert.sh reads to detect real failures.
-echo "uhmwatch start..."
 
 check_uhmd
 check_ualert
@@ -656,4 +668,4 @@ else
 fi
 
 # end
-echo "uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"

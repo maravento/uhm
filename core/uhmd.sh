@@ -39,7 +39,7 @@ log_file="/var/log/uhm.log"
 cycle_mark_file="/run/uhmd_cycle_mark"
 log() {
     if [[ ! -e "$cycle_mark_file" ]]; then
-        echo "--------------------------------------------------------------------------------" >> "$log_file" 2>/dev/null || true
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ----------------------------------------" >> "$log_file" 2>/dev/null || true
         : > "$cycle_mark_file" 2>/dev/null || true
     fi
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$log_file" 2>/dev/null || true
@@ -56,7 +56,7 @@ log_raw() {
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
     log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
@@ -214,9 +214,12 @@ ensure_acl_lists() {
     local check_file file_owner file_perms
     for check_file in "$@"; do
         if [ ! -f "$check_file" ]; then
-            touch "$check_file"
-            chmod 600 "$check_file"
-            chown root:root "$check_file"
+            if ! { touch "$check_file" \
+                && chmod 600 "$check_file" \
+                && chown root:root "$check_file"; }; then
+                log "ERROR: cannot create $(basename "$check_file") -- abort"
+                exit 1
+            fi
             continue
         fi
         file_owner=$(stat -c '%U' "$check_file" 2>/dev/null)
@@ -454,7 +457,6 @@ hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
 # KEY GUARD
 # Each key above is valid on its own. These three relations are not.
 if (( hotspot_ini_int > hotspot_end_int )); then
-    log "ERROR: hotspot range $UHM_INI_RANGE-$UHM_END_RANGE"
     log "ERROR: hotspot range reversed in $(basename "$config_file") -- abort"
     exit 1
 fi
@@ -967,7 +969,7 @@ authorize_managed_macs() {
 check_malformed() {
     local check_file="$1" line_pattern="$2" check_ip="${3:-1}" on_malformed="${4:-drop}"
     [[ -f "$check_file" ]] || return 0
-    local tmp_file env_line client_ip dropped_count=0
+    local tmp_file env_line client_ip dropped_count=0 write_failed=0
     tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
     temp_files+=("$tmp_file")
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
@@ -993,8 +995,13 @@ check_malformed() {
                 continue
             fi
         fi
-        printf '%s\n' "$env_line" >> "$tmp_file"
+        printf '%s\n' "$env_line" >> "$tmp_file" || write_failed=1
     done < "$check_file"
+    if (( write_failed )); then
+        log "WARNING: cannot normalize $(basename "$check_file") -- alert"
+        rm -f "$tmp_file"
+        return 1
+    fi
     if [[ "$on_malformed" == "report" ]]; then
         rm -f "$tmp_file"
         return 0
@@ -1030,6 +1037,7 @@ dedup_mac_lists() {
 
     local sanitized_block=0
     local discarded_block=0
+    local write_failed=0
 
     if [[ -f "$ACL_BLOCK_FILE" ]]; then
         local tmp_block
@@ -1038,7 +1046,7 @@ dedup_mac_lists() {
         while IFS= read -r env_line || [[ -n "$env_line" ]]; do
             [[ -z "$env_line" ]] && continue
             if [[ "$env_line" != "a;"* ]]; then
-                echo "$env_line" >> "$tmp_block"
+                echo "$env_line" >> "$tmp_block" || write_failed=1
                 continue
             fi
             local block_mac block_ip block_name field_count
@@ -1053,16 +1061,21 @@ dedup_mac_lists() {
                 if [[ "$block_mac" =~ $UH_MAC ]] && \
                    [[ "$block_ip" =~ $UH_IPV4 ]] && \
                    [[ "$block_name" =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then
-                    echo "a;${block_mac};${block_ip};${block_name};" >> "$tmp_block"
+                    echo "a;${block_mac};${block_ip};${block_name};" >> "$tmp_block" || write_failed=1
                     (( sanitized_block++ )) || true
                 else
                     log "INFO: malformed blockdhcp line -- skip"
                     (( discarded_block++ )) || true
                 fi
             else
-                echo "$env_line" >> "$tmp_block"
+                echo "$env_line" >> "$tmp_block" || write_failed=1
             fi
         done < "$ACL_BLOCK_FILE"
+        if (( write_failed )); then
+            log "WARNING: cannot rebuild blockdhcp.txt -- alert"
+            rm -f "$tmp_block"
+            return 1
+        fi
         local after_lines
         after_lines=$(wc -l < "$tmp_block" 2>/dev/null || echo -1)
         if (( after_lines < 0 )); then
@@ -1091,7 +1104,11 @@ sort_acl_files() {
     if [[ -s "$UHM_MACAUTH" ]]; then
         tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
         temp_files+=("${tmp_file}")
-        sort -t';' -k3,3V "$UHM_MACAUTH" | uniq > "$tmp_file"
+        if ! sort -t';' -k3,3V "$UHM_MACAUTH" | uniq > "$tmp_file"; then
+            log "WARNING: cannot sort uhm-auth.txt -- alert"
+            rm -f "$tmp_file"
+            return 1
+        fi
         if [[ ! -s "$tmp_file" ]]; then
             log "INFO: sorted output is empty, update -- skip"
             log "INFO: $UHM_MACAUTH"
@@ -1132,8 +1149,13 @@ add_mac_to_acl() {
             log "INFO: new end_time $existing_end -> $end_time"
         fi
     else
-        queue_lease_removal "$mac_addr"
-        echo "$new_line" >> "$UHM_MACAUTH"
+        if ! queue_lease_removal "$mac_addr"; then
+            return 1
+        fi
+        if ! echo "$new_line" >> "$UHM_MACAUTH"; then
+            log "WARNING: cannot write uhm-auth.txt -- alert"
+            return 1
+        fi
         local exp_human
         exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
         log "INFO: Authorized $mac_addr"
@@ -1287,7 +1309,7 @@ process_new_leases() {
                 log "INFO: ip=$client_ip host=${client_name:0:20}"
                 (( added_count++ )) || true
             elif [[ -n "$mac_addr" && -n "$client_ip" ]] && ! ip_in_lan "$client_ip"; then
-                log "INFO: new lease outside the LAN subnet"
+                log "INFO: new lease outside LAN subnet"
                 log "INFO: ip=$client_ip mac=$mac_addr"
                 log "INFO: subnet is $SERV_SUBNET/$SERV_MASK -- skip"
             fi
@@ -1643,7 +1665,7 @@ kick_newly_authorized() {
         # managed MAC slip through, which is itself worth surfacing.
         if is_managed_mac "$mac_addr"; then
             log "WARNING: managed device, not kicked, upstream filter failed"
-            log "WARNING: $mac_addr reached the kick loop -- alert"
+            log "WARNING: $mac_addr reached kick loop -- alert"
             continue
         fi
         if [[ "$exit_code" == "ok" ]]; then
