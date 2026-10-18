@@ -5,19 +5,10 @@
 #
 # uhmunifi -- UniFi Network Hotspot client audit and management tool
 #
-# DESCRIPTION:
-# Interactive tool that acts on the UniFi API directly: deletes and revokes
-# vouchers, forgets clients, and looks up a single MAC's live state.
-# Requires root.
-#
 # USAGE:
 # sudo bash uhmunifi.sh
 #
-#   [1] Check MAC    live UniFi state for one MAC
-#   [2] Actions      voucher and client management submenu
-#   [q] Quit
 #
-# ENV: /etc/uhm/uhm.env
 # LOG: /var/log/uhmunifi.log
 #
 ################################################################################
@@ -30,7 +21,7 @@ set -uo pipefail
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -56,15 +47,18 @@ log_only() {
 # Taken before the log is truncated: a second instance must not wipe the
 # log of the session already running, so it reports on stderr instead.
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -abort" >&2
     exit 1
 fi
 
 if ! : > "$log_file" 2>/dev/null; then
-    echo "$(date '%Y-%m-%d %H:%M:%S') ERROR: cannot write $log_file -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot write $log_file -abort" >&2
     exit 1
 fi
 
@@ -77,9 +71,9 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhmunifi.log perms fixed -- fixed"
+            log "INFO: uhmunifi.log perms fixed -fixed"
         else
-            log "WARNING: cannot fix uhmunifi.log perms -- alert"
+            log "WARNING: cannot fix uhmunifi.log perms -alert"
         fi
         ;;
 esac
@@ -88,7 +82,7 @@ unset log_stat
 # dependencies
 for dep_pkg in curl jq coreutils util-linux grep sed; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -132,7 +126,7 @@ env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
-        log "ERROR: $(basename "$env_path") not found -- abort"
+        log "ERROR: $(basename "$env_path") not found -abort"
         exit 1
     fi
     env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
@@ -141,9 +135,9 @@ for env_spec in "${env_specs[@]}"; do
        || [[ "$env_perms" != "$env_perms_want" ]]; then
         if chown "$env_owner_want" "$env_path" 2>/dev/null \
            && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
-            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+            log "INFO: $(basename "$env_path") perms fixed -fixed"
         else
-            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            log "ERROR: cannot fix $(basename "$env_path") perms -abort"
             exit 1
         fi
     fi
@@ -172,9 +166,9 @@ elif [[ -z "${ACL_MAC_PATH:-}" ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error"
+        log "ERROR: $key_error -abort"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
 fi
 for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
@@ -203,9 +197,9 @@ elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error"
+        log "ERROR: $key_error -abort"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -- abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
@@ -213,11 +207,11 @@ unset key_errors key_error env_key
 # FALLBACK
 # Second layer of protection, behind KEY CHECK -- by design never reached
 if [ -z "${UNIFI_SITE:-}" ]; then
-    log "WARNING: no UNIFI_SITE in uhm.env -- fallback"
+    log "WARNING: no UNIFI_SITE in uhm.env -fallback"
 fi
 UNIFI_SITE="${UNIFI_SITE:-default}"
 if [ -z "${UNIFI_TYPE:-}" ]; then
-    log "WARNING: no UNIFI_TYPE in uhm.env -- fallback"
+    log "WARNING: no UNIFI_TYPE in uhm.env -fallback"
 fi
 UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 
@@ -253,7 +247,7 @@ do_login() {
             | sed -E "s/.*TOKEN=([^;]+).*/\1/" | tr -d "\r")
 
         if [ -z "$auth_token" ]; then
-            log "ERROR: UniFi login failed; check uhm.env URL/login -- abort"
+            log "ERROR: UniFi login failed; check uhm.env URL/login -abort"
             exit 1
         fi
         session_cookie="TOKEN=${auth_token}"
@@ -276,7 +270,7 @@ do_login() {
     fi
 
     if [ -z "$session_cookie" ]; then
-        log "ERROR: UniFi login failed; check uhm.env URL/login -- abort"
+        log "ERROR: UniFi login failed; check uhm.env URL/login -abort"
         exit 1
     fi
 }
@@ -371,7 +365,7 @@ voucher_rc=$(echo "$voucher_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 for endpoint_rc in "stat/sta:$sta_rc" "stat/guest:$guest_rc" "stat/voucher:$voucher_rc"; do
     if [[ "${endpoint_rc#*:}" != "ok" ]]; then
         log "ERROR: controller may be unavailable, try again later"
-        log "ERROR: ${endpoint_rc%%:*} query failed -- abort"
+        log "ERROR: ${endpoint_rc%%:*} query failed -abort"
         exit 1
     fi
 done
@@ -381,13 +375,13 @@ shopt -s nullglob
 uhm_mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
 shopt -u nullglob
 if (( ${#uhm_mac_lists[@]} == 0 )); then
-    log "ERROR: no mac-*.txt in $ACL_MAC_PATH -- abort"
+    log "ERROR: no mac-*.txt in $ACL_MAC_PATH -abort"
     exit 1
 fi
 for check_file in "$UHM_MACAUTH" "${uhm_mac_lists[@]}"; do
     grep -qE '' "$check_file"
     if (( $? > 1 )); then
-        log "ERROR: cannot read $check_file -- abort"
+        log "ERROR: cannot read $check_file -abort"
         exit 1
     fi
 done
@@ -396,7 +390,7 @@ unset uhm_mac_lists check_file
 while IFS=';' read -r acl_status auth_mac rest_of_line; do
     [ "$acl_status" != "a" ] && continue
     if [ -z "$auth_mac" ]; then
-        log "ERROR: malformed line in $UHM_MACAUTH -- abort"
+        log "ERROR: malformed line in $UHM_MACAUTH -abort"
         exit 1
     fi
 done < "$UHM_MACAUTH"
@@ -408,11 +402,6 @@ voucher_count=$(echo "$voucher_json" | jq '.data|length' 2>/dev/null)
 log_only "INFO: stat/sta -> $sta_rc ($sta_count entries)"
 log_only "INFO: stat/guest -> $guest_rc ($guest_count entries)"
 log_only "INFO: stat/voucher -> $voucher_rc ($voucher_count entries)"
-
-press_enter() {
-    echo ""
-    read -rp " Press ENTER to continue..." _
-}
 
 # CHECK MAC
 # Live UniFi state for one MAC: essid, authorized, is_guest (from stat/sta)
@@ -484,7 +473,7 @@ interactive_delete_unused() {
     ' 2>/dev/null)
 
     if [ ${#unused_ids[@]} -eq 0 ]; then
-        log "INFO: No unused vouchers found."
+        log "INFO: No unused vouchers found"
         return
     fi
 
@@ -507,7 +496,7 @@ interactive_delete_unused() {
 
     echo ""
     read -rp " Confirm deletion of ${#unused_ids[@]} unused voucher(s)? [y/N]: " confirm_answer
-    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
     for voucher_id in "${unused_ids[@]}"; do
@@ -518,10 +507,10 @@ interactive_delete_unused() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "INFO: Failed to delete voucher: $voucher_code -- skip"
+            || log "INFO: Failed to delete voucher: $voucher_code -skip"
     done
 
-    log "INFO: Done."
+    log "INFO: Unused voucher cleanup finished"
 }
 
 # ACTION [2]: FORGET CLIENTS WITHOUT VOUCHER
@@ -533,11 +522,11 @@ interactive_forget_no_voucher() {
     echo "============================================================================"
 
     if [[ "$guest_rc" != "ok" ]]; then
-        log "INFO: stat/guest data unavailable (rc=$guest_rc) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$guest_rc) -skip"
         return
     fi
     if [[ "$sta_rc" != "ok" ]]; then
-        log "INFO: stat/sta data unavailable (rc=$sta_rc) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$sta_rc) -skip"
         return
     fi
 
@@ -546,7 +535,7 @@ interactive_forget_no_voucher() {
     local all_users_rc
     all_users_rc=$(echo "$all_users_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
     if [ "$all_users_rc" != "ok" ]; then
-        log "INFO: Could not fetch rest/user (rc=$all_users_rc) -- skip"
+        log "INFO: Could not fetch rest/user (rc=$all_users_rc) -skip"
         return
     fi
 
@@ -576,7 +565,7 @@ interactive_forget_no_voucher() {
     done)
 
     if [ ${#novoucher_macs[@]} -eq 0 ]; then
-        log "INFO: No clients found matching criteria."
+        log "INFO: No clients found matching criteria"
         return
     fi
 
@@ -596,7 +585,7 @@ interactive_forget_no_voucher() {
 
     echo ""
     read -rp " Confirm forget of ${#novoucher_macs[@]} client(s)? [y/N]: " confirm_answer
-    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
     for mac_addr in "${novoucher_macs[@]}"; do
@@ -606,10 +595,10 @@ interactive_forget_no_voucher() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -skip"
     done
 
-    log "INFO: Done."
+    log "INFO: Clients without voucher cleanup finished"
 }
 
 # ACTION [3]: DELETE EXPIRED VOUCHERS
@@ -624,15 +613,15 @@ interactive_delete_expired() {
     echo "============================================================================"
 
     if [[ "$voucher_rc" != "ok" ]]; then
-        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -skip"
         return
     fi
     if [[ "$sta_rc" != "ok" ]]; then
-        log "INFO: stat/sta data unavailable (rc=$sta_rc) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$sta_rc) -skip"
         return
     fi
     if [[ "$guest_rc" != "ok" ]]; then
-        log "INFO: stat/guest data unavailable (rc=$guest_rc) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$guest_rc) -skip"
         return
     fi
 
@@ -644,7 +633,7 @@ interactive_delete_expired() {
     ' 2>/dev/null)
 
     if [ ${#expired_ids[@]} -eq 0 ]; then
-        log "INFO: No expired vouchers found."
+        log "INFO: No expired vouchers found"
         return
     fi
 
@@ -667,7 +656,7 @@ interactive_delete_expired() {
 
     echo ""
     read -rp " Confirm deletion of ${#expired_ids[@]} expired voucher(s)? [y/N]: " confirm_answer
-    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
 
@@ -681,7 +670,7 @@ interactive_delete_expired() {
         if [ "$delete_rc" = "ok" ]; then
             log "INFO: Deleted voucher: $voucher_code"
         else
-            log "WARNING: voucher $voucher_code and clients not deleted -- alert"
+            log "WARNING: voucher $voucher_code and clients not deleted -alert"
             continue
         fi
 
@@ -710,7 +699,7 @@ interactive_delete_expired() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$forget_rc" = "ok" ] \
                 && log "INFO: Forgotten: $mac_addr" \
-                || log "INFO: Failed to forget: $mac_addr -- skip"
+                || log "INFO: Failed to forget: $mac_addr -skip"
         done < <(echo "$guest_json" | jq -r --arg code "$voucher_code" '
             .data[]
             | select(.voucher_code == $code)
@@ -718,7 +707,7 @@ interactive_delete_expired() {
         ' 2>/dev/null | sort -u)
     done
 
-    log "INFO: Done."
+    log "INFO: Expired voucher cleanup finished"
 }
 
 # ACTION [4]: REVOKE VOUCHER BY CODE
@@ -730,15 +719,15 @@ interactive_revoke_by_code() {
     echo "============================================================================"
 
     if [[ "$voucher_rc" != "ok" ]]; then
-        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -skip"
         return
     fi
     if [[ "$guest_rc" != "ok" ]]; then
-        log "INFO: stat/guest data unavailable (rc=$guest_rc) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$guest_rc) -skip"
         return
     fi
     if [[ "$sta_rc" != "ok" ]]; then
-        log "INFO: stat/sta data unavailable (rc=$sta_rc) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$sta_rc) -skip"
         return
     fi
 
@@ -750,7 +739,7 @@ interactive_revoke_by_code() {
     ' 2>/dev/null | sort -t$'\t' -k2)
 
     if [ ${#active_vouchers[@]} -eq 0 ]; then
-        log "INFO: No active vouchers found (used > 0)."
+        log "INFO: No active vouchers found (used > 0)"
         return
     fi
 
@@ -768,16 +757,16 @@ interactive_revoke_by_code() {
     done
 
     echo ""
-    echo "NOTE: This list shows vouchers currently reported by stat/voucher."
+    echo "NOTE: This list shows vouchers currently reported by stat/voucher"
     echo "Vouchers deleted manually from UniFi UI will not appear here"
-    echo "but can still be revoked -- enter their code directly if you know it."
+    echo "but can still be revoked -- enter their code directly if you know it"
     echo ""
     local target_code
     read -rp " Enter voucher code to revoke: " target_code
     target_code=$(echo "$target_code" | tr -d '[:space:]')
 
     if [ -z "$target_code" ]; then
-        log "INFO: No code entered. Cancelled."
+        log "INFO: No code entered. Cancelled"
         return
     fi
 
@@ -801,7 +790,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $target_code" \
-            || log "INFO: delete voucher failed: (rc=$delete_rc) -- skip"
+            || log "INFO: delete voucher failed: (rc=$delete_rc) -skip"
     else
         log "INFO: voucher $target_code not found, proceeding with cleanup"
     fi
@@ -842,7 +831,7 @@ interactive_revoke_by_code() {
 
     echo ""
     read -rp " Confirm revocation of ${#all_macs[@]} client(s) for code $target_code? [y/N]: " confirm_answer
-    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
 
@@ -860,7 +849,7 @@ interactive_revoke_by_code() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$unauth_rc" = "ok" ] \
                 && log "INFO: Revoked: $mac_addr" \
-                || log "INFO: revoke failed: $mac_addr (rc=$unauth_rc) -- skip"
+                || log "INFO: revoke failed: $mac_addr (rc=$unauth_rc) -skip"
         fi
 
         local forget_rc
@@ -869,7 +858,7 @@ interactive_revoke_by_code() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: forget failed: $mac_addr (rc=$forget_rc) -- skip"
+            || log "INFO: forget failed: $mac_addr (rc=$forget_rc) -skip"
     done
 
     log "INFO: revocation complete for code: $target_code"
@@ -891,11 +880,11 @@ interactive_forget_flagged() {
     echo "============================================================================"
 
     if [[ "$guest_rc" != "ok" ]]; then
-        log "INFO: stat/guest data unavailable (rc=$guest_rc) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$guest_rc) -skip"
         return
     fi
     if [[ "$sta_rc" != "ok" ]]; then
-        log "INFO: stat/sta data unavailable (rc=$sta_rc) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$sta_rc) -skip"
         return
     fi
 
@@ -914,7 +903,7 @@ interactive_forget_flagged() {
     done)
 
     if [ ${#flagged_sessions[@]} -eq 0 ]; then
-        log "INFO: No sessions marked (!) found."
+        log "INFO: No sessions marked (!) found"
         return
     fi
 
@@ -929,7 +918,7 @@ interactive_forget_flagged() {
 
     echo ""
     read -rp " Confirm unauthorize + forget of ${#flagged_sessions[@]} session(s)? [y/N]: " confirm_answer
-    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
     for sta_row in "${flagged_sessions[@]}"; do
@@ -949,25 +938,25 @@ interactive_forget_flagged() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -skip"
     done
 
-    log "INFO: Done."
+    log "INFO: Marked session cleanup finished"
 }
 
 # ACTION [6]: PURGE EVERYTHING
 # Removes every voucher and all client history
 interactive_purge_all() {
     if [[ "$voucher_rc" != "ok" ]]; then
-        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -- skip"
+        log "INFO: stat/voucher data unavailable (rc=$voucher_rc) -skip"
         return
     fi
     if [[ "$sta_rc" != "ok" ]]; then
-        log "INFO: stat/sta data unavailable (rc=$sta_rc) -- skip"
+        log "INFO: stat/sta data unavailable (rc=$sta_rc) -skip"
         return
     fi
     if [[ "$guest_rc" != "ok" ]]; then
-        log "INFO: stat/guest data unavailable (rc=$guest_rc) -- skip"
+        log "INFO: stat/guest data unavailable (rc=$guest_rc) -skip"
         return
     fi
 
@@ -991,19 +980,19 @@ interactive_purge_all() {
     echo "- DISCONNECT all currently connected guests"
     echo "- ERASE all guest history -- clients will be unknown to UniFi"
     echo ""
-    echo "============================================================================"
     echo "!! THIS ACTION CANNOT BE UNDONE !!"
-    echo "============================================================================"
     echo ""
     read -rp " Are you sure you want to proceed? [y/N]: " preconfirm_answer
-    [[ ! "$preconfirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled." && return
+    [[ ! "$preconfirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
-    echo "Final confirmation required."
+    echo "============================================================================"
+    echo "Final confirmation required"
+    echo "============================================================================"
     echo "Type word YES (uppercase) to execute purge:"
     echo ""
     read -rp " > " confirm_answer
-    [[ "$confirm_answer" != "YES" ]] && log "INFO: Cancelled." && return
+    [[ "$confirm_answer" != "YES" ]] && log "INFO: Cancelled" && return
 
     echo ""
 
@@ -1016,7 +1005,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "INFO: Failed to delete voucher: $voucher_code -- skip"
+            || log "INFO: Failed to delete voucher: $voucher_code -skip"
     done < <(echo "$voucher_json" | jq -r '.data[] | ._id' 2>/dev/null)
 
     local mac_addr unauth_rc
@@ -1040,10 +1029,10 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -- skip"
+            || log "INFO: Failed to forget: $mac_addr -skip"
     done < <(echo "$guest_json" | jq -r '.data[] | (.mac | ascii_downcase)' 2>/dev/null | sort -u)
 
-    log "INFO: Purge complete."
+    log "INFO: Purge complete"
 }
 # SUBMENU: ACTIONS
 # Options that modify vouchers or client history
@@ -1065,13 +1054,13 @@ actions_menu() {
         read -rp " Select option [b]: " menu_option
         menu_option="${menu_option:-b}"
         case "$menu_option" in
-            1) interactive_delete_unused; press_enter ;;
-            2) interactive_forget_no_voucher; press_enter ;;
-            3) interactive_delete_expired; press_enter ;;
-            4) interactive_revoke_by_code; press_enter ;;
-            5) interactive_forget_flagged; press_enter ;;
-            6) interactive_purge_all; press_enter ;;
-            b|B) break ;;
+            1) interactive_delete_unused; return 0 ;;
+            2) interactive_forget_no_voucher; return 0 ;;
+            3) interactive_delete_expired; return 0 ;;
+            4) interactive_revoke_by_code; return 0 ;;
+            5) interactive_forget_flagged; return 0 ;;
+            6) interactive_purge_all; return 0 ;;
+            b|B) return 2 ;;
             *) echo "Invalid option"; sleep 1 ;;
         esac
     done
@@ -1095,9 +1084,16 @@ main_menu() {
         read -rp " Select option [q]: " menu_option
         menu_option="${menu_option:-q}"
         case "$menu_option" in
-            1) check_mac_menu ;;
-            2) actions_menu ;;
-            q|Q) log "INFO: Exiting."; break ;;
+            1) check_mac_menu; break ;;
+            2)
+                actions_menu
+                case "$?" in
+                    0) break ;;
+                    2) continue ;;
+                    *) return 1 ;;
+                esac
+                ;;
+            q|Q) log "INFO: Exiting"; break ;;
             *) echo "Invalid option"; sleep 1 ;;
         esac
     done

@@ -5,14 +5,9 @@
 #
 # uhmreload -- Reload wrapper
 #
-# DESCRIPTION:
-# Runs uhmleases.sh and then uhmiptables.sh after an ACL change. Invoked by
-# uhmd; aborts if uhmd.service is not active.
-#
 # USAGE:
 # uhmreload.sh    (no arguments)
 #
-# ENV: /etc/uhm/uhm.env
 # LOG: /var/log/uhm.log
 #
 ################################################################################
@@ -25,7 +20,7 @@ set -euo pipefail
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -48,9 +43,9 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed -- fixed"
+            log "INFO: uhm.log perms fixed -fixed"
         else
-            log "WARNING: cannot fix uhm.log perms -- alert"
+            log "WARNING: cannot fix uhm.log perms -alert"
         fi
         ;;
 esac
@@ -58,17 +53,20 @@ unset log_stat
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -- abort"
+    log "ERROR: script $(basename "$0") is already running -abort"
     exit 1
 fi
 
 # dependencies
 for dep_pkg in util-linux coreutils grep systemd; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -92,9 +90,9 @@ ensure_executable() {
     file_perms=$(stat -c '%a' "$script_path" 2>/dev/null)
     if [[ "$file_owner" != "root" || "$file_perms" != "$expected_mode" ]]; then
         if chown root:root "$script_path" 2>/dev/null && chmod "$expected_mode" "$script_path" 2>/dev/null; then
-            log "INFO: $script_name perms fixed -- fixed"
+            log "INFO: $script_name perms fixed -fixed"
         else
-            log "WARNING: cannot fix $script_name perms -- alert"
+            log "WARNING: cannot fix $script_name perms -alert"
         fi
     fi
     return 0
@@ -111,12 +109,12 @@ ensure_executable() {
 run_step() {
     local script_path="$1" script_name="$2" step_timeout="$3" expected_mode="$4"
     if ! ensure_executable "$script_path" "$script_name" "$expected_mode"; then
-        log "ERROR: $script_name not found -- abort"
+        log "ERROR: $script_name not found -abort"
         exit 1
     fi
     local trace_file
     if ! trace_file=$(mktemp -t "${script_name%.sh}-trace.XXXXXX" 2>/dev/null); then
-        log "ERROR: cannot create trace file -- abort"
+        log "ERROR: cannot create trace file -abort"
         exit 1
     fi
     local exit_code=0
@@ -128,7 +126,7 @@ run_step() {
         local trace_dest="/var/log/${script_name%.sh}-failure.trace"
         local trace_ok=1
         if ! mv -f "$trace_file" "$trace_dest" 2>/dev/null; then
-            log "WARNING: cannot write ${trace_dest##*/} -- alert"
+            log "WARNING: cannot write ${trace_dest##*/} -alert"
             rm -f "$trace_file"
             trace_ok=0
         fi
@@ -138,9 +136,9 @@ run_step() {
             log "ERROR: $script_name failed (exit $exit_code)"
         fi
         if (( trace_ok )); then
-            log "ERROR: trace: ${trace_dest##*/} -- abort"
+            log "ERROR: trace: ${trace_dest##*/} -abort"
         else
-            log "ERROR: no trace saved -- abort"
+            log "ERROR: no trace saved -abort"
         fi
         exit 1
     fi
@@ -158,7 +156,7 @@ env_specs=("$config_file root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
-        log "ERROR: $(basename "$env_path") not found -- abort"
+        log "ERROR: $(basename "$env_path") not found -abort"
         exit 1
     fi
     env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
@@ -167,9 +165,9 @@ for env_spec in "${env_specs[@]}"; do
        || [[ "$env_perms" != "$env_perms_want" ]]; then
         if chown "$env_owner_want" "$env_path" 2>/dev/null \
            && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
-            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+            log "INFO: $(basename "$env_path") perms fixed -fixed"
         else
-            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            log "ERROR: cannot fix $(basename "$env_path") perms -abort"
             exit 1
         fi
     fi
@@ -183,6 +181,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
 env_keys='UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_LEASES UHM_IPTABLES'
 
 # LOAD
+# Reads uhm.env; a missing key is handled by the check below
 load_uhm_env "$config_file" "$env_keys" line || true
 
 # KEY CHECK
@@ -206,9 +205,9 @@ for env_key in UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS; do
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error"
+        log "ERROR: $key_error -abort"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -- abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
@@ -218,19 +217,19 @@ unset key_errors key_error env_key
 # Fallbacks 120 and 60 must stay in sync with uhmd.sh, which reads the same
 # two values.
 if [ -z "${UHM_LEASES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -- fallback"
+    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -fallback"
 fi
 UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
 if [ -z "${UHM_IPTABLES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no UHM_IPTABLES_TIMEOUT_SECONDS in uhm.env -- fallback"
+    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS unset -fallback"
 fi
 UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
 if [ -z "${UHM_LEASES:-}" ]; then
-    log "WARNING: no UHM_LEASES in uhm.env -- fallback"
+    log "WARNING: no UHM_LEASES in uhm.env -fallback"
 fi
 UHM_LEASES="${UHM_LEASES:-/etc/uhm/core/uhmleases.sh}"
 if [ -z "${UHM_IPTABLES:-}" ]; then
-    log "WARNING: no UHM_IPTABLES in uhm.env -- fallback"
+    log "WARNING: no UHM_IPTABLES in uhm.env -fallback"
 fi
 UHM_IPTABLES="${UHM_IPTABLES:-/etc/uhm/tools/uhmiptables.sh}"
 
@@ -249,7 +248,7 @@ log "uhmreload start..."
 
 # Abort if uhmd isn't active -- nothing downstream should run blindly.
 if ! systemctl is-active --quiet uhmd; then
-    log "ERROR: uhmd not active -- abort"
+    log "ERROR: uhmd not active -abort"
     exit 1
 fi
 
@@ -262,7 +261,7 @@ run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 755
 # the reload chain; uhmiptables.sh only enforces at the firewall level, and ACL
 # classification keeps working correctly without it.
 if [[ ! -f "$UHM_IPTABLES" ]]; then
-    log "WARNING: uhmiptables.sh not found -- alert"
+    log "WARNING: uhmiptables.sh not found -alert"
 else
     run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
 fi

@@ -5,20 +5,15 @@
 #
 # uhmtool -- JSON backend for the uhm web interface
 #
-# DESCRIPTION:
-# Single privileged entry point of the web interface. Every answer is a
-# JSON document on stdout. Requires root.
-#
 # USAGE:
-# sudo bash uhmtool.sh <group> <action> [arguments]
+# sudo bash uhmtool.sh <group> --<action> [arguments]
 #
-#   log      tail, grep, status
-#   acl      list, read, write
-#   report   mac, grace, consistency, search
-#   unifi    status, authorized, vouchers, guests, unauthorized
+#   log      --tail, --grep, --status
+#   acl      --list, --read, --write
+#   report   --mac, --grace, --consistency, --search
+#   unifi    --status, --authorized, --vouchers, --guests, --unauthorized
 #
-# ENV: /etc/pydhcp/pydhcp.env, /etc/uhm/uhm.env
-# LOG: /var/log/uhm.log (reads only)
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 
@@ -206,9 +201,8 @@ load_env() {
 # LOG
 # ------------------------------------------------------------------------------
 
-# Emits the rows array of a log payload. Lines without a timestamp and
-# separator lines are dropped, and a line with no level is reported as
-# STATUS, the label the viewer groups them under.
+# Emits the rows array of a log payload. Lines without a timestamp are
+# dropped, and a line with no level is reported as STATUS.
 print_log_rows() {
     local log_data="$1"
     local log_line row_ts row_level row_msg first_row=1
@@ -216,7 +210,6 @@ print_log_rows() {
     printf '['
     while IFS= read -r log_line; do
         [[ -z "$log_line" ]] && continue
-        [[ "$log_line" == -* ]] && continue
 
         row_ts="" row_level="" row_msg=""
         if [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
@@ -909,13 +902,13 @@ unifi_unauthorized() {
 
 usage() {
     cat <<EOF
-Usage: sudo bash $(basename "$0") <group> <action> [arguments]
+Usage: sudo bash $(basename "$0") <group> --<action> [arguments]
 
 Groups and actions:
-  log    tail [pos] [lines] | grep <term> | status
-  acl    list | read <name> | write <name> (content on stdin)
-  report mac <mac> | grace | consistency | search <query>
-  unifi  status | authorized | vouchers | guests | unauthorized
+  log    --tail [pos] [lines] | --grep <term> | --status
+  acl    --list | --read <name> | --write <name> (content on stdin)
+  report --mac <--mac> | --grace | --consistency | --search <query>
+  unifi  --status | --authorized | --vouchers | --guests | --unauthorized
 EOF
 }
 
@@ -937,28 +930,28 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool start..." >&2
 case "$tool_group" in
     log)
         case "$tool_action" in
-            tail) log_tail "${3:-0}" "${4:-200}" || exit 1 ;;
-            grep) log_grep "${3:-}" || exit 1 ;;
-            status) log_status || exit 1 ;;
+            --tail) log_tail "${3:-0}" "${4:-200}" || exit 1 ;;
+            --grep) log_grep "${3:-}" || exit 1 ;;
+            --status) log_status || exit 1 ;;
             *) json_error "unknown log action"; exit 1 ;;
         esac
         ;;
     acl)
         load_env
         case "$tool_action" in
-            list) acl_list || exit 1 ;;
-            read) acl_read "${3:-}" || exit 1 ;;
-            write) acl_write "${3:-}" || exit 1 ;;
+            --list) acl_list || exit 1 ;;
+            --read) acl_read "${3:-}" || exit 1 ;;
+            --write) acl_write "${3:-}" || exit 1 ;;
             *) json_error "unknown acl action"; exit 1 ;;
         esac
         ;;
     report)
         load_env
         case "$tool_action" in
-            mac) report_mac "${3:-}" || exit 1 ;;
-            grace) report_grace || exit 1 ;;
-            consistency) report_consistency || exit 1 ;;
-            search) report_search "${3:-}" || exit 1 ;;
+            --mac) report_mac "${3:-}" || exit 1 ;;
+            --grace) report_grace || exit 1 ;;
+            --consistency) report_consistency || exit 1 ;;
+            --search) report_search "${3:-}" || exit 1 ;;
             *) json_error "unknown report action"; exit 1 ;;
         esac
         ;;
@@ -967,11 +960,11 @@ case "$tool_group" in
         unifi_require_config
         do_login
         case "$tool_action" in
-            status) unifi_status || exit 1 ;;
-            authorized) unifi_authorized || exit 1 ;;
-            vouchers) unifi_vouchers || exit 1 ;;
-            guests) unifi_guests || exit 1 ;;
-            unauthorized) unifi_unauthorized || exit 1 ;;
+            --status) unifi_status || exit 1 ;;
+            --authorized) unifi_authorized || exit 1 ;;
+            --vouchers) unifi_vouchers || exit 1 ;;
+            --guests) unifi_guests || exit 1 ;;
+            --unauthorized) unifi_unauthorized || exit 1 ;;
             *) json_error "unknown unifi action"; exit 1 ;;
         esac
         ;;

@@ -56,7 +56,7 @@ if (!isset($actions[$group]) || !in_array($action, $actions[$group], true)) {
 
 // Arguments are passed as a separate argv entry each, never interpolated
 // into a shell string, so a crafted value cannot reach the shell.
-$args = [$group, $action];
+$args = [$group, '--' . $action];
 $body = null;
 
 switch ($group . ':' . $action) {

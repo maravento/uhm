@@ -5,16 +5,9 @@
 #
 # uhmiptables -- firewall placeholder for uhm
 #
-# DESCRIPTION:
-# PLACEHOLDER, not the real ruleset: it only enables IPv4 forwarding and
-# masquerades the LAN out the WAN interface. The full reference
-# implementation is uhmiptables_example.txt, in this same directory.
-# Runs as root.
-#
 # USAGE:
 # uhmiptables.sh    (no arguments; normally invoked by uhmreload.sh)
 #
-# ENV: /etc/pydhcp/pydhcp.env
 # LOG: /var/log/uhm.log
 #
 ################################################################################
@@ -27,7 +20,7 @@ set -euo pipefail
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -46,7 +39,7 @@ log() {
 # dependencies
 for dep_pkg in iptables procps iproute2; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: dependency '$dep_pkg' is not installed -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -62,7 +55,7 @@ env_specs=("$pydhcp_env root:pydhcpd 640")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
-        log "ERROR: $(basename "$env_path") not found -- abort"
+        log "ERROR: $(basename "$env_path") not found -abort"
         exit 1
     fi
     env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
@@ -71,9 +64,9 @@ for env_spec in "${env_specs[@]}"; do
        || [[ "$env_perms" != "$env_perms_want" ]]; then
         if chown "$env_owner_want" "$env_path" 2>/dev/null \
            && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
-            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+            log "INFO: $(basename "$env_path") perms fixed -fixed"
         else
-            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            log "ERROR: cannot fix $(basename "$env_path") perms -abort"
             exit 1
         fi
     fi
@@ -105,9 +98,9 @@ for env_key in WAN_IFACE; do
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error"
+        log "ERROR: $key_error -abort"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
@@ -116,7 +109,7 @@ unset key_errors key_error env_key
 # The MASQUERADE rule below names this interface. A value that no longer
 # matches the host produces a LAN without NAT instead of an error.
 if ! ip link show "$WAN_IFACE" >/dev/null 2>&1; then
-    log "ERROR: WAN_IFACE '$WAN_IFACE' does not exist on this host -- abort"
+    log "ERROR: WAN_IFACE '$WAN_IFACE' does not exist on this host -abort"
     exit 1
 fi
 
@@ -128,22 +121,21 @@ log "uhmiptables start..."
 
 # A rule that fails here leaves the LAN without NAT, so every step reports it
 # instead of letting the script exit 0 and pass as a good reload.
-fail() { log "ERROR: $1 -- abort"; exit 1; }
+fail() { log "ERROR: $1 -abort"; exit 1; }
 
-# -- FORWARDING ----------------------------------------------------------------
-
+# FORWARDING
 # Not a tuning value: without forwarding this host stops routing, and LAN
 # clients get a lease that reaches nothing. Verified by its resulting state,
 # not by sysctl's exit code, so a value already set by another means is
 # accepted.
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
-    log "ERROR: IPv4 forwarding is off, LAN cannot route -- abort"
+    log "ERROR: IPv4 forwarding is off, LAN cannot route -abort"
     exit 1
 fi
 
-# -- NAT -----------------------------------------------------------------------
-
+# NAT
+# Masquerades the LAN behind the WAN address, in its own UHM_NAT chain
 iptables -t nat -N UHM_NAT 2>/dev/null || true
 iptables -t nat -F UHM_NAT || fail "cannot flush UHM_NAT"
 iptables -t nat -C POSTROUTING -j UHM_NAT 2>/dev/null \
@@ -152,8 +144,7 @@ iptables -t nat -C POSTROUTING -j UHM_NAT 2>/dev/null \
 iptables -t nat -A UHM_NAT -o "$WAN_IFACE" -j MASQUERADE \
     || fail "cannot add MASQUERADE on $WAN_IFACE"
 
-# -- FORWARD RULES -------------------------------------------------------------
-
+# FORWARD RULES
 # ip_forward only enables routing in the kernel. If the FORWARD policy is
 # DROP, set by another firewall or by a previous ruleset, traffic still dies.
 # These two accept the LAN's way out and the replies coming back, without

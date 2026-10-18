@@ -5,20 +5,15 @@
 #
 # uhmalert -- UniFi Hotspot Alert Watcher (optional)
 #
-# DESCRIPTION:
-# Watches the shared uhm log in real time and sends a push notification
-# via ntfy.sh on connectivity loss and on any ERROR or WARNING line.
-#
 # USAGE:
-# sudo ./uhmalert.sh install     Deploy the script, create+enable+start
+# sudo ./uhmalert.sh --install     Deploy the script, create+enable+start
 #                                uhmalert.service
-# sudo ./uhmalert.sh uninstall   Stop+disable the service, remove the unit
+# sudo ./uhmalert.sh --uninstall   Stop+disable the service, remove the unit
 # uhmalert.sh                    Run the watch loop directly (what
 #                                uhmalert.service's ExecStart invokes)
 # uhmalert.sh -h, --help         Show this help
 #
-# ENV: /etc/uhm/uhm.env
-# LOG: /var/log/uhm.log (reads only -- shared with uhmd.sh)
+# LOG: /var/log/uhm.log
 #
 ################################################################################
 
@@ -43,7 +38,7 @@ esac
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -66,9 +61,9 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhm.log perms fixed -- fixed"
+            log "INFO: uhm.log perms fixed -fixed"
         else
-            log "WARNING: cannot fix uhm.log perms -- alert"
+            log "WARNING: cannot fix uhm.log perms -alert"
         fi
         ;;
 esac
@@ -77,7 +72,7 @@ unset log_stat
 # dependencies
 for dep_pkg in curl coreutils util-linux grep sed systemd; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -108,16 +103,16 @@ insert_after_last_delimiter() {
     last_line=$(grep -n '^# =\{5,\}$' "$conf_file" | tail -1 | cut -d: -f1)
     if [[ -z "$last_line" ]]; then
         printf '\n%s\n' "$env_block" >> "$conf_file" \
-            || { log "ERROR: cannot write $(basename "$conf_file") -- abort"; exit 1; }
+            || { log "ERROR: cannot write $(basename "$conf_file") -abort"; exit 1; }
         return
     fi
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
     if ! { head -n "$last_line" "$conf_file" > "$tmp_file" \
         && printf '\n%s\n' "$env_block" >> "$tmp_file" \
         && tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file" \
         && mv "$tmp_file" "$conf_file"; }; then
         rm -f "$tmp_file"
-        log "ERROR: cannot write $(basename "$conf_file") -- abort"
+        log "ERROR: cannot write $(basename "$conf_file") -abort"
         exit 1
     fi
 }
@@ -125,14 +120,12 @@ insert_after_last_delimiter() {
 install_module() {
     local gen_topic
     echo ""
-    echo "=================================="
     echo "Installing uhmalert (uhm alert)"
-    echo "=================================="
     echo ""
 
     if [[ ! -f "$config_file" ]]; then
         log "ERROR: $config_file not found"
-        log "ERROR: install and configure uhm first -- abort"
+        log "ERROR: install and configure uhm first -abort"
         exit 1
     fi
 
@@ -140,7 +133,7 @@ install_module() {
     # topic (e.g. on a re-install) or a threshold the user already tuned.
     if grep -q '^UHM_NTFY_TOPIC=' "$config_file"; then
         gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$config_file" | tail -1 | cut -d'=' -f2- | tr -d '"')
-        echo "UHM_NTFY_TOPIC already set in $config_file -- leaving it untouched."
+        log "INFO: UHM_NTFY_TOPIC already set, left untouched"
     else
         gen_topic="uhm-alert-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)"
         insert_after_last_delimiter "$config_file" "# =============================================================================
@@ -149,35 +142,47 @@ install_module() {
 UHM_NTFY_TOPIC=$gen_topic
 UHM_API_FAIL_THRESHOLD=3
 UHM_ALERT_QUIET_PERIOD_SECONDS=120
+# Alert defaults
+# Changing these defaults is not recommended
+UHM_ALERT_JITTER_SECONDS=10
+UHM_ALERT_DEDUP_SECONDS=300
 # ============================================================================="
-        echo "Added UHM_NTFY_TOPIC, UHM_API_FAIL_THRESHOLD and"
-        echo "UHM_ALERT_QUIET_PERIOD_SECONDS to $config_file"
+        log "INFO: added 5 alert keys to $config_file"
     fi
     # Insert right after their neighbor in the Alert block (not a plain
     # >> append) so upgrading an older install doesn't scatter these
     # variables to the end of the file, past unrelated later sections.
     if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$config_file"; then
         sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -- abort"; exit 1; }
+            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
     fi
     if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$config_file"; then
         sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -- abort"; exit 1; }
+            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    fi
+
+    if ! grep -q '^UHM_ALERT_JITTER_SECONDS=' "$config_file"; then
+        sed -i '/^UHM_ALERT_QUIET_PERIOD_SECONDS=/a # Alert defaults\n# Changing these defaults is not recommended\nUHM_ALERT_JITTER_SECONDS=10' "$config_file" \
+            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    fi
+    if ! grep -q '^UHM_ALERT_DEDUP_SECONDS=' "$config_file"; then
+        sed -i '/^UHM_ALERT_JITTER_SECONDS=/a UHM_ALERT_DEDUP_SECONDS=300' "$config_file" \
+            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
     fi
 
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
-        echo "Deploying script to $target_path..."
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Deploying script to $target_path..."
         if ! { mkdir -p "$(dirname "$target_path")" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh" \
             && install -m 755 -o root -g root "$self_path" "$target_path"; }; then
-            log "ERROR: cannot deploy uhmalert to $target_path -- abort"
+            log "ERROR: cannot deploy uhmalert to $target_path -abort"
             exit 1
         fi
     fi
 
-    echo "Writing systemd unit ($unit_path)..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Writing systemd unit ($unit_path)..."
     if ! cat > "$unit_path" <<'UNITEOF'
 [Unit]
 Description=UniFi Hotspot Connectivity Alert Watcher
@@ -203,37 +208,35 @@ RestrictSUIDSGID=yes
 WantedBy=multi-user.target
 UNITEOF
     then
-        log "ERROR: cannot write $(basename "$unit_path") -- abort"
+        log "ERROR: cannot write $(basename "$unit_path") -abort"
         exit 1
     fi
 
     if ! { systemctl daemon-reload \
         && systemctl enable uhmalert.service \
         && systemctl restart uhmalert.service; }; then
-        log "ERROR: cannot start uhmalert.service -- abort"
+        log "ERROR: cannot start uhmalert.service -abort"
         exit 1
     fi
 
     echo ""
     echo "Installed and started. Check with: systemctl status uhmalert"
     echo ""
-    echo "=================================="
     echo "ntfy topic: $gen_topic"
-    echo "=================================="
     echo "Install free 'ntfy' app (Android/iOS) and subscribe to the"
-    echo "topic above to start receiving alerts on this device."
+    echo "topic above to start receiving alerts on this device"
     echo ""
 }
 
 uninstall_module() {
-    echo "Stopping and disabling uhmalert.service..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Stopping and disabling uhmalert.service..."
     systemctl stop uhmalert.service 2>/dev/null || true
     systemctl disable uhmalert.service 2>/dev/null || true
     if ! { rm -f "$unit_path" && systemctl daemon-reload; }; then
-        log "ERROR: cannot remove $(basename "$unit_path") -- abort"
+        log "ERROR: cannot remove $(basename "$unit_path") -abort"
         exit 1
     fi
-    echo "uhmalert.service removed. The uhmalert.sh script was not deleted."
+    log "INFO: uhmalert.service removed, script kept"
 }
 
 # ------------------------------------------------------------------------------
@@ -241,11 +244,11 @@ uninstall_module() {
 # ------------------------------------------------------------------------------
 
 case "${1:-}" in
-    install)
+    --install)
         install_module
         exit 0
         ;;
-    uninstall)
+    --uninstall)
         uninstall_module
         exit 0
         ;;
@@ -255,10 +258,13 @@ esac
 # are one-shot admin actions and must not block on (or be blocked by) the
 # lock the service holds for its entire lifetime.
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -- abort"
+    log "ERROR: script $(basename "$0") is already running -abort"
     exit 1
 fi
 
@@ -272,7 +278,7 @@ env_specs=("$config_file root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
-        log "ERROR: $(basename "$env_path") not found -- abort"
+        log "ERROR: $(basename "$env_path") not found -abort"
         exit 1
     fi
     env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
@@ -281,9 +287,9 @@ for env_spec in "${env_specs[@]}"; do
        || [[ "$env_perms" != "$env_perms_want" ]]; then
         if chown "$env_owner_want" "$env_path" 2>/dev/null \
            && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
-            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+            log "INFO: $(basename "$env_path") perms fixed -fixed"
         else
-            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            log "ERROR: cannot fix $(basename "$env_path") perms -abort"
             exit 1
         fi
     fi
@@ -294,22 +300,22 @@ unset env_owner env_perms
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
-env_keys='UHM_NTFY_TOPIC UHM_API_FAIL_THRESHOLD UHM_ALERT_QUIET_PERIOD_SECONDS POLL_INTERVAL'
+env_keys='UHM_NTFY_TOPIC UHM_API_FAIL_THRESHOLD UHM_ALERT_QUIET_PERIOD_SECONDS UHM_ALERT_JITTER_SECONDS UHM_ALERT_DEDUP_SECONDS UHM_API_TIMEOUT_SECONDS POLL_INTERVAL'
 
 # LOAD
+# Reads uhm.env; a missing key is handled by the check below
 load_uhm_env "$config_file" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
-# The three UHM_ALERT keys are written by this script's own install action,
-# POLL_INTERVAL by uhmsetup.sh -- all four are expected to be present.
+# Alert keys are written by this script's install action; POLL_INTERVAL by uhmsetup.sh.
 key_errors=()
 if ! grep -q "^UHM_NTFY_TOPIC=" "$config_file"; then
     key_errors+=("UHM_NTFY_TOPIC missing line")
 elif [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
     key_errors+=("UHM_NTFY_TOPIC not set")
 fi
-for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL; do
+for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL UHM_API_TIMEOUT_SECONDS; do
     if ! grep -q "^${env_key}=" "$config_file"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -318,53 +324,43 @@ for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL; do
         key_errors+=("$env_key invalid count")
     fi
 done
-if ! grep -q "^UHM_ALERT_QUIET_PERIOD_SECONDS=" "$config_file"; then
-    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS missing line")
-elif [[ -z "${UHM_ALERT_QUIET_PERIOD_SECONDS:-}" ]]; then
-    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS not set")
-elif ! [[ "$UHM_ALERT_QUIET_PERIOD_SECONDS" =~ $UH_UINT ]]; then
-    key_errors+=("UHM_ALERT_QUIET_PERIOD_SECONDS invalid seconds")
-fi
+for env_key in UHM_ALERT_QUIET_PERIOD_SECONDS UHM_ALERT_JITTER_SECONDS UHM_ALERT_DEDUP_SECONDS; do
+    if ! grep -q "^${env_key}=" "$config_file"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]]; then
+        key_errors+=("$env_key invalid seconds")
+    fi
+done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error"
+        log "ERROR: $key_error -abort"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -- abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
+jitter_margin="$UHM_ALERT_JITTER_SECONDS"
+dedup_window="$UHM_ALERT_DEDUP_SECONDS"
 
 # FALLBACK
 # Second layer of protection, behind KEY CHECK -- by design never reached
 if [ -z "${UHM_API_FAIL_THRESHOLD:-}" ]; then
-    log "WARNING: no UHM_API_FAIL_THRESHOLD in uhm.env -- fallback"
+    log "WARNING: no UHM_API_FAIL_THRESHOLD in uhm.env -fallback"
 fi
 fail_threshold="${UHM_API_FAIL_THRESHOLD:-3}"
 if [ -z "${POLL_INTERVAL:-}" ]; then
-    log "WARNING: no POLL_INTERVAL in uhm.env -- fallback"
+    log "WARNING: no POLL_INTERVAL in uhm.env -fallback"
 fi
 POLL_INTERVAL="${POLL_INTERVAL:-20}"
 if [ -z "${UHM_ALERT_QUIET_PERIOD_SECONDS:-}" ]; then
-    log "WARNING: no UHM_ALERT_QUIET_PERIOD_SECONDS in uhm.env -- fallback"
+    log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS unset -fallback"
 fi
 quiet_period="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
 
-# ------------------------------------------------------------------------------
-# OWN VALUES
-# ------------------------------------------------------------------------------
-
-# Values this script declares itself -- not read from any .env
-# tolerance added to POLL_INTERVAL so minor cycle jitter doesn't falsely look
-# like a gap with a silent recovery in between
-jitter_margin=10
-# matches curl --max-time in uhmd.sh's api_get calls
-api_max_time=30
-# suppress a repeated identical ERROR/WARNING catch-all alert if it fires
-# again within this many seconds
-dedup_window=300
-# Longest silence tolerated before a gap is reported, derived from the three
-# values above and from POLL_INTERVAL, already validated by KEY CHECK
-gap_limit=$(( POLL_INTERVAL + 3 * api_max_time + jitter_margin ))
+# Maximum log silence allowed before reporting recovery
+gap_limit=$(( POLL_INTERVAL + 3 * UHM_API_TIMEOUT_SECONDS + jitter_margin ))
 
 # ------------------------------------------------------------------------------
 # MAIN
@@ -422,7 +418,7 @@ while true; do
                 fail_streak=0
                 alert_sent=0
             else
-                log "INFO: uhmd not active, no recovery notice -- skip"
+                log "INFO: uhmd not active, no recovery notice -skip"
                 fail_streak=0
                 last_ts_epoch=0
             fi
@@ -468,8 +464,11 @@ while true; do
             now_epoch=$(date +%s)
             if [[ "$log_msg" == "$last_generic_msg" ]] && (( now_epoch - last_generic_time < dedup_window )); then
                 dup_text="${log_msg#* }"
-                dup_text="${dup_text% -- *}"
-                log "INFO: dup alert (${dedup_window}s): $dup_text -- skip"
+                case "$dup_text" in
+                    *" -abort"|*" -alert"|*" -fallback"|*" -skip"|*" -retry"|*" -fixed")
+                        dup_text="${dup_text% -*}" ;;
+                esac
+                log "INFO: dup alert (${dedup_window}s): $dup_text -skip"
                 continue
             fi
             last_generic_msg="$log_msg"
@@ -477,7 +476,10 @@ while true; do
             # The quoted line carries its own label and control action; both
             # are stripped so this one does not end up with two of each.
             alert_text="${log_msg#* }"
-            alert_text="${alert_text% -- *}"
+            case "$alert_text" in
+                *" -abort"|*" -alert"|*" -fallback"|*" -skip"|*" -retry"|*" -fixed")
+                    alert_text="${alert_text% -*}" ;;
+            esac
             notify "uhm: $log_msg"
             log "INFO: $alert_text"
             continue
@@ -501,7 +503,7 @@ while true; do
         if (( fail_streak == fail_threshold )) && (( alert_sent == 0 )); then
             uhmd_start=$(uhmd_started_at)
             if (( uhmd_start > 0 )) && (( line_epoch - uhmd_start < quiet_period )); then
-                log "INFO: $fail_streak failures within startup grace -- skip"
+                log "INFO: $fail_streak failures within startup grace -skip"
                 fail_streak=0
             else
                 notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $line_ts)"
@@ -511,7 +513,7 @@ while true; do
             fi
         fi
     elif (( read_rc == 1 )); then
-        log "ERROR: uhmalert lost log monitoring (tail died) -- abort"
+        log "ERROR: uhmalert lost log monitoring (tail died) -abort"
         exit 1
     else
         # read timed out: no new line for a full gap_limit window. The streak

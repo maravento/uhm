@@ -5,14 +5,10 @@
 #
 # uhmbk -- configuration backup for uhm
 #
-# DESCRIPTION:
-# Creates one compressed archive with the uhm installation and its
-# system configuration. Requires root.
-#
 # USAGE:
 # sudo bash uhmbk.sh            Create a backup now
-# sudo bash uhmbk.sh install    Register the @monthly cron entry
-# sudo bash uhmbk.sh uninstall  Remove the cron entry (keeps archives)
+# sudo bash uhmbk.sh --install    Register the @monthly cron entry
+# sudo bash uhmbk.sh --uninstall  Remove the cron entry (keeps archives)
 #
 # LOG: /var/log/uhm.log
 #
@@ -29,7 +25,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -47,17 +43,20 @@ log() {
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -- abort"
+    log "ERROR: script $(basename "$0") is already running -abort"
     exit 1
 fi
 
 # dependencies
 for dep_pkg in zip coreutils util-linux cron; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: missing dependency '$dep_pkg' -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -113,7 +112,7 @@ register_cron() {
     script_path="$(readlink -f "$0")"
     if [ "$script_path" != "$installed_path" ]; then
         if ! mkdir -p "$(dirname "$installed_path")"; then
-            log "ERROR: cannot create $(dirname "$installed_path") -- abort"
+            log "ERROR: cannot create $(dirname "$installed_path") -abort"
             exit 1
         fi
         install -m 755 -o root -g root "$script_path" "$installed_path"
@@ -121,33 +120,29 @@ register_cron() {
     fi
 
     cron_d_set "$installed_path" "@monthly root $installed_path"
-    log "INFO: cron entry registered, runs @monthly"
-    log "INFO: $installed_path"
+    log "INFO: uhmbk backup cron registered, runs @monthly"
 }
 
 deregister_cron() {
     cron_d_set "$installed_path" ""
-    log "INFO: cron entry removed, archives kept"
+    log "INFO: uhmbk backup cron removed, archives kept"
 }
 
 # Start
-log "uhmbk start..."
-
 case "${1:-}" in
-    install)
+    --install)
         register_cron
-        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
-    uninstall)
+    --uninstall)
         deregister_cron
-        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     "")
+        log "uhmbk start..."
         ;;
     *)
-        log "ERROR: '$1' invalid; install/uninstall or none -- abort"
+        log "ERROR: '$1' invalid; --install/--uninstall or none -abort"
         exit 1
         ;;
 esac
@@ -157,7 +152,7 @@ esac
 # ------------------------------------------------------------------------------
 
 if ! mkdir -p "$backup_dir"; then
-    log "ERROR: cannot create $backup_dir -- abort"
+    log "ERROR: cannot create $backup_dir -abort"
     exit 1
 fi
 
@@ -177,12 +172,12 @@ do
     if [ -e "$backup_item" ]; then
         backup_list+=("$backup_item")
     else
-        log "INFO: $backup_item not present -- skip"
+        log "INFO: $backup_item not present -skip"
     fi
 done
 
 if (( ${#backup_list[@]} == 0 )); then
-    log "ERROR: cannot find UHM installation paths -- abort"
+    log "ERROR: cannot find UHM installation paths -abort"
     exit 1
 fi
 
@@ -195,7 +190,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     chmod 600 "$backup_part"
     if ! mv -f "$backup_part" "$backup_zip"; then
         rm -f "$backup_part"
-        log "ERROR: $(basename "$backup_zip") failed; check space/permissions -- abort"
+        log "ERROR: $(basename "$backup_zip") failed; check space/permissions -abort"
         exit 1
     fi
     log "INFO: backup written to $(basename "$backup_zip")"
@@ -207,7 +202,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     fi
 else
     rm -f "$backup_part"
-    log "ERROR: cannot write archive $(basename "$backup_zip") -- check free space and permissions -- abort"
+    log "ERROR: cannot write archive $(basename "$backup_zip") -- check free space and permissions -abort"
     exit 1
 fi
 

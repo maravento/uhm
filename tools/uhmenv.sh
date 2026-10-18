@@ -5,9 +5,6 @@
 #
 # uhmenv -- shared Bash configuration reader
 #
-# DESCRIPTION:
-# Shared configuration reader for uhm Bash scripts.
-#
 # USAGE:
 # Loaded by callers with source. Not a standalone command or cron job.
 #
@@ -21,7 +18,7 @@ load_uhm_env() {
             json_error "$(basename "$conf_file") not found"
             exit 1
         fi
-        log "WARNING: $conf_file not found -- fallback"
+        log "WARNING: $conf_file not found -fallback"
         return 1
     fi
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
@@ -40,9 +37,9 @@ load_uhm_env() {
                     ;;
                 *)
                     if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-                        log "ERROR: $(basename "$conf_file"):$env_count not key=value -- abort"
+                        log "ERROR: $(basename "$conf_file"):$env_count not key=value -abort"
                     else
-                        log "ERROR: $(basename "$conf_file"):$env_count space or quote in value -- abort"
+                        log "ERROR: $(basename "$conf_file"):$env_count space or quote in value -abort"
                     fi
                     ;;
             esac
