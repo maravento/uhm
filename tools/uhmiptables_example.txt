@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmiptables -- reference firewall ruleset
+# FILE: tools/uhmiptables_example.txt
 #
 # USAGE:
 # sudo bash /etc/uhm/tools/uhmiptables.sh
@@ -20,7 +21,7 @@ set -euo pipefail
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root -abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
@@ -43,7 +44,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 mawk coreutils grep curl; do
+for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep curl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1

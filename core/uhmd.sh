@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmd -- UniFi Hotspot Manager Daemon
+# FILE: core/uhmd.sh
 #
 # USAGE:
 # systemctl {start|stop|restart|status} uhmd
@@ -1764,7 +1765,7 @@ main() {
 
     while true; do
         cycle_active=1
-        run_cycle || log "WARNING: cycle ended with error -alert"
+        run_cycle
         if [[ -e "$cycle_mark_file" ]]; then
             log_raw "INFO: uhmd cycle end"
         fi

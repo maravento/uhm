@@ -1,6 +1,7 @@
 <?php
 /**
  * LogView — uhm log viewer
+ * FILE: logview/index.php
  *
  * Reads /var/log/uhm.log through ../api.php, which calls uhmtool.sh.
  * Polling is done by byte offset, so the page never holds a file open.

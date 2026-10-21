@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmsetup -- uhm installer / updater
+# FILE: uhmsetup.sh
 #
 # USAGE:
 # sudo bash uhmsetup.sh --install     Install (aborts if already installed)
@@ -1329,10 +1330,10 @@ do_update() {
         if "$uhmbk_script"; then
             info "backup taken with uhmbk.sh"
         else
-            warn "uhmbk.sh: backup failed -alert"
+            abort "uhmbk.sh: backup failed -abort"
         fi
     else
-        warn "uhmbk.sh: missing or not executable -alert"
+        abort "uhmbk.sh: missing or not executable -abort"
     fi
 
     step "Pause services"
@@ -1456,7 +1457,7 @@ do_uninstall() {
     echo "- ${logrotate_file}"
     echo "- ${hotspot_dir}"
     echo "including uhm.env, ACL lists and YOUR uhmiptables.sh"
-    echo "Run ${uhmbk_script} first if you want a backup"
+    echo "A backup is taken with ${uhmbk_script} before anything is removed"
     echo "- ${uhm_log_file}, rotated logs"
     echo "- uhmunifi.log and reload failure traces"
     echo "/etc/bak is NOT touched"
@@ -1481,6 +1482,16 @@ do_uninstall() {
         exit 0
     fi
     echo ""
+
+    if [[ -x "$uhmbk_script" ]]; then
+        if "$uhmbk_script"; then
+            info "backup taken with uhmbk.sh"
+        else
+            abort "uhmbk.sh: backup failed -abort"
+        fi
+    else
+        abort "uhmbk.sh: missing or not executable -abort"
+    fi
 
     perform_remove
 }
@@ -1647,7 +1658,7 @@ show_menu() {
             2) do_update; break ;;
             3) do_uninstall; break ;;
             4) do_status; break ;;
-            5) exit 0 ;;
+            5) break ;;
             *) info "invalid option -retry" ;;
         esac
     done

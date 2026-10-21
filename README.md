@@ -1,3 +1,7 @@
+<!--
+UHM documentation
+FILE: README.md
+-->
 # [UHM](https://github.com/maravento) — UniFi Hotspot Manager
 
 [![status-maintained](https://img.shields.io/badge/status-maintained-purple.svg)](https://github.com/maravento/uhm)

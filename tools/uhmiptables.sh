@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmiptables -- firewall placeholder for uhm
+# FILE: tools/uhmiptables.sh
 #
 # USAGE:
 # uhmiptables.sh    (no arguments; normally invoked by uhmreload.sh)

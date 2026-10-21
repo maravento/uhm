@@ -1,6 +1,7 @@
 <?php
 /**
  * ACLView — uhm ACL list editor
+ * FILE: aclview/index.php
  *
  * Lists the editable ACL files, shows one at a time and saves it back
  * through ../api.php. uhmtool.sh validates every line before writing, so

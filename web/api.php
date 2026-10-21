@@ -1,6 +1,7 @@
 <?php
 /**
  * uhm web API — single endpoint for the three panel tabs
+ * FILE: api.php
  *
  * Every answer comes from uhmtool.sh, invoked through sudo. The web user
  * never reads or writes a root-owned file directly.

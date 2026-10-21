@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmleases -- DHCP Leases & ACL Manager for pydhcpd (UniFi Hotspot edition)
+# FILE: core/uhmleases.sh
 #
 # USAGE:
 # uhmleases.sh    (no arguments; normally invoked by uhmreload.sh)

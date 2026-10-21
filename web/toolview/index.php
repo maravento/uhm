@@ -1,6 +1,7 @@
 <?php
 /**
  * ToolView — uhm reports and search
+ * FILE: toolview/index.php
  *
  * Local ACL reports and UniFi controller reports, both served by
  * uhmtool.sh through ../api.php. Read-only: the actions that delete

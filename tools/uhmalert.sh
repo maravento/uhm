@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmalert -- UniFi Hotspot Alert Watcher (optional)
+# FILE: tools/uhmalert.sh
 #
 # USAGE:
 # sudo ./uhmalert.sh --install     Deploy the script, create+enable+start
@@ -245,11 +246,15 @@ uninstall_module() {
 
 case "${1:-}" in
     --install)
+        log "uhmalert start..."
         install_module
+        log "uhmalert done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     --uninstall)
+        log "uhmalert start..."
         uninstall_module
+        log "uhmalert done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
 esac

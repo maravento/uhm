@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmenv -- shared Bash configuration reader
+# FILE: tools/uhmenv.sh
 #
 # USAGE:
 # Loaded by callers with source. Not a standalone command or cron job.

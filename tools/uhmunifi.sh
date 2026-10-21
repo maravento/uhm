@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmunifi -- UniFi Network Hotspot client audit and management tool
+# FILE: tools/uhmunifi.sh
 #
 # USAGE:
 # sudo bash uhmunifi.sh

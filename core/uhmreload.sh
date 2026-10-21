@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmreload -- Reload wrapper
+# FILE: core/uhmreload.sh
 #
 # USAGE:
 # uhmreload.sh    (no arguments)

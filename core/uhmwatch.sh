@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmwatch -- UniFi Hotspot Services Watchdog
+# FILE: core/uhmwatch.sh
 #
 # USAGE:
 # sudo ./uhmwatch.sh --install     Deploy the script and register its cron
@@ -200,11 +201,15 @@ uninstall_module() {
 # to the same log uhmalert.sh reads to detect real failures.
 case "${1:-}" in
     --install)
+        log "uhmwatch start..."
         install_module
+        log "uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     --uninstall)
+        log "uhmwatch start..."
         uninstall_module
+        log "uhmwatch done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
 esac

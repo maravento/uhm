@@ -4,6 +4,7 @@
 ################################################################################
 #
 # uhmtool -- JSON backend for the uhm web interface
+# FILE: tools/uhmtool.sh
 #
 # USAGE:
 # sudo bash uhmtool.sh <group> --<action> [arguments]
