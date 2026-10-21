@@ -13,14 +13,6 @@
 load_uhm_env() {
     local conf_file="$1" conf_keys="$2" env_key env_value env_line env_count=0
     local conf_errors="${3:-line}"
-    if [[ ! -f "$conf_file" ]]; then
-        if [[ "$conf_errors" == json ]]; then
-            json_error "$(basename "$conf_file") not found"
-            exit 1
-        fi
-        log "WARNING: $conf_file not found -fallback"
-        return 1
-    fi
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         env_count=$((env_count + 1))
         [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue

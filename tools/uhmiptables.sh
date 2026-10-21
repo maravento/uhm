@@ -36,8 +36,20 @@ log() {
     fi
 }
 
+# prevent overlapping runs
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
+exec 200>"$script_lock"
+if ! flock -n 200; then
+    log "ERROR: script $(basename "$0") is already running -abort"
+    exit 1
+fi
+
 # dependencies
-for dep_pkg in iptables procps iproute2; do
+for dep_pkg in iptables procps iproute2 util-linux; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -98,7 +110,7 @@ for env_key in WAN_IFACE; do
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1

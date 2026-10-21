@@ -284,42 +284,12 @@ elif ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_conf") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
-
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-if [ -z "${UNIFI_TYPE:-}" ]; then
-    log "WARNING: no UNIFI_TYPE in uhm.env -fallback"
-fi
-UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-if [ -z "${RECOVERY_COOLDOWN_SECONDS:-}" ]; then
-    log "WARNING: no RECOVERY_COOLDOWN_SECONDS in uhm.env -fallback"
-fi
-RECOVERY_COOLDOWN_SECONDS="${RECOVERY_COOLDOWN_SECONDS:-600}"
-# Same key uhmd.sh reads for its own startup-grace login retries -- reused
-# here so the two share one margin instead of drifting apart. Without this,
-# uhmd.sh stays quiet while UniFi is still booting after a reboot, but this
-# script's own functional login check (below) had no such exemption and
-# alerted anyway for the exact same, already-expected condition.
-if [ -z "${STARTUP_GRACE_SECONDS:-}" ]; then
-    log "WARNING: no STARTUP_GRACE_SECONDS in uhm.env -fallback"
-fi
-STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
-# The default port differs per controller type, so this fallback reads a key
-# KEY CHECK already validated.
-if [ -z "${UNIFI_CONTROLLER_URL:-}" ]; then
-    log "WARNING: no UNIFI_CONTROLLER_URL in uhm.env -fallback"
-fi
-if [[ "$UNIFI_TYPE" == "unifi-os" ]]; then
-    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:11443}"
-else
-    UNIFI_CONTROLLER_URL="${UNIFI_CONTROLLER_URL:-https://127.0.0.1:8443}"
-fi
 
 # ------------------------------------------------------------------------------
 # CHECKS

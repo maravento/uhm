@@ -685,7 +685,8 @@ run_setup_wizard() {
 # UHM
 # /etc/uhm/uhm.env
 # =============================================================================
-# -- UniFi keys ---------------------------------------------------------------
+
+# UniFi
 # Guest SSID
 UHM_ESSID=${essid_answer}
 # Unifi Access
@@ -699,32 +700,41 @@ UNIFI_SITE=default
 UNIFI_TYPE=${found_type}
 # Cert
 UNIFI_CERT_PIN=${cfg_cert_pin}
-# -- Hotspot keys ---------------------------------------------------------------
+
+# Hotspot
 # Hotspot Range
 UHM_INI_RANGE=${cfg_ini_range}
 UHM_END_RANGE=${cfg_end_range}
-# Daemon timers (uhm's own)
+
+# Daemon
 POLL_INTERVAL=${cfg_poll_interval}
 STARTUP_GRACE_SECONDS=120
 RELOAD_SAFETY_INTERVAL_SECONDS=3600
 BLOCKDHCP_GRACE_SECONDS=${cfg_grace_seconds}
 RECOVERY_COOLDOWN_SECONDS=600
-# -- Scripts ------------------------------------------------------------------
+
+# Scripts
 UHM_RELOAD=${reload_script_answer}
 UHM_LEASES=${core_dir}/uhmleases.sh
 # By sysadmin
 UHM_IPTABLES=${uhm_iptables_dest}
-# Timeouts (uhmd -> uhmreload -> uhmleases.sh/uhmiptables.sh)
+
+# Timeouts
 UHM_LEASES_TIMEOUT_SECONDS=120
 UHM_IPTABLES_TIMEOUT_SECONDS=60
-# -- API defaults -------------------------------------------------------------
+
+# API
 # Changing these defaults is not recommended
 UHM_API_TIMEOUT_SECONDS=30
-# -- ACLs (uhm's own; read by uhmd.sh / uhmleases.sh) -------------------------
+
+# ACL
 UHM_PATH=${hotspot_dir}
 UHM_GRACE=${acl_dir}/uhm-grace.txt
 UHM_MACAUTH=${acl_dir}/uhm-auth.txt
 UHM_QUEUE=${acl_dir}/uhm-queue.txt
+
+# Backup
+BACKUP_DIR=/etc/bak/uhm
 # =============================================================================
 EOF
 
@@ -1046,24 +1056,23 @@ install_logrotate() {
     chmod 640 "$uhm_log_file"
     chown root:adm "$uhm_log_file" 2>/dev/null || chown root:root "$uhm_log_file"
 
-    if [[ -f "$logrotate_file" ]]; then
-        info "logrotate config exists: $logrotate_file"
-    else
-        [[ "$report_mode" == "warn" ]] && warn "$(basename "$logrotate_file") missing -alert"
-        cat > "$logrotate_file" <<EOF
+    if [[ ! -f "$logrotate_file" && "$report_mode" == warn ]]; then
+        warn "$(basename "$logrotate_file") missing -alert"
+    fi
+    cat > "$logrotate_file" <<EOF
 ${uhm_log_file} {
     daily
     rotate 7
     compress
+    delaycompress
     missingok
     notifempty
     create 640 root adm
 }
 EOF
-        chown root:root "$logrotate_file"
-        chmod 644 "$logrotate_file"
-        info "logrotate config installed at $logrotate_file"
-    fi
+    chown root:root "$logrotate_file"
+    chmod 644 "$logrotate_file"
+    info "updated $logrotate_file"
 }
 
 final_sanity_check() {
@@ -1430,7 +1439,6 @@ do_update() {
     info "preserved ${config_file}"
     info "preserved ${uhm_iptables_dest}"
     info "preserved ACL data files"
-    info "preserved logrotate config"
 }
 
 # ------------------------------------------------------------------------------

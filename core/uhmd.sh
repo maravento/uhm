@@ -298,7 +298,7 @@ elif ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] \
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
@@ -355,77 +355,13 @@ elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
 
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-# uhm's own ACL files (UHM_MACAUTH, UHM_GRACE, UHM_QUEUE) and pydhcp's
-# (ACL_BLOCK_FILE, ACL_MAC_PATH) -- all configurable, same defaults
-# uhmleases.sh uses for the same variables. uhm's own three hang off UHM_PATH
-# so the install directory is named once and never repeated per file.
-if [ -z "${UHM_PATH:-}" ]; then
-    log "WARNING: no UHM_PATH in uhm.env -fallback"
-fi
-UHM_PATH="${UHM_PATH:-/etc/uhm}"
-if [ -z "${ACL_PATH:-}" ]; then
-    log "WARNING: no ACL_PATH in pydhcp.env -fallback"
-fi
-ACL_PATH="${ACL_PATH:-/etc/acl}"
-if [ -z "${PYDHCPD_LEASES:-}" ]; then
-    log "WARNING: no PYDHCPD_LEASES in pydhcp.env -fallback"
-fi
-PYDHCPD_LEASES="${PYDHCPD_LEASES:-/etc/pydhcp/core/pydhcpd.leases}"
-if [ -z "${UHM_MACAUTH:-}" ]; then
-    log "WARNING: no UHM_MACAUTH in uhm.env -fallback"
-fi
-UHM_MACAUTH="${UHM_MACAUTH:-$UHM_PATH/acl/uhm-auth.txt}"
-if [ -z "${ACL_BLOCK_FILE:-}" ]; then
-    log "WARNING: no ACL_BLOCK_FILE in pydhcp.env -fallback"
-fi
-ACL_BLOCK_FILE="${ACL_BLOCK_FILE:-/etc/pydhcp/acl/blockdhcp.txt}"
-if [ -z "${ACL_MAC_PATH:-}" ]; then
-    log "WARNING: no ACL_MAC_PATH in pydhcp.env -fallback"
-fi
-ACL_MAC_PATH="${ACL_MAC_PATH:-$ACL_PATH/mac}"
-if [ -z "${UHM_GRACE:-}" ]; then
-    log "WARNING: no UHM_GRACE in uhm.env -fallback"
-fi
-UHM_GRACE="${UHM_GRACE:-$UHM_PATH/acl/uhm-grace.txt}"
-if [ -z "${UHM_QUEUE:-}" ]; then
-    log "WARNING: no UHM_QUEUE in uhm.env -fallback"
-fi
-UHM_QUEUE="${UHM_QUEUE:-$UHM_PATH/acl/uhm-queue.txt}"
-if [ -z "${POLL_INTERVAL:-}" ]; then
-    log "WARNING: no POLL_INTERVAL in uhm.env -fallback"
-fi
-POLL_INTERVAL="${POLL_INTERVAL:-20}"
-if [ -z "${STARTUP_GRACE_SECONDS:-}" ]; then
-    log "WARNING: no STARTUP_GRACE_SECONDS in uhm.env -fallback"
-fi
-STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-120}"
-# Fallbacks 120 and 60 must stay in sync with uhmreload.sh, which reads the
-# same two values.
-if [ -z "${UHM_LEASES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -fallback"
-fi
-UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
-if [ -z "${UHM_IPTABLES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS unset -fallback"
-fi
-UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
-if [ -z "${RELOAD_SAFETY_INTERVAL_SECONDS:-}" ]; then
-    log "WARNING: RELOAD_SAFETY_INTERVAL_SECONDS unset -fallback"
-fi
-RELOAD_SAFETY_INTERVAL_SECONDS="${RELOAD_SAFETY_INTERVAL_SECONDS:-3600}"
-if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
-    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -fallback"
-fi
-AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-$default_lease_time}"
 # Integer forms of the LAN subnet, derived from keys KEY CHECK already
 # validated, and read by ip_in_lan()
 subnet_int=$(ip_to_int "$SERV_SUBNET")

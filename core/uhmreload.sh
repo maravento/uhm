@@ -205,33 +205,12 @@ for env_key in UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS; do
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
-
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-# Fallbacks 120 and 60 must stay in sync with uhmd.sh, which reads the same
-# two values.
-if [ -z "${UHM_LEASES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no UHM_LEASES_TIMEOUT_SECONDS in uhm.env -fallback"
-fi
-UHM_LEASES_TIMEOUT_SECONDS="${UHM_LEASES_TIMEOUT_SECONDS:-120}"
-if [ -z "${UHM_IPTABLES_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: UHM_IPTABLES_TIMEOUT_SECONDS unset -fallback"
-fi
-UHM_IPTABLES_TIMEOUT_SECONDS="${UHM_IPTABLES_TIMEOUT_SECONDS:-60}"
-if [ -z "${UHM_LEASES:-}" ]; then
-    log "WARNING: no UHM_LEASES in uhm.env -fallback"
-fi
-UHM_LEASES="${UHM_LEASES:-/etc/uhm/core/uhmleases.sh}"
-if [ -z "${UHM_IPTABLES:-}" ]; then
-    log "WARNING: no UHM_IPTABLES in uhm.env -fallback"
-fi
-UHM_IPTABLES="${UHM_IPTABLES:-/etc/uhm/tools/uhmiptables.sh}"
 
 # ------------------------------------------------------------------------------
 # MAIN

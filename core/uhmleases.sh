@@ -80,6 +80,7 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_BOOL='^(true|false)$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 
@@ -612,11 +613,20 @@ load_uhm_env "$uhm_env" "$env_keys" line || true
 key_errors=()
 for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
                ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF \
-               DAEMON_USER DAEMON_GROUP WPAD_ENABLED PING_CHECK_ENABLED; do
+               DAEMON_USER DAEMON_GROUP; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
+    fi
+done
+for env_key in WPAD_ENABLED PING_CHECK_ENABLED; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_BOOL ]]; then
+        key_errors+=("$env_key invalid boolean")
     fi
 done
 for env_key in CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
@@ -664,7 +674,7 @@ elif ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
@@ -696,98 +706,12 @@ for env_key in UHM_INI_RANGE UHM_END_RANGE; do
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
-
-# FALLBACK
-
-# Second layer of protection, behind KEY CHECK -- by design never reached.
-# Every fallback below is composed from the directory above it, so each base
-# path is named once instead of being repeated in full per file.
-if [ -z "${ACL_PATH:-}" ]; then
-    log "WARNING: no ACL_PATH in pydhcp.env -fallback"
-    ACL_PATH="/etc/acl"
-fi
-if [ -z "${ACL_MAC_PATH:-}" ]; then
-    log "WARNING: no ACL_MAC_PATH in pydhcp.env -fallback"
-    ACL_MAC_PATH="$ACL_PATH/mac"
-fi
-if [ -z "${ACL_DHCP_PATH:-}" ]; then
-    log "WARNING: no ACL_DHCP_PATH in pydhcp.env -fallback"
-    ACL_DHCP_PATH="/etc/pydhcp/acl"
-fi
-if [ -z "${UHM_PATH:-}" ]; then
-    log "WARNING: no UHM_PATH in uhm.env -fallback"
-    UHM_PATH="/etc/uhm"
-fi
-if [ -z "${ACL_MAC_LIMITED:-}" ]; then
-    log "WARNING: no ACL_MAC_LIMITED in pydhcp.env -fallback"
-    ACL_MAC_LIMITED="$ACL_MAC_PATH/mac-limited.txt"
-fi
-if [ -z "${ACL_MAC_UNLIMITED:-}" ]; then
-    log "WARNING: no ACL_MAC_UNLIMITED in pydhcp.env -fallback"
-    ACL_MAC_UNLIMITED="$ACL_MAC_PATH/mac-unlimited.txt"
-fi
-if [ -z "${UHM_MACAUTH:-}" ]; then
-    log "WARNING: no UHM_MACAUTH in uhm.env -fallback"
-    UHM_MACAUTH="$UHM_PATH/acl/uhm-auth.txt"
-fi
-if [ -z "${ACL_BLOCK_FILE:-}" ]; then
-    log "WARNING: no ACL_BLOCK_FILE in pydhcp.env -fallback"
-    ACL_BLOCK_FILE="$ACL_DHCP_PATH/blockdhcp.txt"
-fi
-if [ -z "${PYDHCPD_LEASES:-}" ]; then
-    log "WARNING: no PYDHCPD_LEASES in pydhcp.env -fallback"
-    PYDHCPD_LEASES="/etc/pydhcp/core/pydhcpd.leases"
-fi
-if [ -z "${DHCPDv4_CONF:-}" ]; then
-    log "WARNING: no DHCPDv4_CONF in pydhcp.env -fallback"
-    DHCPDv4_CONF="/etc/pydhcp/core/pydhcpd.conf"
-fi
-if [ -z "${UHM_GRACE:-}" ]; then
-    log "WARNING: no UHM_GRACE in uhm.env -fallback"
-    UHM_GRACE="$UHM_PATH/acl/uhm-grace.txt"
-fi
-if [ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]; then
-    log "WARNING: no BLOCKDHCP_GRACE_SECONDS in uhm.env -fallback"
-    BLOCKDHCP_GRACE_SECONDS="86400"
-fi
-if [ -z "${CLEANUP_INTERVAL:-}" ]; then
-    log "WARNING: no CLEANUP_INTERVAL in pydhcp.env -fallback"
-    CLEANUP_INTERVAL="60"
-fi
-if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
-    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -fallback"
-    AUTHORIZED_LEASE_TIME="2592000"
-fi
-if [ -z "${QUARANTINE_DURATION:-}" ]; then
-    log "WARNING: no QUARANTINE_DURATION in pydhcp.env -fallback"
-    QUARANTINE_DURATION="60"
-fi
-if [ -z "${WPAD_ENABLED:-}" ]; then
-    log "WARNING: no WPAD_ENABLED in pydhcp.env -fallback"
-    WPAD_ENABLED="false"
-fi
-if [ -z "${WPAD_PORT:-}" ]; then
-    log "WARNING: no WPAD_PORT in pydhcp.env -fallback"
-    WPAD_PORT="18100"
-fi
-if [ -z "${PING_CHECK_ENABLED:-}" ]; then
-    log "WARNING: no PING_CHECK_ENABLED in pydhcp.env -fallback"
-    PING_CHECK_ENABLED="true"
-fi
-if [ -z "${PING_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no PING_TIMEOUT_SECONDS in pydhcp.env -fallback"
-    PING_TIMEOUT_SECONDS="1"
-fi
-if [ -z "${UHM_QUEUE:-}" ]; then
-    log "WARNING: no UHM_QUEUE in uhm.env -fallback"
-    UHM_QUEUE="$UHM_PATH/acl/uhm-queue.txt"
-fi
 
 # KEY GUARD
 # Reject incompatible network ranges before rebuilding DHCP state
@@ -830,7 +754,7 @@ unset range_conflict
 
 wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
 wpad_ready=0
-if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+if [ "$WPAD_ENABLED" = true ]; then
     if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
         wpad_ready=1
     else
@@ -846,7 +770,7 @@ else
     wpad_subnet="#option wpad \"$wpad_url\";"
 fi
 
-if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
+if [ "$PING_CHECK_ENABLED" = true ]; then
     ping_check_line="ping-check true;"
     ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS};"
 else

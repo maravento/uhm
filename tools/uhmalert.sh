@@ -335,7 +335,7 @@ for env_key in UHM_ALERT_QUIET_PERIOD_SECONDS UHM_ALERT_JITTER_SECONDS UHM_ALERT
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
     exit 1
@@ -344,20 +344,8 @@ unset key_errors key_error env_key
 jitter_margin="$UHM_ALERT_JITTER_SECONDS"
 dedup_window="$UHM_ALERT_DEDUP_SECONDS"
 
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-if [ -z "${UHM_API_FAIL_THRESHOLD:-}" ]; then
-    log "WARNING: no UHM_API_FAIL_THRESHOLD in uhm.env -fallback"
-fi
-fail_threshold="${UHM_API_FAIL_THRESHOLD:-3}"
-if [ -z "${POLL_INTERVAL:-}" ]; then
-    log "WARNING: no POLL_INTERVAL in uhm.env -fallback"
-fi
-POLL_INTERVAL="${POLL_INTERVAL:-20}"
-if [ -z "${UHM_ALERT_QUIET_PERIOD_SECONDS:-}" ]; then
-    log "WARNING: UHM_ALERT_QUIET_PERIOD_SECONDS unset -fallback"
-fi
-quiet_period="${UHM_ALERT_QUIET_PERIOD_SECONDS:-120}"
+fail_threshold="$UHM_API_FAIL_THRESHOLD"
+quiet_period="$UHM_ALERT_QUIET_PERIOD_SECONDS"
 
 # Maximum log silence allowed before reporting recovery
 gap_limit=$(( POLL_INTERVAL + 3 * UHM_API_TIMEOUT_SECONDS + jitter_margin ))

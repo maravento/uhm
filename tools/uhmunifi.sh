@@ -166,7 +166,7 @@ elif [[ -z "${ACL_MAC_PATH:-}" ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
@@ -197,23 +197,12 @@ elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
-
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-if [ -z "${UNIFI_SITE:-}" ]; then
-    log "WARNING: no UNIFI_SITE in uhm.env -fallback"
-fi
-UNIFI_SITE="${UNIFI_SITE:-default}"
-if [ -z "${UNIFI_TYPE:-}" ]; then
-    log "WARNING: no UNIFI_TYPE in uhm.env -fallback"
-fi
-UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
 
 # ------------------------------------------------------------------------------
 # AUTH

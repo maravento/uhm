@@ -186,11 +186,6 @@ load_env() {
         exit 1
     fi
 
-    # FALLBACK
-    # Second layer of protection, behind KEY CHECK -- by design never reached
-    UNIFI_SITE="${UNIFI_SITE:-default}"
-    UNIFI_TYPE="${UNIFI_TYPE:-unifi-os}"
-
     if [ ! -d "$ACL_MAC_PATH" ]; then
         json_error "cannot read $ACL_MAC_PATH"
         exit 1

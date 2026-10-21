@@ -65,8 +65,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-backup_dir="/etc/bak/uhm"
-backup_zip="${backup_dir}/uhmbk_$(date +%Y%m%d_%H%M%S).zip"
+uhm_env="/etc/uhm/uhm.env"
 installed_path="/etc/uhm/tools/$(basename "$0")"
 
 # ------------------------------------------------------------------------------
@@ -115,6 +114,7 @@ register_cron() {
             log "ERROR: cannot create $(dirname "$installed_path") -abort"
             exit 1
         fi
+        install -m 644 -o root -g root "$(dirname "$script_path")/uhmenv.sh" "$(dirname "$installed_path")/uhmenv.sh"
         install -m 755 -o root -g root "$script_path" "$installed_path"
         log "INFO: deployed to $installed_path"
     fi
@@ -128,14 +128,76 @@ deregister_cron() {
     log "INFO: uhmbk backup cron removed, archives kept"
 }
 
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+env_specs=("$uhm_env root:root 600")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
+# LOAD_CONF
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+env_keys='BACKUP_DIR'
+# LOAD
+load_uhm_env "$uhm_env" "$env_keys" || { log "ERROR: cannot load uhm.env -abort"; exit 1; }
+
+# KEY CHECK
+key_errors=()
+for env_key in BACKUP_DIR; do
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif [ "$env_key" = BACKUP_DIR ] && [[ "$BACKUP_DIR" != /* ]]; then
+        key_errors+=("$env_key invalid absolute path")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "WARNING: $key_error -alert"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+backup_dir="$BACKUP_DIR"
+backup_zip="${backup_dir}/uhmbk_$(date +%Y%m%d_%H%M%S).zip"
+
 # Start
 case "${1:-}" in
     --install)
+        log "uhmbk start..."
         register_cron
+        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     --uninstall)
+        log "uhmbk start..."
         deregister_cron
+        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
         ;;
     "")
@@ -190,7 +252,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     chmod 600 "$backup_part"
     if ! mv -f "$backup_part" "$backup_zip"; then
         rm -f "$backup_part"
-        log "ERROR: $(basename "$backup_zip") failed; check space/permissions -abort"
+        log "ERROR: rename $(basename "$backup_zip"). check chmod -abort"
         exit 1
     fi
     log "INFO: backup written to $(basename "$backup_zip")"
@@ -202,7 +264,7 @@ if (umask 077; zip -r -q -y "$backup_part" "${backup_list[@]}"); then
     fi
 else
     rm -f "$backup_part"
-    log "ERROR: cannot write archive $(basename "$backup_zip") -- check free space and permissions -abort"
+    log "ERROR: $(basename "$backup_zip"). check space/chmod -abort"
     exit 1
 fi
 
