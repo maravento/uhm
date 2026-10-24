@@ -2018,18 +2018,50 @@ sudo chmod 750 uhmiptables.sh
   </tr>
 </table>
 
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      This example uses LogView columns: timestamp, level and message, oldest first. <code>&lt;DATE&gt;</code>, interface names and counters are placeholders; times illustrate the order. LogView supplies <code>STATUS</code> for unlabelled lines. The first <code>uhmd done at</code> belongs to the previous daemon instance. The watchdog and alert monitor may interleave their messages during startup.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      El ejemplo usa las columnas de LogView: fecha y hora, nivel y mensaje, del más antiguo al más reciente. <code>&lt;DATE&gt;</code>, las interfaces y los contadores son placeholders; las horas ilustran el orden. LogView asigna <code>STATUS</code> a las líneas sin nivel. El primer <code>uhmd done at</code> corresponde a la instancia anterior del demonio. El supervisor y el monitor de alertas pueden intercalar mensajes durante el arranque.
+    </td>
+  </tr>
+</table>
+
 ```text
-2026-07-12 21:41:10 INFO: UniFi login failed (HTTP 000) in grace -skip
-2026-07-12 21:41:20 INFO: UniFi login failed (HTTP 000) in grace -skip
-2026-07-12 21:41:30 INFO: UniFi login failed (HTTP 000) in grace -skip
-2026-07-12 21:41:50 INFO: UniFi login OK
-2026-07-12 21:41:51 INFO: Could not load vouchers (rc=empty) -skip
-2026-07-12 21:41:56 INFO: sessions step, stat/guest unavailable -skip
-2026-07-12 21:41:56 INFO: revoke step, stat/sta unavailable -skip
-2026-07-12 21:42:11 INFO: Could not load vouchers (rc=empty) -skip
-2026-07-12 21:42:16 INFO: sessions step, stat/guest unavailable -skip
-2026-07-12 21:42:16 INFO: revoke step, stat/sta unavailable -skip
-2026-07-12 21:42:31 INFO: UniFi backend ready (voucher/guest/sta OK)
+<DATE> 08:00:00	STATUS	uhmd done at: <DATE> 08:00:00
+<DATE> 08:02:00	INFO	Installation verified
+<DATE> 08:02:00	STATUS	uhmd start...
+<DATE> 08:02:00	INFO	interface: <IFACE_1>=UP
+<DATE> 08:02:00	INFO	interface: <IFACE_2>=UP
+<DATE> 08:02:00	INFO	interface: <IFACE_3>=UP
+<DATE> 08:02:00	INFO	interface: <IFACE_4>=DOWN
+<DATE> 08:02:00	INFO	interface: <IFACE_5>=UP
+<DATE> 08:02:00	INFO	UniFi login failed (HTTP 000), retry in grace
+<DATE> 08:02:08	INFO	UniFi login failed (HTTP 000) in grace -skip
+<DATE> 08:02:10	INFO	UniFi login failed (HTTP 000), retry in grace
+<DATE> 08:02:20	INFO	UniFi login failed (HTTP 000), retry in grace
+<DATE> 08:02:30	INFO	UniFi login OK
+<DATE> 08:02:30	INFO	Could not load vouchers (rc=empty) -skip
+<DATE> 08:02:40	INFO	Could not load vouchers (rc=empty) -skip
+<DATE> 08:02:50	INFO	Could not load vouchers (rc=empty) -skip
+<DATE> 08:02:50	INFO	<FAILURE_COUNT> failures within startup grace -skip
+<DATE> 08:03:00	INFO	Could not load vouchers (rc=empty) -skip
+<DATE> 08:03:10	INFO	startup, invoking uhmreload
+<DATE> 08:03:10	STATUS	uhmreload start...
+<DATE> 08:03:10	STATUS	uhmleases start...
+<DATE> 08:03:12	INFO	removing empty lines from ACL files
+<DATE> 08:03:13	INFO	stopping pydhcpd
+<DATE> 08:03:15	INFO	processing leases
+<DATE> 08:03:15	INFO	sorting ACL files
+<DATE> 08:03:15	INFO	rebuilding pydhcpd.conf
+<DATE> 08:03:18	INFO	starting pydhcpd
+<DATE> 08:03:19	STATUS	blockdhcp=<BLOCKED_COUNT>|limited=<LIMITED_COUNT>|unlimited=<UNLIMITED_COUNT>|hotspot=<HOTSPOT_COUNT>|grace=<GRACE_COUNT>
+<DATE> 08:03:19	STATUS	uhmleases done at: <DATE> 08:03:19
+<DATE> 08:03:20	STATUS	uhmiptables start...
+<DATE> 08:03:30	STATUS	uhmiptables done at: <DATE> 08:03:30
+<DATE> 08:03:30	STATUS	uhmreload done at: <DATE> 08:03:30
 ```
 
 > Both parts are expected and self-resolving. The login retries are `uhmd.sh` waiting out `STARTUP_GRACE_SECONDS` while UniFi OS itself is still coming up. The couple of data-endpoint failures right after a successful login happen because UniFi OS brings its auth endpoint up slightly before the rest of its API is ready to serve — a few seconds of lag, not a real failure. `UniFi backend ready` logs exactly once, on the transition from any of `stat/voucher`/`stat/guest`/`stat/sta` failing to all three succeeding together — the single line to watch for "the daemon is now fully operational" instead of inferring it from the absence of further warnings.
@@ -2900,10 +2932,10 @@ sudo /etc/uhm/core/uhmwatch.sh --uninstall
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log stays silent during cycles with no changes. It records state changes, warnings, and errors with levels <code>INFO:</code>, <code>WARNING:</code>, or <code>ERROR:</code>. LogView groups unlabelled counters, start/end markers and processing messages under <code>STATUS</code>. Cycles with log activity are enclosed by <code>INFO: uhmd cycle start</code> and <code>INFO: uhmd cycle end</code>. A daemon exit during an active cycle records <code>INFO: uhmd cycle interrupted</code> instead of the end marker. Startup messages remain outside these markers.
+      <b>uhm.log</b> — All output from every component (<code>uhmd</code>, <code>uhmreload.sh</code>, <code>uhmleases.sh</code>, <code>uhmwatch.sh</code>, <code>uhmalert.sh</code>, <code>uhmiptables.sh</code>) is unified in <code>/var/log/uhm.log</code> and rotated via <code>/etc/logrotate.d/uhm</code> (daily, 7 rotations, compressed). The log stays silent during cycles with no changes. It records state changes, warnings, and errors with levels <code>INFO:</code>, <code>WARNING:</code>, or <code>ERROR:</code>. LogView groups unlabelled counters and start/end markers under <code>STATUS</code>. Lease-processing steps use <code>INFO:</code>. Cycles with log activity are enclosed by <code>INFO: uhmd cycle start</code> and <code>INFO: uhmd cycle end</code>. A daemon exit during an active cycle records <code>INFO: uhmd cycle interrupted</code> instead of the end marker. Startup messages remain outside these markers.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>uhm.log</b> — Todos los componentes escriben en <code>/var/log/uhm.log</code>. El archivo se rota a diario y conserva siete copias comprimidas según <code>/etc/logrotate.d/uhm</code>. Los ciclos sin cambios no generan líneas; cuando hay cambios, advertencias o errores, el registro indica el nivel (<code>INFO:</code>, <code>WARNING:</code> o <code>ERROR:</code>). LogView agrupa los contadores, las marcas de inicio y fin y los mensajes de procesamiento, que no tienen nivel, bajo la etiqueta <code>STATUS</code>. Los ciclos con actividad registrada quedan delimitados por <code>INFO: uhmd cycle start</code> e <code>INFO: uhmd cycle end</code>. Si el demonio termina durante un ciclo activo, registra <code>INFO: uhmd cycle interrupted</code> en lugar del cierre. Los mensajes del arranque quedan fuera de estos marcadores.
+      <b>uhm.log</b> — Todos los componentes escriben en <code>/var/log/uhm.log</code>. El archivo se rota a diario y conserva siete copias comprimidas según <code>/etc/logrotate.d/uhm</code>. Los ciclos sin cambios no generan líneas; cuando hay cambios, advertencias o errores, el registro indica el nivel (<code>INFO:</code>, <code>WARNING:</code> o <code>ERROR:</code>). LogView agrupa los contadores y las marcas de inicio y fin, que no tienen nivel, bajo la etiqueta <code>STATUS</code>. Los pasos de procesamiento de concesiones usan <code>INFO:</code>. Los ciclos con actividad registrada quedan delimitados por <code>INFO: uhmd cycle start</code> e <code>INFO: uhmd cycle end</code>. Si el demonio termina durante un ciclo activo, registra <code>INFO: uhmd cycle interrupted</code> en lugar del cierre. Los mensajes del arranque quedan fuera de estos marcadores.
     </td>
   </tr>
 </table>
@@ -2961,7 +2993,7 @@ sudo /etc/uhm/core/uhmwatch.sh --uninstall
 
 | Level | What happens | Qué ocurre | Example |
 |---|---|---|---|
-| *(no level)* | Start/end markers, processing messages and per-cycle totals | Marcas de inicio y fin, mensajes de procesamiento y totales por ciclo | `uhmleases start...` · `blockdhcp=67\|limited=105\|...` |
+| *(no level)* | Start/end markers and per-cycle totals | Marcas de inicio y fin y totales por ciclo | `uhmleases start...` · `blockdhcp=67\|limited=105\|...` |
 | `INFO:` | One line per state change | Una línea por cambio de estado | `new client X -> grace` · `Authorized X` · `kicked X` |
 | `INFO: ... -skip` | The step is skipped and retried next cycle | El paso se salta y se reintenta en el siguiente ciclo | `API GET stat/sta -> HTTP 000 -skip` |
 | `INFO:` | Logged once, when all three endpoints answer together | Se registra una vez, cuando los tres endpoints responden juntos | `UniFi backend ready (voucher/guest/sta OK)` |
@@ -2973,30 +3005,48 @@ sudo /etc/uhm/core/uhmwatch.sh --uninstall
 | `ERROR: ... -abort` | The script stops before touching anything | El script se detiene antes de tocar nada | `missing dependency 'jq' -abort` · `uhm.env not found, run uhmsetup.sh -abort` |
 | `ERROR: ... -abort` | Every offending entry is listed before aborting | Se listan todas las entradas implicadas antes de abortar | `mac-*.txt IP conflict -abort` |
 
+##### Client arrival cycle
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      LogView columns, oldest first. A new client enters grace, changes <code>uhm-grace.txt</code> and triggers the reload chain. The example assumes no grace expiration or voucher authorization during this cycle. Client identifiers, dates and totals are placeholders; times illustrate the order. <code>uhmd cycle end</code> closes the cycle, not the daemon process.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Columnas de LogView, del registro más antiguo al más reciente. Un cliente nuevo entra en gracia, cambia <code>uhm-grace.txt</code> y provoca la cadena de recarga. El ejemplo supone que no hay expiraciones de gracia ni autorizaciones con voucher durante este ciclo. Los identificadores, la fecha y los totales son placeholders; las horas ilustran el orden. <code>uhmd cycle end</code> cierra el ciclo, no el proceso del demonio.
+    </td>
+  </tr>
+</table>
+
 ```text
-2026-07-01 06:47:35 INFO: uhmd cycle start
-2026-07-01 06:47:35 INFO: new client 02:00:00:aa:bb:10 -> grace
-2026-07-01 06:47:35 INFO: ip=192.168.0.231 host=no_name_fde07d34be
-2026-07-01 06:47:35 INFO: added 1 new client(s) to uhm-grace
-2026-07-01 06:47:35 INFO: uhm-grace.txt changed
-2026-07-01 06:47:35 INFO: invoking /etc/uhm/core/uhmreload.sh
-2026-07-01 06:47:35 uhmreload start...
-2026-07-01 06:47:35 uhmleases start...
-2026-07-01 06:47:36 INFO: 02:00:00:aa:bb:11 expired (age=43346s)
-2026-07-01 06:47:36 INFO: add 02:00:00:aa:bb:11 to blockdhcp
-2026-07-01 06:47:36 INFO: queued removal for 02:00:00:aa:bb:11
-2026-07-01 06:47:40 blockdhcp=67|limited=105|unlimited=35|hotspot=17|grace=8
-2026-07-01 06:47:40 uhmleases done at: 2026-07-01 06:47:40
-2026-07-01 06:47:40 uhmiptables start...
-2026-07-01 06:47:42 uhmiptables done at: 2026-07-01 06:47:42
-2026-07-01 06:47:42 uhmreload done at: 2026-07-01 06:47:42
-2026-07-01 06:47:42 vouchers=3|auth=17|grace=8|newauth=0|revoked=0
-2026-07-01 06:47:42 INFO: uhmd cycle end
+<DATE> 09:00:00	INFO	uhmd cycle start
+<DATE> 09:00:00	INFO	new client <CLIENT_MAC> -> grace
+<DATE> 09:00:00	INFO	ip=<CLIENT_IP> host=<CLIENT_HOSTNAME>
+<DATE> 09:00:00	INFO	added 1 new client(s) to uhm-grace
+<DATE> 09:00:03	INFO	uhm-grace.txt changed
+<DATE> 09:00:03	INFO	invoking /etc/uhm/core/uhmreload.sh
+<DATE> 09:00:03	STATUS	uhmreload start...
+<DATE> 09:00:04	STATUS	uhmleases start...
+<DATE> 09:00:06	INFO	removing empty lines from ACL files
+<DATE> 09:00:06	INFO	stopping pydhcpd
+<DATE> 09:00:06	INFO	processing leases
+<DATE> 09:00:06	INFO	sorting ACL files
+<DATE> 09:00:06	INFO	rebuilding pydhcpd.conf
+<DATE> 09:00:09	INFO	starting pydhcpd
+<DATE> 09:00:10	STATUS	blockdhcp=<BLOCKED_COUNT>|limited=<LIMITED_COUNT>|unlimited=<UNLIMITED_COUNT>|hotspot=<HOTSPOT_COUNT>|grace=<GRACE_COUNT>
+<DATE> 09:00:10	STATUS	uhmleases done at: <DATE> 09:00:10
+<DATE> 09:00:11	STATUS	uhmiptables start...
+<DATE> 09:00:21	STATUS	uhmiptables done at: <DATE> 09:00:21
+<DATE> 09:00:21	STATUS	uhmreload done at: <DATE> 09:00:21
+<DATE> 09:00:21	STATUS	vouchers=<VOUCHER_COUNT>|auth=<AUTH_COUNT>|grace=<GRACE_COUNT>|newauth=0|revoked=0
+<DATE> 09:00:21	INFO	uhmd cycle end
 ```
 
 > When no client connects, no voucher is redeemed, and no grace entry expires, the log between two cycles is simply empty -- nothing is written.
 >
 > Cuando no hay cliente conectado, ningún voucher canjeado, ni ninguna entrada de gracia expirada, el log entre dos ciclos queda simplemente vacío: no se escribe nada.
+
+##### Reload failure and backoff
 
 <table>
   <tr>

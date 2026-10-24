@@ -333,14 +333,13 @@ acl_prepare "$acl_ipt_path" 700 600 "$path_ips" "$path_macs"
 blockports_file="$acl_ipt_path/blockports.txt"
 blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/ipt/blockports.txt"
 if [ ! -f "$blockports_file" ]; then
-    if curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
-        acl_fix_perms "$blockports_file" 600
-    else
+    if ! curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
         rm -f "$blockports_file"
         log "ERROR: cannot download $blockports_file -abort"
         exit 1
     fi
 fi
+acl_fix_perms "$blockports_file" 600
 
 # MAC SETS
 # The four MAC sets are declared and filled here, in one place, before any
