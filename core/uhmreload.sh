@@ -78,10 +78,29 @@ done
 
 # validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
 
 ensure_executable() {
     local script_path="$1" script_name="$2" expected_mode="$3"
@@ -152,8 +171,8 @@ run_step() {
 
 # PERMS
 # Owner and mode of every .env this script reads
-config_file="/etc/uhm/uhm.env"
-env_specs=("$config_file root:root 600")
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
@@ -183,32 +202,34 @@ env_keys='UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_LEASES UHM
 
 # LOAD
 # Reads uhm.env; a missing key is handled by the check below
-load_uhm_env "$config_file" "$env_keys" line || true
+load_uhm_env "$uhm_env" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
 for env_key in UHM_LEASES UHM_IPTABLES; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     fi
 done
 for env_key in UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
         key_errors+=("$env_key invalid seconds")
+    elif ! uh_fits "${!env_key}"; then
+        key_errors+=("$env_key exceeds the Bash integer range")
     fi
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key

@@ -121,6 +121,25 @@ target_path="/etc/uhm/core/uhmwatch.sh"
 
 # validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
 
 # ------------------------------------------------------------------------------
 # INSTALL
@@ -222,8 +241,8 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch start..."
 
 # PERMS
 # Owner and mode of every .env this script reads
-uhm_conf="/etc/uhm/uhm.env"
-env_specs=("$uhm_conf root:root 600")
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
@@ -253,45 +272,50 @@ env_keys='UNIFI_TYPE UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_CE
 
 # LOAD
 # Reads uhm.env; a missing key is handled by the check below
-load_uhm_env "$uhm_conf" "$env_keys" key || true
+load_uhm_env "$uhm_env" "$env_keys" key || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
 for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD; do
-    if ! grep -q "^${env_key}=" "$uhm_conf"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     fi
 done
-if ! grep -q "^UNIFI_TYPE=" "$uhm_conf"; then
+if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
     key_errors+=("UNIFI_TYPE missing line")
 elif [[ -z "${UNIFI_TYPE:-}" ]]; then
     key_errors+=("UNIFI_TYPE not set")
 elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
     key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
 fi
-if ! grep -q "^RECOVERY_COOLDOWN_SECONDS=" "$uhm_conf"; then
+if ! grep -q "^RECOVERY_COOLDOWN_SECONDS=" "$uhm_env"; then
     key_errors+=("RECOVERY_COOLDOWN_SECONDS missing line")
 elif [[ -z "${RECOVERY_COOLDOWN_SECONDS:-}" ]]; then
     key_errors+=("RECOVERY_COOLDOWN_SECONDS not set")
-elif ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]] \
-     || (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
+elif ! [[ "$RECOVERY_COOLDOWN_SECONDS" =~ $UH_UINT ]]; then
+    key_errors+=("RECOVERY_COOLDOWN_SECONDS invalid seconds")
+elif ! uh_fits "$RECOVERY_COOLDOWN_SECONDS"; then
+    key_errors+=("RECOVERY_COOLDOWN_SECONDS exceeds the Bash integer range")
+elif (( RECOVERY_COOLDOWN_SECONDS <= 60 )); then
     key_errors+=("RECOVERY_COOLDOWN_SECONDS invalid seconds")
 fi
-if ! grep -q "^STARTUP_GRACE_SECONDS=" "$uhm_conf"; then
+if ! grep -q "^STARTUP_GRACE_SECONDS=" "$uhm_env"; then
     key_errors+=("STARTUP_GRACE_SECONDS missing line")
 elif [[ -z "${STARTUP_GRACE_SECONDS:-}" ]]; then
     key_errors+=("STARTUP_GRACE_SECONDS not set")
 elif ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
     key_errors+=("STARTUP_GRACE_SECONDS invalid seconds")
+elif ! uh_fits "$STARTUP_GRACE_SECONDS"; then
+    key_errors+=("STARTUP_GRACE_SECONDS exceeds the Bash integer range")
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_conf") -abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key

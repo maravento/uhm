@@ -79,7 +79,9 @@ hotspot_dir="/etc/uhm"
 core_dir="${hotspot_dir}/core"
 tools_dir="${hotspot_dir}/tools"
 acl_dir="${hotspot_dir}/acl"
-config_file="${hotspot_dir}/uhm.env"
+acl_base_dir="/etc/acl"
+acl_mac_dir="${acl_base_dir}/mac"
+uhm_env="${hotspot_dir}/uhm.env"
 pydhcp_env="/etc/pydhcp/pydhcp.env"
 uhmbk_script="${tools_dir}/uhmbk.sh"
 log_file="${script_dir}/uhmsetup.log"
@@ -104,7 +106,7 @@ repo_uhmd="${repo_core}/uhmd.sh"
 repo_web="${script_dir}/web"
 repo_config="${script_dir}/config"
 repo_wpad="${repo_config}/wpad"
-repo_uhmweb="${repo_config}/uhmweb"
+repo_uhmweb="${repo_config}/web"
 repo_service="${repo_config}/service/uhmd.service"
 
 # Required apt packages
@@ -273,7 +275,7 @@ check_preinstalled() {
     check_conflicts "firewall"    firewalld
     warn_overlap "dhcp" dnsmasq
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "^Status: active"; then
-        err "ufw active; disable it before UHM -abort"
+        abort "ufw active; disable it before UHM -abort"
     fi
     info "No conflicting packages found"
 }
@@ -303,8 +305,8 @@ env_keys='SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE
 # blockdhcp pool range) from pydhcp_env instead of asking for them again --
 # pysetup.sh already collected and persisted them. Only the keys this
 # installer itself needs for the wizard are required here: the rest live in
-# pydhcp.env and each component reads them from there at runtime, warning
-# and falling back if one is missing.
+# pydhcp.env and each component reads and validates its required keys
+# from there at runtime.
 # Sets SERVER_IP, SERV_MASK, SERV_SUBNET, SERV_BROADCAST,
 # SERV_DNS, SERV_INI_RANGE_BLOCK, SERV_END_RANGE_BLOCK for
 # run_setup_wizard.
@@ -342,6 +344,71 @@ load_pydhcp_conf() {
 
 # INTERACTIVE PROMPTS
 # Ask helpers, each one validating its own answer
+# ACL PREPARATION
+# Canonical block -- copied byte for byte into every script that creates a
+# directory or a list under /etc/acl. Prepare /etc/acl first, then only the
+# subdirectory and the lists this script needs. Never recursive.
+# Usage: acl_prepare <dir> <dir_mode> <file_mode> [file ...]
+acl_prepare() {
+    local acl_dir="$1" dir_mode="$2" file_mode="$3" acl_file
+    shift 3
+
+    # mkdir without -p fails when the directory already exists, so a success
+    # means this run created it and no concurrent run did.
+    if mkdir -m "$dir_mode" -- "$acl_dir" 2>/dev/null; then
+        if ! chown root:root -- "$acl_dir"; then
+            log "ERROR: cannot set owner of $acl_dir -abort"
+            exit 1
+        fi
+        log "WARNING: created ACL directory $acl_dir -alert"
+    elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
+        acl_fix_perms "$acl_dir" "$dir_mode"
+    else
+        log "ERROR: $acl_dir is not a regular directory -abort"
+        exit 1
+    fi
+
+    for acl_file in "$@"; do
+        # Checked before the redirection: noclobber only protects regular
+        # files, and opening a FIFO for writing blocks until a reader shows up.
+        if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+        # noclobber makes the redirection fail when the file already exists,
+        # and umask 077 keeps the new file closed until chmod sets its mode.
+        if (set -C; umask 077; : > "$acl_file") 2>/dev/null; then
+            if ! { chmod "$file_mode" -- "$acl_file" \
+                && chown root:root -- "$acl_file"; }; then
+                log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
+                exit 1
+            fi
+            log "WARNING: created empty $(basename "$acl_file") -alert"
+        elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
+            acl_fix_perms "$acl_file" "$file_mode"
+        else
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+    done
+}
+
+# Repairs mode and owner of an existing ACL object, per Autorreparación
+acl_fix_perms() {
+    local acl_path="$1" want_mode="$2" cur_mode cur_owner
+    cur_mode=$(stat -c '%a' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    cur_owner=$(stat -c '%U:%G' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
+    if ! { chmod "$want_mode" -- "$acl_path" \
+        && chown root:root -- "$acl_path"; }; then
+        log "ERROR: cannot fix $acl_path perms -abort"
+        exit 1
+    fi
+    log "INFO: $acl_path perms fixed -fixed"
+}
+
 ask() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
@@ -588,8 +655,7 @@ run_setup_wizard() {
     step "Hotspot SSID"
     # uhm only supports a single guest SSID tied to the UniFi captive
     # portal. Exactly one found -> use it directly, no question. None found
-    # is a real UniFi-side problem (no SSID configured, or the query itself
-    # failed) -abort the same way as a missing controller. More than one
+    # -> warn and continue; UHM_ESSID must be set before operation. More than one
     # -> the administrator must pick which one is the captive portal SSID.
     local ssid_list=()
     mapfile -t ssid_list < <(fetch_unifi_ssids "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass")
@@ -604,12 +670,12 @@ run_setup_wizard() {
         done
         if [[ -z "$cfg_essid" ]]; then
             warn "no SSID selected from list -alert"
-            warn "set UHM_ESSID in $(basename "$config_file") before starting uhm -alert"
+            warn "set UHM_ESSID in $(basename "$uhm_env") before starting uhm -alert"
         fi
     else
         cfg_essid=""
         warn "no SSID detected on UniFi controller -alert"
-        warn "set UHM_ESSID in $(basename "$config_file") before starting uhm -alert"
+        warn "set UHM_ESSID in $(basename "$uhm_env") before starting uhm -alert"
     fi
 
     step "Dependency check"
@@ -651,11 +717,11 @@ run_setup_wizard() {
     echo "They bypass entirely at DHCP level (uhmleases.sh) -- daemon"
     echo "itself never authorizes them in UniFi"
     echo "Files are stored in /etc/acl/mac/ and managed manually"
-    mkdir -p /etc/acl/mac
-    chmod 700 /etc/acl/mac
+    acl_prepare "$acl_base_dir" 755 644
+    acl_prepare "$acl_mac_dir" 700 600
     info "Add your mac-*.txt files to /etc/acl/mac/"
 
-    step "Writing $config_file"
+    step "Writing $uhm_env"
     (
         umask 077
         local essid_answer user_answer pass_answer url_answer reload_script_answer
@@ -671,7 +737,7 @@ run_setup_wizard() {
         # uhm.env holds only uhm's own keys. pydhcp's values (network,
         # ACL paths, leases) stay in pydhcp.env and are read from there at
         # runtime, so a change in that file reaches uhm without a re-install.
-        : > "$config_file"
+        : > "$uhm_env"
 
         # Any key pydhcp.env already defines -- pydhcp's own, or one added
         # there by another project -- is skipped
@@ -735,6 +801,7 @@ UHM_MACAUTH=${acl_dir}/uhm-auth.txt
 UHM_QUEUE=${acl_dir}/uhm-queue.txt
 
 # Backup
+# Changing these defaults is not recommended
 BACKUP_DIR=/etc/bak/uhm
 # =============================================================================
 EOF
@@ -758,11 +825,11 @@ EOF
         done < "$uhm_block"
         rm -f "$uhm_block"
 
-        insert_after_last_delimiter "$config_file" "$filtered_block"
+        insert_after_last_delimiter "$uhm_env" "$filtered_block"
     )
-    chown root:root "$config_file"
-    chmod 600 "$config_file"
-    info "Config saved to $config_file (mode 600)"
+    chown root:root "$uhm_env"
+    chmod 600 "$uhm_env"
+    info "Config saved to $uhm_env (mode 600)"
 }
 
 # FILESYSTEM LAYOUT
@@ -1385,7 +1452,7 @@ do_update() {
     fi
 
     step "ACL data files"
-    # acl_dir (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), config_file
+    # acl_dir (uhm-auth.txt, uhm-queue.txt, uhm-grace.txt), uhm_env
     # and uhm_iptables_dest are the administrator's own live/customized data.
     # --update never renames, moves or overwrites anything already present --
     # deploy_acl_files()/deploy_uhmiptables() below only create what's
@@ -1437,7 +1504,7 @@ do_update() {
     fi
 
     info "update complete"
-    info "preserved ${config_file}"
+    info "preserved ${uhm_env}"
     info "preserved ${uhm_iptables_dest}"
     info "preserved ACL data files"
 }
@@ -1530,7 +1597,7 @@ perform_remove() {
         info "uhmalert.service not installed"
     fi
 
-    # uhmwatch (mandatory component, but --remove uninstalls everything
+    # uhmwatch (mandatory component, but --uninstall uninstalls everything
     # regardless -- defensive check in case it was manually uninstalled)
     step "uhmwatch"
     # Web interface (optional component)
@@ -1618,10 +1685,10 @@ do_status() {
 
     echo ""
     echo "=== Config ==="
-    if [[ -f "$config_file" ]]; then
-        echo "$config_file present"
+    if [[ -f "$uhm_env" ]]; then
+        echo "$uhm_env present"
     else
-        echo "$config_file not found"
+        echo "$uhm_env not found"
     fi
 
     echo ""

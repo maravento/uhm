@@ -81,6 +81,9 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 UH_BOOL='^(true|false)$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
@@ -88,6 +91,22 @@ UH_MAC="^${UH_MAC_RE}$"
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
 
 # CYCLE_LOCK is the mechanism lock, distinct from script_lock above (which
 # only prevents a second copy of this same script). It is acquired here
@@ -189,12 +208,6 @@ verify_dhcp_config() {
 }
 
 verify_directories() {
-    for check_dir in "$ACL_MAC_PATH" "$ACL_DHCP_PATH"; do
-        if [ ! -d "$check_dir" ]; then
-            log "ERROR: directory $check_dir does not exist -abort"
-            exit 1
-        fi
-    done
     if [ ! -d "$UHM_PATH" ]; then
         log "ERROR: directory $UHM_PATH does not exist -abort"
         exit 1
@@ -207,35 +220,81 @@ verify_directories() {
     fi
 }
 
-ensure_acl_lists() {
-    local check_file file_owner file_perms
-    for check_file in "$@"; do
-        if [ ! -f "$check_file" ]; then
-            touch "$check_file"
-            chmod 600 "$check_file"
-            chown root:root "$check_file"
-            continue
+# ACL PREPARATION
+# Canonical block -- copied byte for byte into every script that creates a
+# directory or a list under /etc/acl. Prepare /etc/acl first, then only the
+# subdirectory and the lists this script needs. Never recursive.
+# Usage: acl_prepare <dir> <dir_mode> <file_mode> [file ...]
+acl_prepare() {
+    local acl_dir="$1" dir_mode="$2" file_mode="$3" acl_file
+    shift 3
+
+    # mkdir without -p fails when the directory already exists, so a success
+    # means this run created it and no concurrent run did.
+    if mkdir -m "$dir_mode" -- "$acl_dir" 2>/dev/null; then
+        if ! chown root:root -- "$acl_dir"; then
+            log "ERROR: cannot set owner of $acl_dir -abort"
+            exit 1
         fi
-        file_owner=$(stat -c '%U' "$check_file" 2>/dev/null)
-        file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
-        if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-            if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "INFO: $(basename "$check_file") perms fixed -fixed"
-            else
-                log "ERROR: cannot fix $(basename "$check_file") perms -abort"
+        log "WARNING: created ACL directory $acl_dir -alert"
+    elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
+        acl_fix_perms "$acl_dir" "$dir_mode"
+    else
+        log "ERROR: $acl_dir is not a regular directory -abort"
+        exit 1
+    fi
+
+    for acl_file in "$@"; do
+        # Checked before the redirection: noclobber only protects regular
+        # files, and opening a FIFO for writing blocks until a reader shows up.
+        if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+        # noclobber makes the redirection fail when the file already exists,
+        # and umask 077 keeps the new file closed until chmod sets its mode.
+        if (set -C; umask 077; : > "$acl_file") 2>/dev/null; then
+            if ! { chmod "$file_mode" -- "$acl_file" \
+                && chown root:root -- "$acl_file"; }; then
+                log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
                 exit 1
             fi
+            log "WARNING: created empty $(basename "$acl_file") -alert"
+        elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
+            acl_fix_perms "$acl_file" "$file_mode"
+        else
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
         fi
     done
+}
+
+# Repairs mode and owner of an existing ACL object, per Autorreparación
+acl_fix_perms() {
+    local acl_path="$1" want_mode="$2" cur_mode cur_owner
+    cur_mode=$(stat -c '%a' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    cur_owner=$(stat -c '%U:%G' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
+    if ! { chmod "$want_mode" -- "$acl_path" \
+        && chown root:root -- "$acl_path"; }; then
+        log "ERROR: cannot fix $acl_path perms -abort"
+        exit 1
+    fi
+    log "INFO: $acl_path perms fixed -fixed"
 }
 
 initialize_empty_files() {
     shopt -s nullglob
     local mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
-    ensure_acl_lists "$ACL_BLOCK_FILE" "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
-        "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE" \
+    acl_prepare "$ACL_PATH" 755 644
+    acl_prepare "$ACL_MAC_PATH" 700 600 "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
         "${mac_lists[@]+"${mac_lists[@]}"}"
+    acl_prepare "$ACL_DHCP_PATH" 700 600 "$ACL_BLOCK_FILE"
+    acl_prepare "$(dirname "$UHM_MACAUTH")" 700 600 \
+        "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
 }
 
 # Guard: initialize_empty_files() above always creates mac-limited.txt and
@@ -636,7 +695,7 @@ for env_key in CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
         key_errors+=("$env_key invalid seconds")
     fi
 done
@@ -695,6 +754,8 @@ elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
     key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
 elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
     key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
+elif ! uh_fits "$BLOCKDHCP_GRACE_SECONDS"; then
+    key_errors+=("BLOCKDHCP_GRACE_SECONDS exceeds the Bash integer range")
 fi
 for env_key in UHM_INI_RANGE UHM_END_RANGE; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
@@ -1215,9 +1276,9 @@ log "blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$ACL_MA
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
-
 if (( pydhcpd_start_failed )); then
     log "ERROR: pydhcpd is down -abort"
     exit 1
 fi
+
+log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"

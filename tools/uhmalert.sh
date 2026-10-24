@@ -84,14 +84,85 @@ done
 
 # validation -- integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 
 target_path="/etc/uhm/tools/uhmalert.sh"
 unit_path="/etc/systemd/system/uhmalert.service"
-config_file="/etc/uhm/uhm.env"
+uhm_env="/etc/uhm/uhm.env"
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
+
+# calculation - checked signed 64-bit arithmetic, no external process
+uh_calc() {
+    local op="${1-}" a="${2-}" b="${3-}" product
+    [ "$#" -eq 3 ] || return 1
+    uh_fits "$a" || return 1
+    uh_fits "$b" || return 1
+    case "$op" in
+        add)
+            (( b > 0 && a > UH_MAX - b )) && return 1
+            (( b < 0 && a < UH_MIN - b )) && return 1
+            printf '%s\n' "$(( a + b ))"
+            ;;
+        sub)
+            (( b < 0 && a > UH_MAX + b )) && return 1
+            (( b > 0 && a < UH_MIN + b )) && return 1
+            printf '%s\n' "$(( a - b ))"
+            ;;
+        mul)
+            if (( a == 0 || b == 0 )); then
+                printf '%s\n' 0
+                return 0
+            fi
+            if (( b == -1 )); then
+                (( a == UH_MIN )) && return 1
+                printf '%s\n' "$(( -a ))"
+                return 0
+            fi
+            if (( a == -1 )); then
+                (( b == UH_MIN )) && return 1
+                printf '%s\n' "$(( -b ))"
+                return 0
+            fi
+            product=$(( a * b ))
+            (( product / b != a )) && return 1
+            printf '%s\n' "$product"
+            ;;
+        div)
+            (( b == 0 )) && return 1
+            (( a == UH_MIN && b == -1 )) && return 1
+            printf '%s\n' "$(( a / b ))"
+            ;;
+        mod)
+            (( b == 0 )) && return 1
+            printf '%s\n' "$(( a % b ))"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
 
 # Appends $2 (one or more lines) right after the file's LAST
 # "# ====...====" line, instead of a plain >> append -- so the new block
@@ -124,20 +195,20 @@ install_module() {
     echo "Installing uhmalert (uhm alert)"
     echo ""
 
-    if [[ ! -f "$config_file" ]]; then
-        log "ERROR: $config_file not found"
+    if [[ ! -f "$uhm_env" ]]; then
+        log "ERROR: $uhm_env not found"
         log "ERROR: install and configure uhm first -abort"
         exit 1
     fi
 
     # Only append if not already configured -- never overwrite an existing
     # topic (e.g. on a re-install) or a threshold the user already tuned.
-    if grep -q '^UHM_NTFY_TOPIC=' "$config_file"; then
-        gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$config_file" | tail -1 | cut -d'=' -f2- | tr -d '"')
+    if grep -q '^UHM_NTFY_TOPIC=' "$uhm_env"; then
+        gen_topic=$(grep '^UHM_NTFY_TOPIC=' "$uhm_env" | tail -1 | cut -d'=' -f2- | tr -d '"')
         log "INFO: UHM_NTFY_TOPIC already set, left untouched"
     else
         gen_topic="uhm-alert-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)"
-        insert_after_last_delimiter "$config_file" "# =============================================================================
+        insert_after_last_delimiter "$uhm_env" "# =============================================================================
 # UHM ALERT
 # =============================================================================
 UHM_NTFY_TOPIC=$gen_topic
@@ -148,27 +219,27 @@ UHM_ALERT_QUIET_PERIOD_SECONDS=120
 UHM_ALERT_JITTER_SECONDS=10
 UHM_ALERT_DEDUP_SECONDS=300
 # ============================================================================="
-        log "INFO: added 5 alert keys to $config_file"
+        log "INFO: added 5 alert keys to $uhm_env"
     fi
     # Insert right after their neighbor in the Alert block (not a plain
     # >> append) so upgrading an older install doesn't scatter these
     # variables to the end of the file, past unrelated later sections.
-    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$config_file"; then
-        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$uhm_env"; then
+        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$uhm_env" \
+            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
     fi
-    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$config_file"; then
-        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$uhm_env"; then
+        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$uhm_env" \
+            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
     fi
 
-    if ! grep -q '^UHM_ALERT_JITTER_SECONDS=' "$config_file"; then
-        sed -i '/^UHM_ALERT_QUIET_PERIOD_SECONDS=/a # Alert defaults\n# Changing these defaults is not recommended\nUHM_ALERT_JITTER_SECONDS=10' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    if ! grep -q '^UHM_ALERT_JITTER_SECONDS=' "$uhm_env"; then
+        sed -i '/^UHM_ALERT_QUIET_PERIOD_SECONDS=/a # Alert defaults\n# Changing these defaults is not recommended\nUHM_ALERT_JITTER_SECONDS=10' "$uhm_env" \
+            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
     fi
-    if ! grep -q '^UHM_ALERT_DEDUP_SECONDS=' "$config_file"; then
-        sed -i '/^UHM_ALERT_JITTER_SECONDS=/a UHM_ALERT_DEDUP_SECONDS=300' "$config_file" \
-            || { log "ERROR: cannot write $(basename "$config_file") -abort"; exit 1; }
+    if ! grep -q '^UHM_ALERT_DEDUP_SECONDS=' "$uhm_env"; then
+        sed -i '/^UHM_ALERT_JITTER_SECONDS=/a UHM_ALERT_DEDUP_SECONDS=300' "$uhm_env" \
+            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
     fi
 
     local self_path
@@ -279,7 +350,7 @@ fi
 
 # PERMS
 # Owner and mode of every .env this script reads
-env_specs=("$config_file root:root 600")
+env_specs=("$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
@@ -309,40 +380,44 @@ env_keys='UHM_NTFY_TOPIC UHM_API_FAIL_THRESHOLD UHM_ALERT_QUIET_PERIOD_SECONDS U
 
 # LOAD
 # Reads uhm.env; a missing key is handled by the check below
-load_uhm_env "$config_file" "$env_keys" line || true
+load_uhm_env "$uhm_env" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 # Alert keys are written by this script's install action; POLL_INTERVAL by uhmsetup.sh.
 key_errors=()
-if ! grep -q "^UHM_NTFY_TOPIC=" "$config_file"; then
+if ! grep -q "^UHM_NTFY_TOPIC=" "$uhm_env"; then
     key_errors+=("UHM_NTFY_TOPIC missing line")
 elif [[ -z "${UHM_NTFY_TOPIC:-}" ]]; then
     key_errors+=("UHM_NTFY_TOPIC not set")
 fi
 for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL UHM_API_TIMEOUT_SECONDS; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
         key_errors+=("$env_key invalid count")
+    elif ! uh_fits "${!env_key}"; then
+        key_errors+=("$env_key exceeds the Bash integer range")
     fi
 done
 for env_key in UHM_ALERT_QUIET_PERIOD_SECONDS UHM_ALERT_JITTER_SECONDS UHM_ALERT_DEDUP_SECONDS; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     elif ! [[ "${!env_key}" =~ $UH_UINT ]]; then
         key_errors+=("$env_key invalid seconds")
+    elif ! uh_fits "${!env_key}"; then
+        key_errors+=("$env_key exceeds the Bash integer range")
     fi
 done
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
@@ -353,7 +428,18 @@ fail_threshold="$UHM_API_FAIL_THRESHOLD"
 quiet_period="$UHM_ALERT_QUIET_PERIOD_SECONDS"
 
 # Maximum log silence allowed before reporting recovery
-gap_limit=$(( POLL_INTERVAL + 3 * UHM_API_TIMEOUT_SECONDS + jitter_margin ))
+gap_limit=$(uh_calc mul 3 "$UHM_API_TIMEOUT_SECONDS") || {
+    log "ERROR: gap limit exceeds the Bash integer range -abort"
+    exit 1
+}
+gap_limit=$(uh_calc add "$gap_limit" "$POLL_INTERVAL") || {
+    log "ERROR: gap limit exceeds the Bash integer range -abort"
+    exit 1
+}
+gap_limit=$(uh_calc add "$gap_limit" "$jitter_margin") || {
+    log "ERROR: gap limit exceeds the Bash integer range -abort"
+    exit 1
+}
 
 # ------------------------------------------------------------------------------
 # MAIN

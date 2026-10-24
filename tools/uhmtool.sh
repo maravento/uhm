@@ -54,6 +54,9 @@ trap cleanup_temp EXIT
 # validation -- one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 
@@ -82,6 +85,74 @@ bare_mac_pattern="^${UH_MAC_RE}\$"
 # Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
 env_keys='BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
+
+# calculation - checked signed 64-bit arithmetic, no external process
+uh_calc() {
+    local op="${1-}" a="${2-}" b="${3-}" product
+    [ "$#" -eq 3 ] || return 1
+    uh_fits "$a" || return 1
+    uh_fits "$b" || return 1
+    case "$op" in
+        add)
+            (( b > 0 && a > UH_MAX - b )) && return 1
+            (( b < 0 && a < UH_MIN - b )) && return 1
+            printf '%s\n' "$(( a + b ))"
+            ;;
+        sub)
+            (( b < 0 && a > UH_MAX + b )) && return 1
+            (( b > 0 && a < UH_MIN + b )) && return 1
+            printf '%s\n' "$(( a - b ))"
+            ;;
+        mul)
+            if (( a == 0 || b == 0 )); then
+                printf '%s\n' 0
+                return 0
+            fi
+            if (( b == -1 )); then
+                (( a == UH_MIN )) && return 1
+                printf '%s\n' "$(( -a ))"
+                return 0
+            fi
+            if (( a == -1 )); then
+                (( b == UH_MIN )) && return 1
+                printf '%s\n' "$(( -b ))"
+                return 0
+            fi
+            product=$(( a * b ))
+            (( product / b != a )) && return 1
+            printf '%s\n' "$product"
+            ;;
+        div)
+            (( b == 0 )) && return 1
+            (( a == UH_MIN && b == -1 )) && return 1
+            printf '%s\n' "$(( a / b ))"
+            ;;
+        mod)
+            (( b == 0 )) && return 1
+            printf '%s\n' "$(( a % b ))"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
 
 json_error() {
     jq -cn --arg message "$1" '{error: $message}'
@@ -181,6 +252,8 @@ load_env() {
         key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
     elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
         key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
+    elif ! uh_fits "$BLOCKDHCP_GRACE_SECONDS"; then
+        key_errors+=("BLOCKDHCP_GRACE_SECONDS exceeds the Bash integer range")
     fi
     if (( ${#key_errors[@]} > 0 )); then
         json_error "invalid keys: ${key_errors[*]}"
@@ -273,7 +346,7 @@ log_grep() {
 # returns and the viewer keeps its own position between polls.
 log_tail() {
     local byte_pos="$1" log_lines="$2"
-    local file_size log_data log_rotated bytes_to_read
+    local file_size log_data log_rotated bytes_to_read log_chunk partial
 
     if [[ ! -f "$uhm_log_file" ]]; then
         json_error "log file not found"
@@ -288,8 +361,8 @@ log_tail() {
     (( log_lines < 50 )) && log_lines=50
 
     if (( byte_pos == 0 )) || (( byte_pos > file_size )); then
-        log_data=$(tail -n "$log_lines" "$uhm_log_file" 2>/dev/null || true)
-        byte_pos=$file_size
+        log_chunk=$(head -c "$file_size" "$uhm_log_file" 2>/dev/null |
+            tail -n "$log_lines"; printf X)
         log_rotated=true
     else
         if (( byte_pos >= file_size )); then
@@ -297,9 +370,20 @@ log_tail() {
             return 0
         fi
         bytes_to_read=$(( file_size - byte_pos ))
-        log_data=$(tail -c +"$(( byte_pos + 1 ))" "$uhm_log_file" 2>/dev/null | head -c "$bytes_to_read" || true)
-        byte_pos=$file_size
+        log_chunk=$(tail -c +"$(( byte_pos + 1 ))" "$uhm_log_file" 2>/dev/null \
+            | head -c "$bytes_to_read"; printf X)
         log_rotated=false
+    fi
+
+    # The X is stripped here; it only keeps the trailing newlines that
+    # command substitution would otherwise discard.
+    log_chunk=${log_chunk%X}
+    partial=${log_chunk##*$'\n'}
+    byte_pos=$(( file_size - $(LC_ALL=C; printf '%s' "${#partial}") ))
+    if [[ "$log_chunk" == *$'\n'* ]]; then
+        log_data=${log_chunk%$'\n'*}
+    else
+        log_data=""
     fi
 
     printf '{"rows":'
@@ -481,7 +565,8 @@ found_in_acl_dir() {
 report_mac_object() {
     local mac_addr="$1"
     local in_hotspot=0 in_grace=0 in_block=0 in_acl=0 in_leases=0
-    local mac_files="" warnings=() grace_line grace_ts remaining_seconds grace_left=""
+    local mac_files="" warnings=() grace_line grace_ts grace_end
+    local remaining_seconds grace_left=""
 
     found_in "$mac_addr" "$UHM_MACAUTH" && in_hotspot=1
     found_in "$mac_addr" "$UHM_GRACE" && in_grace=1
@@ -496,8 +581,9 @@ report_mac_object() {
     if (( in_grace == 1 )); then
         grace_line=$(grep -iE "^a;${mac_addr};" "$UHM_GRACE" | head -1)
         grace_ts=$(echo "$grace_line" | awk -F';' '{print $5}')
-        if [[ "$grace_ts" =~ $UH_UINT ]]; then
-            remaining_seconds=$(( (grace_ts + BLOCKDHCP_GRACE_SECONDS) - $(date +%s) ))
+        if [[ "$grace_ts" =~ $UH_UINT ]] \
+           && grace_end=$(uh_calc add "$grace_ts" "$BLOCKDHCP_GRACE_SECONDS") \
+           && remaining_seconds=$(uh_calc sub "$grace_end" "$(date +%s)"); then
             if (( remaining_seconds > 0 )); then
                 grace_left=$(printf '%dh %dm' "$((remaining_seconds/3600))" "$(( (remaining_seconds%3600)/60 ))")
             else
@@ -556,8 +642,11 @@ report_grace() {
         [[ -z "$acl_status$mac_addr$client_ip$client_name$grace_ts" ]] && continue
         [[ "$acl_status" != "a" ]] && continue
         [[ "$grace_ts" =~ $UH_UINT ]] || continue
+        local grace_end remaining_seconds
+        grace_end=$(uh_calc add "$grace_ts" \
+            "$BLOCKDHCP_GRACE_SECONDS") || continue
+        remaining_seconds=$(uh_calc sub "$grace_end" "$now_epoch") || continue
         total_entries=$((total_entries+1))
-        local remaining_seconds=$(( (grace_ts + BLOCKDHCP_GRACE_SECONDS) - now_epoch ))
         if (( remaining_seconds > 0 )); then
             printf '%s\t%s\t%s\t%dh %dm\n' "$mac_addr" "$client_ip" "$client_name" \
                 "$((remaining_seconds/3600))" "$(( (remaining_seconds%3600)/60 ))" >> "$tmp_file"

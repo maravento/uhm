@@ -86,6 +86,9 @@ done
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 
@@ -136,11 +139,77 @@ last_reload_epoch=0
 
 token_state_file="/run/uhmd_session"
 
-default_lease_time=2592000
-
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
+
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
+
+# calculation - checked signed 64-bit arithmetic, no external process
+uh_calc() {
+    local op="${1-}" a="${2-}" b="${3-}" product
+    [ "$#" -eq 3 ] || return 1
+    uh_fits "$a" || return 1
+    uh_fits "$b" || return 1
+    case "$op" in
+        add)
+            (( b > 0 && a > UH_MAX - b )) && return 1
+            (( b < 0 && a < UH_MIN - b )) && return 1
+            printf '%s\n' "$(( a + b ))"
+            ;;
+        sub)
+            (( b < 0 && a > UH_MAX + b )) && return 1
+            (( b > 0 && a < UH_MIN + b )) && return 1
+            printf '%s\n' "$(( a - b ))"
+            ;;
+        mul)
+            if (( a == 0 || b == 0 )); then
+                printf '%s\n' 0
+                return 0
+            fi
+            if (( b == -1 )); then
+                (( a == UH_MIN )) && return 1
+                printf '%s\n' "$(( -a ))"
+                return 0
+            fi
+            if (( a == -1 )); then
+                (( b == UH_MIN )) && return 1
+                printf '%s\n' "$(( -b ))"
+                return 0
+            fi
+            product=$(( a * b ))
+            (( product / b != a )) && return 1
+            printf '%s\n' "$product"
+            ;;
+        div)
+            (( b == 0 )) && return 1
+            (( a == UH_MIN && b == -1 )) && return 1
+            printf '%s\n' "$(( a / b ))"
+            ;;
+        mod)
+            (( b == 0 )) && return 1
+            printf '%s\n' "$(( a % b ))"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
 
 # IPv4 <-> integer. Callers validate with UH_IPV4 before calling, which
 # rejects leading zeros. Ranges are walked and compared as integers, so no
@@ -190,31 +259,69 @@ cleanup_temp() {
 }
 trap cleanup_temp EXIT
 
-# Creates uhm's own ACL lists if missing, and keeps them root:root 600.
-# Called from main(), once the ENV block below has resolved their paths.
-ensure_acl_lists() {
-    local check_file file_owner file_perms
-    for check_file in "$@"; do
-        if [ ! -f "$check_file" ]; then
-            if ! { touch "$check_file" \
-                && chmod 600 "$check_file" \
-                && chown root:root "$check_file"; }; then
-                log "ERROR: cannot create $(basename "$check_file") -abort"
-                exit 1
-            fi
-            continue
+# ACL PREPARATION
+# Canonical block -- copied byte for byte into every script that creates a
+# directory or a list under /etc/acl. Prepare /etc/acl first, then only the
+# subdirectory and the lists this script needs. Never recursive.
+# Usage: acl_prepare <dir> <dir_mode> <file_mode> [file ...]
+acl_prepare() {
+    local acl_dir="$1" dir_mode="$2" file_mode="$3" acl_file
+    shift 3
+
+    # mkdir without -p fails when the directory already exists, so a success
+    # means this run created it and no concurrent run did.
+    if mkdir -m "$dir_mode" -- "$acl_dir" 2>/dev/null; then
+        if ! chown root:root -- "$acl_dir"; then
+            log "ERROR: cannot set owner of $acl_dir -abort"
+            exit 1
         fi
-        file_owner=$(stat -c '%U' "$check_file" 2>/dev/null)
-        file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
-        if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-            if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "INFO: $(basename "$check_file") perms fixed -fixed"
-            else
-                log "ERROR: cannot fix $(basename "$check_file") perms -abort"
+        log "WARNING: created ACL directory $acl_dir -alert"
+    elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
+        acl_fix_perms "$acl_dir" "$dir_mode"
+    else
+        log "ERROR: $acl_dir is not a regular directory -abort"
+        exit 1
+    fi
+
+    for acl_file in "$@"; do
+        # Checked before the redirection: noclobber only protects regular
+        # files, and opening a FIFO for writing blocks until a reader shows up.
+        if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+        # noclobber makes the redirection fail when the file already exists,
+        # and umask 077 keeps the new file closed until chmod sets its mode.
+        if (set -C; umask 077; : > "$acl_file") 2>/dev/null; then
+            if ! { chmod "$file_mode" -- "$acl_file" \
+                && chown root:root -- "$acl_file"; }; then
+                log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
                 exit 1
             fi
+            log "WARNING: created empty $(basename "$acl_file") -alert"
+        elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
+            acl_fix_perms "$acl_file" "$file_mode"
+        else
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
         fi
     done
+}
+
+# Repairs mode and owner of an existing ACL object, per Autorreparación
+acl_fix_perms() {
+    local acl_path="$1" want_mode="$2" cur_mode cur_owner
+    cur_mode=$(stat -c '%a' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    cur_owner=$(stat -c '%U:%G' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
+    if ! { chmod "$want_mode" -- "$acl_path" \
+        && chown root:root -- "$acl_path"; }; then
+        log "ERROR: cannot fix $acl_path perms -abort"
+        exit 1
+    fi
+    log "INFO: $acl_path perms fixed -fixed"
 }
 
 # ------------------------------------------------------------------------------
@@ -224,8 +331,8 @@ ensure_acl_lists() {
 # PERMS
 # Owner and mode of every .env this script reads
 pydhcp_env="/etc/pydhcp/pydhcp.env"
-config_file="/etc/uhm/uhm.env"
-env_specs=("$pydhcp_env root:pydhcpd 640" "$config_file root:root 600")
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
@@ -249,7 +356,7 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
-# Loads only known KEY=VALUE pairs from config_file instead of sourcing it,
+# Loads only known KEY=VALUE pairs from uhm_env instead of sourcing it,
 # so a tampered or maliciously replaced config file cannot execute code.
 # Canonical parser, identical in every script of the project: a malformed
 # line aborts.
@@ -261,7 +368,7 @@ env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SI
 # single source of truth for them. uhm.env is read after, so uhm's own keys
 # win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
-load_uhm_env "$config_file" "$env_keys" key || true
+load_uhm_env "$uhm_env" "$env_keys" key || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -294,8 +401,10 @@ if ! grep -q "^AUTHORIZED_LEASE_TIME=" "$pydhcp_env"; then
 elif [[ -z "${AUTHORIZED_LEASE_TIME:-}" ]]; then
     key_errors+=("AUTHORIZED_LEASE_TIME not set")
 elif ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] \
-     || (( AUTHORIZED_LEASE_TIME == 0 )); then
+     || [[ "$AUTHORIZED_LEASE_TIME" == 0 ]]; then
     key_errors+=("AUTHORIZED_LEASE_TIME invalid seconds")
+elif ! uh_fits "$AUTHORIZED_LEASE_TIME"; then
+    key_errors+=("AUTHORIZED_LEASE_TIME exceeds the Bash integer range")
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
@@ -306,14 +415,14 @@ if (( ${#key_errors[@]} > 0 )); then
 fi
 for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
                UHM_PATH UHM_RELOAD UHM_MACAUTH UHM_GRACE UHM_QUEUE; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     fi
 done
 for env_key in UHM_INI_RANGE UHM_END_RANGE; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
@@ -323,22 +432,26 @@ for env_key in UHM_INI_RANGE UHM_END_RANGE; do
 done
 for env_key in POLL_INTERVAL UHM_LEASES_TIMEOUT_SECONDS \
                UHM_IPTABLES_TIMEOUT_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS UHM_API_TIMEOUT_SECONDS; do
-    if ! grep -q "^${env_key}=" "$config_file"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
         key_errors+=("$env_key invalid seconds")
+    elif ! uh_fits "${!env_key}"; then
+        key_errors+=("$env_key exceeds the Bash integer range")
     fi
 done
-if ! grep -q "^STARTUP_GRACE_SECONDS=" "$config_file"; then
+if ! grep -q "^STARTUP_GRACE_SECONDS=" "$uhm_env"; then
     key_errors+=("STARTUP_GRACE_SECONDS missing line")
 elif [[ -z "${STARTUP_GRACE_SECONDS:-}" ]]; then
     key_errors+=("STARTUP_GRACE_SECONDS not set")
 elif ! [[ "$STARTUP_GRACE_SECONDS" =~ $UH_UINT ]]; then
     key_errors+=("STARTUP_GRACE_SECONDS invalid seconds")
+elif ! uh_fits "$STARTUP_GRACE_SECONDS"; then
+    key_errors+=("STARTUP_GRACE_SECONDS exceeds the Bash integer range")
 fi
-if ! grep -q "^UNIFI_TYPE=" "$config_file"; then
+if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
     key_errors+=("UNIFI_TYPE missing line")
 elif [[ -z "${UNIFI_TYPE:-}" ]]; then
     key_errors+=("UNIFI_TYPE not set")
@@ -347,7 +460,7 @@ elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
 fi
 # UNIFI_SITE is interpolated directly into API URLs (api_path()) -- reject
 # anything outside the character set UniFi itself uses for site names.
-if ! grep -q "^UNIFI_SITE=" "$config_file"; then
+if ! grep -q "^UNIFI_SITE=" "$uhm_env"; then
     key_errors+=("UNIFI_SITE missing line")
 elif [[ -z "${UNIFI_SITE:-}" ]]; then
     key_errors+=("UNIFI_SITE not set")
@@ -358,7 +471,7 @@ if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$config_file") -abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
@@ -375,7 +488,7 @@ hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
 # KEY GUARD
 # Each key above is valid on its own. These three relations are not.
 if (( hotspot_ini_int > hotspot_end_int )); then
-    log "ERROR: hotspot range reversed in $(basename "$config_file") -abort"
+    log "ERROR: hotspot range reversed in $(basename "$uhm_env") -abort"
     exit 1
 fi
 if ! ip_in_lan "$UHM_INI_RANGE" || ! ip_in_lan "$UHM_END_RANGE"; then
@@ -386,11 +499,19 @@ fi
 # The safety-net cadence is measured from the moment a reload starts, so at
 # this floor the daemon still rests at least twice as long as the slowest
 # reload the two timeouts allow. Every reload stops and starts pydhcpd.
-reload_floor=$(( 3 * (UHM_LEASES_TIMEOUT_SECONDS + UHM_IPTABLES_TIMEOUT_SECONDS) ))
+reload_floor=$(uh_calc add "$UHM_LEASES_TIMEOUT_SECONDS" \
+    "$UHM_IPTABLES_TIMEOUT_SECONDS") || {
+    log "ERROR: reload floor exceeds the Bash integer range -abort"
+    exit 1
+}
+reload_floor=$(uh_calc mul 3 "$reload_floor") || {
+    log "ERROR: reload floor exceeds the Bash integer range -abort"
+    exit 1
+}
 (( reload_floor < 600 )) && reload_floor=600
 if (( RELOAD_SAFETY_INTERVAL_SECONDS < reload_floor )); then
     log "ERROR: reload interval RELOAD_SAFETY_INTERVAL_SECONDS=$RELOAD_SAFETY_INTERVAL_SECONDS"
-    log "ERROR: reload interval minimum $reload_floor in $(basename "$config_file") -abort"
+    log "ERROR: reload interval minimum $reload_floor in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset reload_floor
@@ -432,19 +553,6 @@ verify_installation() {
         sleep 10
     done
     log "INFO: Installation verified"
-}
-
-# ACL FILE CHECK
-# Creates uhm's own lists when absent, never pydhcp's
-# uhm's own three lists (UHM_MACAUTH/UHM_GRACE/UHM_QUEUE) are created
-# on demand by ensure_acl_lists(), called from main(). ACL_BLOCK_FILE belongs to pydhcp
-# and is deployed by its own pysetup.sh -- this daemon writes to it but must
-# never create it, so a missing one means a broken/partial pydhcp install.
-init_acl_files() {
-    if [ ! -f "$ACL_BLOCK_FILE" ]; then
-        log "ERROR: $ACL_BLOCK_FILE missing -abort"
-        exit 1
-    fi
 }
 
 # UNIFI API
@@ -837,7 +945,7 @@ list_managed_macs() {
 # separate cache of "already authorized" is kept, so this is naturally
 # idempotent and self-heals if UniFi's own authorization ever lapses).
 # The duration is not a value of uhm's own: UniFi's authorize-guest takes
-# minutes, so it is derived from AUTHORIZED_LEASE_TIME (uhm.env, pydhcp's
+# minutes, so it is derived from AUTHORIZED_LEASE_TIME (pydhcp.env, pydhcp's
 # own value in seconds, default 2592000 = 30 days) divided by 60. A
 # mac-*.txt device already gets that lease time from pydhcpd, so its portal
 # authorization follows the same policy instead of duplicating it under a
@@ -1695,17 +1803,62 @@ run_cycle() {
     flock -u 201 2>/dev/null || log "INFO: failed to release cycle lock -skip"
 }
 
+# check interfaces
+list_ifaces() {
+    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
+}
+
+check_interfaces() {
+    local list="${1:-}" max_attempts="${2:-24}" attempt=1
+    local iface state ready states
+
+    [ -n "$list" ] || list="$(list_ifaces | awk '{print $1}' | paste -sd,)"
+
+    while (( attempt <= max_attempts )); do
+        ready=0
+        states=()
+        for iface in ${list//,/ }; do
+            if [ "$(ip -br link show "$iface" 2>/dev/null | awk '{print $2}')" = "UP" ]; then
+                state="UP"
+                ready=1
+            else
+                state="DOWN"
+            fi
+            states+=("$iface=$state")
+        done
+        if [ "$attempt" -eq 1 ] || [ "$ready" -eq 1 ]; then
+            for state in "${states[@]}"; do
+                log "INFO: interface: $state"
+            done
+        fi
+        if [ "$ready" -eq 1 ]; then
+            return 0
+        fi
+        log "INFO: waiting for interfaces ($attempt/$max_attempts)"
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    return 1
+}
+
 # ------------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------------
 
 # Logs in once and then repeats the cycle every POLL_INTERVAL
 main() {
-    ensure_acl_lists "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
+    acl_prepare "$ACL_PATH" 755 644
+    acl_prepare "$(dirname "$ACL_BLOCK_FILE")" 700 600 "$ACL_BLOCK_FILE"
+    acl_prepare "$(dirname "$UHM_MACAUTH")" 700 600 \
+        "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
     verify_installation
-    init_acl_files
 
     log "uhmd start..."
+
+    if ! check_interfaces; then
+        log "WARNING: no operational interface -alert"
+    fi
 
     # UniFi-OS can take a while to come back up after a reboot -- this host and
     # the controller often boot together. Retry quietly (INFO, no alert) for
