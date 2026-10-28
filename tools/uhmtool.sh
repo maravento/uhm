@@ -1063,6 +1063,6 @@ esac
 # END
 # ------------------------------------------------------------------------------
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool done at: $(date '+%Y-%m-%d %H:%M:%S')" >&2
+echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool done" >&2
 
 exit 0

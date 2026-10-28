@@ -319,13 +319,13 @@ case "${1:-}" in
     --install)
         log "uhmalert start..."
         install_module
-        log "uhmalert done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        log "uhmalert done"
         exit 0
         ;;
     --uninstall)
         log "uhmalert start..."
         uninstall_module
-        log "uhmalert done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        log "uhmalert done"
         exit 0
         ;;
 esac
@@ -477,7 +477,7 @@ notify() {
 # timestamp. printf's %()T is bash's own strftime, no subprocess involved.
 on_term() {
     printf -v term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
-    printf '%s uhmalert done at: %s\n' "$term_ts" "$term_ts"
+    printf '%s uhmalert done\n' "$term_ts"
     exit 0
 }
 trap on_term TERM INT

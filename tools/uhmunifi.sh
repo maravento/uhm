@@ -1095,4 +1095,4 @@ log "uhmunifi start..."
 main_menu
 
 # end
-log "uhmunifi done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "uhmunifi done"

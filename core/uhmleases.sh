@@ -132,7 +132,7 @@ cycle_lock="/var/lock/uhmd-cycle.lock"
 exec 201>"$cycle_lock"
 if ! flock -w 10 201; then
     log "INFO: mechanism busy -skip"
-    log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
+    log "uhmleases done"
     exit 0
 fi
 
@@ -248,7 +248,7 @@ acl_prepare() {
         # Checked before the redirection: noclobber only protects regular
         # files, and opening a FIFO for writing blocks until a reader shows up.
         if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
         # noclobber makes the redirection fail when the file already exists,
@@ -263,7 +263,7 @@ acl_prepare() {
         elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
             acl_fix_perms "$acl_file" "$file_mode"
         else
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
     done
@@ -279,7 +279,7 @@ acl_fix_perms() {
     [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
     if ! { chmod "$want_mode" -- "$acl_path" \
         && chown root:root -- "$acl_path"; }; then
-        log "ERROR: cannot fix $acl_path perms -abort"
+        log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
     log "INFO: $acl_path perms fixed -fixed"
@@ -1281,4 +1281,4 @@ if (( pydhcpd_start_failed )); then
     exit 1
 fi
 
-log "uhmleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "uhmleases done"

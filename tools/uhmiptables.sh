@@ -177,4 +177,4 @@ iptables -A UHM_FWD -i "$WAN_IFACE" -m conntrack \
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmiptables done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "uhmiptables done"

@@ -76,34 +76,41 @@ installed_path="/etc/uhm/tools/$(basename "$0")"
 # Monthly is the floor, not a recommendation: it exists so an untouched
 # system still has a recent copy. Run it by hand before any change.
 # CRON_D
-# Add or replace one line in the project's single cron.d file
-cron_d_set() {
+# Replace one task; retain other project tasks and serialize writers.
+cron_d_set() (
     local match="$1" line="$2"
     local cron_file="/etc/cron.d/uhm"
-    local cron_tmp
+    local cron_tmp cron_status
 
-    cron_tmp=$(mktemp) || return 1
+    [ -n "$match" ] || return 1
+    [ ! -L "$cron_file" ] || return 1
+    [ ! -e "$cron_file" ] || [ -f "$cron_file" ] || return 1
+    [ ! -L "${cron_file}.lock" ] || return 1
+    (umask 077; : >> "${cron_file}.lock") || return 1
+    exec 201>"${cron_file}.lock" || return 1
+    flock -x 201 || return 1
+    if [ -e "${cron_file}.update-disabled" ] && [ "${UPDATE_CRON_OWNER:-}" != "$$" ]; then
+        return 1
+    fi
+
+    cron_tmp=$(mktemp "${cron_file}.XXXXXX") || return 1
+    trap 'rm -f -- "$cron_tmp"' EXIT
     if [ -f "$cron_file" ]; then
-        grep -vF "$match" "$cron_file" > "$cron_tmp" || {
-            [ "$?" -eq 1 ] || { rm -f "$cron_tmp"; return 1; }
+        grep -vF -- "$match" "$cron_file" > "$cron_tmp" || {
+            cron_status=$?
+            [ "$cron_status" -eq 1 ] || return 1
         }
     fi
     if [ -n "$line" ]; then
-        printf '%s\n' "$line" >> "$cron_tmp" || {
-            rm -f "$cron_tmp"
-            return 1
-        }
+        printf '%s\n' "$line" >> "$cron_tmp" || return 1
     fi
     if [ -s "$cron_tmp" ]; then
-        if ! install -m 644 -o root -g root "$cron_tmp" "$cron_file"; then
-            rm -f "$cron_tmp"
-            return 1
-        fi
+        chmod 644 "$cron_tmp" && chown root:root "$cron_tmp" || return 1
+        mv -fT -- "$cron_tmp" "$cron_file" || return 1
     else
-        rm -f "$cron_file"
+        rm -f -- "$cron_file" || return 1
     fi
-    rm -f "$cron_tmp"
-}
+)
 
 register_cron() {
     # Deploy self first: the cron entry must point at a path that exists,
@@ -120,12 +127,12 @@ register_cron() {
         log "INFO: deployed to $installed_path"
     fi
 
-    cron_d_set "$installed_path" "@monthly root $installed_path"
+    cron_d_set "$installed_path" "@monthly root $installed_path" || { log "ERROR: cannot write project cron -abort"; return 1; }
     log "INFO: uhmbk backup cron registered, runs @monthly"
 }
 
 deregister_cron() {
-    cron_d_set "$installed_path" ""
+    cron_d_set "$installed_path" "" || { log "ERROR: cannot write project cron -abort"; return 1; }
     log "INFO: uhmbk backup cron removed, archives kept"
 }
 
@@ -191,21 +198,23 @@ backup_zip="${backup_dir}/uhmbk_$(date +%Y%m%d_%H%M%S).zip"
 case "${1:-}" in
     --install)
         log "uhmbk start..."
-        register_cron
-        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        register_cron || exit 1
+        log "uhmbk done"
         exit 0
         ;;
     --uninstall)
         log "uhmbk start..."
-        deregister_cron
-        log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        deregister_cron || exit 1
+        log "uhmbk done"
         exit 0
         ;;
     "")
         log "uhmbk start..."
         ;;
     *)
-        log "ERROR: '$1' invalid; --install/--uninstall or none -abort"
+        log "ERROR: invalid option -abort"
+        echo "Usage: $(basename "$0") [--install|--uninstall]"
+        echo "Without arguments: create a backup"
         exit 1
         ;;
 esac
@@ -215,7 +224,7 @@ esac
 # ------------------------------------------------------------------------------
 
 if ! install -d -m 700 -o root -g root "$backup_dir"; then
-    log "ERROR: cannot create $backup_dir -abort"
+    log "ERROR: cannot create BACKUP_DIR from $(basename "$uhm_env") -abort"
     exit 1
 fi
 
@@ -273,4 +282,4 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmbk done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "uhmbk done"
