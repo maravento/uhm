@@ -180,6 +180,11 @@ UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
 
+# validation - signed integer only; use directly with =~
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
+
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
@@ -669,45 +674,59 @@ detect_dhcp_backend() {
     fi
 }
 
+# IFACES
+# List network interfaces other than loopback
+list_ifaces() {
+    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
+}
+
+# IPV4 INTERFACES
+# Offer only interfaces with an active link and configured global IPv4
+list_ipv4_ifaces() {
+    local iface state
+    while read -r iface state; do
+        [ "$state" = UP ] || continue
+        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
+            | awk '$4 != "" {found=1} END {exit !found}'; then
+            printf '%s\n' "$iface"
+        fi
+    done < <(list_ifaces)
+}
+
 # LAN SELECTION
 # Select an existing interface and one of its configured IPv4 addresses
 choose_lan_interface() {
-    local preset_iface="${1:-}" excluded_iface="${2:-}"
-    local iface_name iface_choice iface_index iface_addrs
+    local preset_iface="${1:-}" excluded_iface="${2:-}" iface_label="${3:-LAN}"
+    local iface_name iface_choice iface_index iface_addrs iface_state
     local -a lan_candidates=()
-    if [ -n "$preset_iface" ]; then
-        ip link show dev "$preset_iface" >/dev/null 2>&1 || {
-            log "ERROR: LAN interface '$preset_iface' not found -abort"
-            exit 1
-        }
-        [ "$preset_iface" != "$excluded_iface" ] || {
-            log "ERROR: LAN and WAN must differ -abort"
-            exit 1
-        }
-        lan_iface_answer="$preset_iface"
-        return 0
-    fi
     while IFS= read -r iface_name; do
         [ "$iface_name" = "$excluded_iface" ] && continue
         lan_candidates+=("$iface_name")
-    done < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
+    done < <(list_ipv4_ifaces)
     (( ${#lan_candidates[@]} > 0 )) || {
-        log "ERROR: no LAN interface available -abort"
+        log "ERROR: no $iface_label interface available -abort"
         exit 1
     }
-    if (( ${#lan_candidates[@]} == 1 )); then
-        lan_iface_answer="${lan_candidates[0]}"
-        return 0
+    if [ -n "$preset_iface" ]; then
+        for iface_name in "${lan_candidates[@]}"; do
+            if [ "$preset_iface" = "$iface_name" ]; then
+                lan_iface_answer="$preset_iface"
+                return 0
+            fi
+        done
+        log "ERROR: $iface_label must be an eligible IPv4 interface -abort"
+        exit 1
     fi
-    echo "Available LAN interfaces:"
+    echo "Available $iface_label interfaces:"
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
+        iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
         iface_addrs=$(ip -4 -o addr show dev "$iface_name" scope global | awk '{print $4}' | paste -sd' ')
-        printf ' [%d] %s (%s)\n' "$((iface_index + 1))" "$iface_name" "${iface_addrs:-no IPv4}"
+        printf ' [%d] %s (%s, %s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state" "${iface_addrs:-no IPv4}"
     done
     while true; do
-        read -r -p "Select LAN interface number: " iface_choice || {
-            log "ERROR: cannot read LAN interface selection -abort"
+        read -r -p "Select $iface_label Interface [1-${#lan_candidates[@]}]: " iface_choice || {
+            log "ERROR: cannot read $iface_label interface selection -abort"
             exit 1
         }
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
@@ -715,8 +734,18 @@ choose_lan_interface() {
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
             return 0
         fi
-        log "INFO: invalid LAN interface selection -retry"
+        log "INFO: invalid $iface_label interface selection -retry"
     done
+}
+
+select_network_interfaces() {
+    local -a network_candidates=()
+    mapfile -t network_candidates < <(list_ipv4_ifaces)
+    (( ${#network_candidates[@]} >= 2 )) || abort "two active interfaces with IPv4 are required -abort"
+    choose_lan_interface "${UHM_WAN_IFACE:-}" "" WAN
+    wan_iface="$lan_iface_answer"
+    choose_lan_interface "${UHM_LAN_IFACE:-}" "$wan_iface" LAN
+    lan_iface="$lan_iface_answer"
 }
 
 read_lan_ipv4() {
@@ -779,7 +808,7 @@ load_pydhcp_conf() {
         || { err "$pydhcp_env not found"; abort "install pydhcp first, see its README -abort"; }
 
     local missing_keys=() env_key
-    for env_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
+    for env_key in INTERFACESv4 SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
                SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS; do
         grep -q "^${env_key}=" "$pydhcp_env" || missing_keys+=("$env_key")
     done
@@ -793,6 +822,8 @@ load_pydhcp_conf() {
     # Load only these known keys instead of sourcing the whole file, so a
     # tampered pydhcp.env cannot execute code.
     load_uhm_env "$pydhcp_env" "$env_keys" line
+    [ "$INTERFACESv4" = "$lan_iface" ] || abort "LAN differs from pydhcp interface -abort"
+    [ "$SERVER_IP" = "$lan_ip" ] || abort "LAN IPv4 differs from pydhcp SERVER_IP -abort"
 
     local check_var
     for check_var in SERVER_IP SERV_SUBNET SERV_BROADCAST \
@@ -879,12 +910,28 @@ ask() {
     printf -v "$target_var" '%s' "${user_answer:-$default_value}"
 }
 
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
+
 ask_number() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
         read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 )); then
+        if [[ "$user_answer" =~ $UH_UINT ]] && uh_fits "$user_answer" && (( user_answer >= 1 )); then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
@@ -1024,8 +1071,6 @@ run_setup_wizard() {
     local found_url found_type
 
     step "pydhcp network configuration"
-    # WAN_IFACE is not asked here. pysetup.sh writes it into pydhcp.env as a
-    # shared key, and every script that needs it reads it from there.
 
     step "Hotspot IP range"
     # Two full addresses, the same shape pydhcp already uses for its own pool
@@ -1179,11 +1224,6 @@ run_setup_wizard() {
         # runtime, so a change in that file reaches uhm without a re-install.
         : > "$uhm_env"
 
-        # Any key pydhcp.env already defines -- pydhcp's own, or one added
-        # there by another project -- is skipped
-        # instead of written here too: every component reads pydhcp.env
-        # first and uhm.env after, so a duplicate would let uhm.env shadow
-        # the value its owner maintains.
         local uhm_block
         uhm_block=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -abort"; }
 
@@ -1192,6 +1232,9 @@ run_setup_wizard() {
 # UHM
 # /etc/uhm/uhm.env
 # =============================================================================
+
+# Network
+WAN_IFACE=${wan_iface}
 
 # UniFi
 # Guest SSID
@@ -1246,26 +1289,8 @@ BACKUP_DIR=/etc/bak/uhm
 # =============================================================================
 EOF
 
-        # Filter out any key the file already defines, then insert what's
-        # left right after the last existing "# ====...====" line -- never a
-        # blind append, so the UHM block always lands immediately after
-        # whatever content (pydhcp's own, or another project's) is already
-        # there, regardless of which project wrote it or in what order.
-        local env_line env_key filtered_block
-        filtered_block=""
-        while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-            if [[ "$env_line" == *=* && "$env_line" != \#* ]]; then
-                env_key="${env_line%%=*}"
-                if grep -q "^${env_key}=" "$pydhcp_env"; then
-                    info "$env_key already set in $(basename "$pydhcp_env") -skip"
-                    continue
-                fi
-            fi
-            filtered_block+="${env_line}"$'\n'
-        done < "$uhm_block"
+        cat "$uhm_block" >> "$uhm_env" || abort "cannot write uhm.env -abort"
         rm -f "$uhm_block"
-
-        insert_after_last_delimiter "$uhm_env" "$filtered_block"
     )
     chown root:root "$uhm_env"
     chmod 600 "$uhm_env"
@@ -1632,10 +1657,10 @@ install_systemd_service() {
 
 # Installs pydhcp, uhm's DHCP backend, by running its own installer.
 #
-# pysetup.sh is run interactively, not driven with expect: it owns the network
-# questions (interface, IPv4 address, pool, DNS, cleanup interval) and writes them
-# to pydhcp.env, which every component then reads. Asking them here too would
-# duplicate both the prompts and their validation.
+# pysetup.sh is run interactively, not driven with expect. uhm passes it the
+# interface and the IPv4 address it already asked for, so pysetup.sh only asks
+# for the pool, the DNS and the cleanup interval. It writes every value to
+# pydhcp.env, which all components then read.
 install_pydhcp() {
     local pydhcp_path="${script_dir}/pydhcp"
 
@@ -1691,12 +1716,19 @@ install_apache2() {
 
 do_install() {
     check_apt_deps
-    check_internet
 
     if [[ -d "$hotspot_dir" ]]; then
         err "uhm is already installed at ${hotspot_dir}"
         abort "use --update to upgrade, or --uninstall first -abort"
     fi
+
+    step "Network interfaces"
+    select_network_interfaces
+    read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
+    lan_ip="${lan_cidr_answer%/*}"
+    info "WAN interface: $wan_iface"
+    info "LAN interface: $lan_iface ($lan_cidr_answer)"
+    check_internet
 
     trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -alert"; perform_remove; }' EXIT
 
@@ -1704,13 +1736,6 @@ do_install() {
     check_repo_files
     check_preinstalled
     check_port tcp 4048 "web interface"
-
-    step "Network interface"
-    choose_lan_interface
-    lan_iface="$lan_iface_answer"
-    read_lan_ipv4 "$lan_iface"
-    lan_ip="${lan_cidr_answer%/*}"
-    info "LAN interface: $lan_iface ($lan_cidr_answer)"
 
     step "UniFi dependency"
     if dpkg -s unifi &>/dev/null || [[ -f /var/lib/uosserver/server.conf ]]; then
@@ -2108,7 +2133,7 @@ show_menu() {
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$repo_tools/uhmenv.sh"
-env_keys='SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK WPAD_ENABLED WPAD_PORT'
+env_keys='INTERFACESv4 SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK WPAD_ENABLED WPAD_PORT'
 
 # ------------------------------------------------------------------------------
 # ACTIONS

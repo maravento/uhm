@@ -168,16 +168,16 @@ env_keys='INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS UHM_PATH ACL_PAT
 # LOAD
 # Load all configuration from the two env files (network, paths, interfaces).
 # One file per owner: pydhcp.env holds pydhcp's network and ACL values,
-# uhm.env holds uhm's own. pydhcp.env is read first and uhm.env after, so
-# uhm's keys win if a name ever collides. Safe key=value parsing -- files
+# uhm.env holds uhm's own. Each reader accepts only its owner's keys.
+# Safe key=value parsing -- files
 # are never sourced to prevent code execution.
-load_uhm_env "$pydhcp_env" "$env_keys" line || true
-load_uhm_env "$uhm_env" "$env_keys" line || true
+load_uhm_env "$pydhcp_env" 'INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS ACL_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED WPAD_PORT' line || true
+load_uhm_env "$uhm_env" 'WAN_IFACE UHM_PATH UHM_GRACE UHM_MACAUTH' line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
-for env_key in WAN_IFACE INTERFACESv4 ACL_PATH ACL_MAC_LIMITED \
+for env_key in INTERFACESv4 ACL_PATH ACL_MAC_LIMITED \
                ACL_MAC_UNLIMITED; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
@@ -224,7 +224,7 @@ if (( ${#key_errors[@]} > 0 )); then
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
 fi
-for env_key in UHM_PATH UHM_GRACE UHM_MACAUTH; do
+for env_key in WAN_IFACE UHM_PATH UHM_GRACE UHM_MACAUTH; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -239,6 +239,22 @@ if (( ${#key_errors[@]} > 0 )); then
     exit 1
 fi
 unset key_errors key_error env_key
+
+# KEY GUARD
+if [ -z "${INTERFACESv4:-}" ]; then
+    log "ERROR: INTERFACESv4 not set in pydhcp.env -abort"
+    exit 1
+fi
+if [ "$WAN_IFACE" = "$INTERFACESv4" ]; then
+    log "ERROR: WAN and LAN must differ -abort"
+    exit 1
+fi
+for iface in "$WAN_IFACE" "$INTERFACESv4"; do
+    if ! ip link show dev "$iface" >/dev/null 2>&1; then
+        log "ERROR: interface '$iface' does not exist -abort"
+        exit 1
+    fi
+done
 
 wan_iface="$WAN_IFACE"
 # wpad/pac port (DHCP option 252 target)

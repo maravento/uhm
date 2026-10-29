@@ -64,7 +64,8 @@ done
 # PERMS
 # Owner and mode of every .env this script reads
 pydhcp_env="/etc/pydhcp/pydhcp.env"
-env_specs=("$pydhcp_env root:pydhcpd 640")
+uhm_env="/etc/uhm/uhm.env"
+env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
 for env_spec in "${env_specs[@]}"; do
     read -r env_path env_owner_want env_perms_want <<< "$env_spec"
     if [ ! -f "$env_path" ]; then
@@ -93,17 +94,14 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
 env_keys='WAN_IFACE'
 
 # LOAD
-# WAN_IFACE is the only value this ruleset needs. pydhcp's installer writes it
-# into pydhcp.env as a shared key, and every project that needs it reads it
-# from there. Safe key=value parsing -- the file is never sourced to prevent
-# code execution.
-load_uhm_env "$pydhcp_env" "$env_keys" line || true
+load_uhm_env "$pydhcp_env" 'INTERFACESv4' line || true
+load_uhm_env "$uhm_env" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
 for env_key in WAN_IFACE; do
-    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+    if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
@@ -113,18 +111,26 @@ if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
     done
-    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
 
 # KEY GUARD
-# The MASQUERADE rule below names this interface. A value that no longer
-# matches the host produces a LAN without NAT instead of an error.
-if ! ip link show "$WAN_IFACE" >/dev/null 2>&1; then
-    log "ERROR: WAN_IFACE '$WAN_IFACE' does not exist on this host -abort"
+if [ -z "${INTERFACESv4:-}" ]; then
+    log "ERROR: INTERFACESv4 not set in pydhcp.env -abort"
     exit 1
 fi
+if [ "$WAN_IFACE" = "$INTERFACESv4" ]; then
+    log "ERROR: WAN and LAN must differ -abort"
+    exit 1
+fi
+for iface in "$WAN_IFACE" "$INTERFACESv4"; do
+    if ! ip link show dev "$iface" >/dev/null 2>&1; then
+        log "ERROR: interface '$iface' does not exist -abort"
+        exit 1
+    fi
+done
 
 # ------------------------------------------------------------------------------
 # MAIN

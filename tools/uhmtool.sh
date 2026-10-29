@@ -78,13 +78,8 @@ strict_epoch_pattern="^a;${UH_MAC_RE};${acl_ip_re};${acl_host_re};[0-9]+;\$"
 bare_mac_pattern="^${UH_MAC_RE}\$"
 
 # ------------------------------------------------------------------------------
-# ENV
+# FUNCTIONS
 # ------------------------------------------------------------------------------
-
-# LOAD_CONF
-# Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
-env_keys='BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
 # validation - integer is representable as a signed 64-bit value
 uh_fits() {
@@ -169,6 +164,15 @@ json_escape() {
     escaped_text="${escaped_text//$'\f'/\\f}"
     printf '%s' "$escaped_text"
 }
+
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+env_keys='BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
 # The log group only needs the log file, which is world-readable and has no
 # credentials in it. Loading the configuration is deferred to the groups
