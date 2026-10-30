@@ -188,7 +188,8 @@ var COLUMNS={
     {key:'code',label:'Code',cls:'mono'},
     {key:'quota',label:'Quota'},
     {key:'used',label:'Used'},
-    {key:'duration',label:'Duration'},
+    {key:'duration',label:'Duration',type:'duration'},
+    {key:'end_time',label:'Remaining',type:'remaining'},
     {key:'note',label:'Note'}
   ],
   'unifi:guests':[
@@ -211,7 +212,7 @@ COLUMNS['report:search']=COLUMNS['report:mac'];
 
 var TAGS={
   'ok':'ok','VALID':'ok','MULTI':'ok','MANAGED':'ok','VOUCHER':'i',
-  'CONSUMED':'w','NO-VOUCHER':'w','UNKNOWN':'e','error':'e'
+  'NO-RECORD':'w','NO-VOUCHER':'w','UNKNOWN':'e','error':'e'
 };
 
 function setDark(on){
@@ -250,8 +251,26 @@ function showError(text){
 }
 function clearError(){message.className='uh-msg';message.textContent=''}
 
+function formatMinutes(minutes){
+  var days=Math.floor(minutes/1440);
+  var hours=Math.floor(minutes%1440/60);
+  var mins=minutes%60;
+  if(days>0&&hours===0&&mins===0)return days+'d';
+  return (days>0?days+'d ':'')+String(hours).padStart(2,'0')+'h '+String(mins).padStart(2,'0')+'m';
+}
+
 function renderCell(column,row){
   var value=row[column.key];
+  if(column.type==='duration'){
+    if(typeof value!=='number'||!Number.isFinite(value)||value<0)return 'Unavailable';
+    return formatMinutes(Math.floor(value));
+  }
+  if(column.type==='remaining'){
+    if(typeof value!=='number'||!Number.isFinite(value)||value<=0)return 'Unavailable';
+    var seconds=value-Date.now()/1000;
+    if(seconds<=0)return 'Expired';
+    return formatMinutes(Math.ceil(seconds/60));
+  }
   if(column.type==='mark'){
     var on=(value===1||value===true);
     return '<span class="mk '+(on?'y':'n')+'">'+(on?'Y':'N')+'</span>';

@@ -133,7 +133,7 @@ abort() { err "$*"; exit 1; }
 # port in use
 check_port() {
     local proto="$1" port="$2" role="$3"
-    if [ -n "$(ss -lnH "-${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
+    if [ -n "$(ss -lnH "--${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
         err "${proto^^} port $port in use by another $role"
         abort "stop that service before installing -abort"
     fi
@@ -224,7 +224,6 @@ update_reset() {
     update_jobs=()
     update_services=()
     update_stopped_services=()
-    update_daemons=()
     update_copying=0
     update_cron_paused=0
     update_cron_existed=0
@@ -397,16 +396,6 @@ update_wait() {
     update_error "process still running: $(basename "$script")"
 }
 
-update_stop_daemon() {
-    local script="$1" pids
-    pids=$(update_pids "$script") || update_error "cannot inspect processes: $script"
-    if [ -n "$pids" ]; then
-        update_daemons+=("$script")
-        bash "$script" --stop || update_error "cannot stop daemon: $script"
-        update_wait "$script"
-    fi
-}
-
 update_stop_service() {
     local unit="$1" state load_state
     load_state=$(systemctl show -p LoadState --value "$unit") || update_error "cannot inspect service: $unit"
@@ -474,7 +463,7 @@ update_apply() {
 }
 
 update_resume() {
-    local unit script state
+    local unit state
     for unit in "${update_services[@]}"; do
         systemctl start "$unit" || update_error "cannot start service: $unit"
         state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
@@ -482,10 +471,6 @@ update_resume() {
             log "ERROR: $unit state: $state"
             update_error "$unit did not start"
         }
-    done
-    for script in "${update_daemons[@]}"; do
-        bash "$script" --start || update_error "cannot start daemon: $script"
-        [ -n "$(update_pids "$script")" ] || update_error "daemon did not start: $script"
     done
 }
 
@@ -497,14 +482,11 @@ update_finish() {
 }
 
 update_cleanup() {
-    local status="$1" unit script
+    local status="$1" unit
     trap - EXIT
     if (( update_copying == 0 )); then
         for unit in "${update_services[@]}"; do
             systemctl start "$unit" || warn "cannot resume $unit -alert"
-        done
-        for script in "${update_daemons[@]}"; do
-            bash "$script" --start || warn "cannot resume $(basename "$script") -alert"
         done
         if (( update_cron_paused && ! update_cron_already_paused )); then
             if (( update_cron_existed )); then
@@ -522,9 +504,6 @@ update_cleanup() {
         fi
         for unit in "${update_services[@]}"; do
             systemctl stop "$unit" || warn "cannot keep $unit stopped -alert"
-        done
-        for script in "${update_daemons[@]}"; do
-            bash "$script" --stop || warn "cannot keep $(basename "$script") stopped -alert"
         done
     fi
     (( status != 0 )) || status=1
@@ -565,26 +544,6 @@ register_project_cron() {
     cron_d_write "* * * * * root $core_dir/uhmwatch.sh" "@monthly root $uhmbk_script"
 }
 
-# Appends $2 (one or more lines) right after the file's LAST
-# "# ====...====" line, instead of a plain >> append -- so a new block
-# always lands right after whatever content (from any project sharing this
-# file) is already there, never after a stray trailing line some other
-# script might append later. Falls back to a plain append if the file has
-# no delimiter line at all (empty/malformed file).
-insert_after_last_delimiter() {
-    local conf_file="$1" env_block="$2" last_line tmp_file
-    last_line=$(awk '/^# =====+$/{last=NR} END{if(last) print last}' "$conf_file")
-    if [[ -z "$last_line" ]]; then
-        printf '\n%s\n' "$env_block" >> "$conf_file"
-        return
-    fi
-    tmp_file=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -abort"; }
-    head -n "$last_line" "$conf_file" > "$tmp_file"
-    printf '\n%s\n' "$env_block" >> "$tmp_file"
-    tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file"
-    mv "$tmp_file" "$conf_file"
-}
-
 confirm() {
     # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
     local prompt_text="$1" default_value="${2:-n}" user_answer hint_text
@@ -613,7 +572,7 @@ check_repo_files() {
 check_apt_deps() {
     local dep_pkg
     for dep_pkg in "${apt_deps[@]}"; do
-        if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
             abort "dependency '$dep_pkg' is not installed -abort"
         fi
     done
@@ -1404,7 +1363,7 @@ install_web() {
     local dep_pkg
 
     for dep_pkg in apache2 libapache2-mod-php; do
-        if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
             abort "'$dep_pkg' is not installed -abort"
         fi
     done
@@ -1697,7 +1656,7 @@ install_apache2() {
     local dep_pkg missing_pkgs=()
 
     for dep_pkg in apache2 libapache2-mod-php; do
-        dpkg -s "$dep_pkg" &>/dev/null || missing_pkgs+=("$dep_pkg")
+        [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
     done
     if (( ${#missing_pkgs[@]} == 0 )); then
         info "apache2 already present"
@@ -1799,6 +1758,27 @@ EOF
 
     step "apache2"
     install_apache2
+
+    for apache_php_ini in /etc/php/*/apache2/php.ini; do
+        [ -f "$apache_php_ini" ] || continue
+        if ! { [ -f "${apache_php_ini}.bak" ] || cp -p "$apache_php_ini" "${apache_php_ini}.bak"; }; then
+            echo "ERROR: cannot back up $apache_php_ini -abort" >&2
+            exit 1
+        fi
+        if grep -Eq '^[[:space:]]*;*[[:space:]]*session\.upload_progress\.enabled[[:space:]]*=' "$apache_php_ini"; then
+            sed -i 's/^[[:space:]]*;*[[:space:]]*session\.upload_progress\.enabled[[:space:]]*=.*/session.upload_progress.enabled = 0/' "$apache_php_ini" || {
+                echo "ERROR: cannot edit $apache_php_ini -abort" >&2
+                exit 1
+            }
+        else
+            printf '\nsession.upload_progress.enabled = 0\n' >> "$apache_php_ini" || {
+                echo "ERROR: cannot edit $apache_php_ini -abort" >&2
+                exit 1
+            }
+        fi
+    done
+
+    systemctl restart apache2 || abort "cannot restart apache2 -abort"
 
     # Both run here, after pydhcp: detect_dhcp_backend needs pydhcpd active
     # and load_pydhcp_conf needs pydhcp.env written, and neither exists on a

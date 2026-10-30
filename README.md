@@ -830,6 +830,114 @@ UHM_ALERT_DEDUP_SECONDS=300
 </p>
 <p align="center"><i>Report selector</i></p>
 
+##### Grace period
+
+| Column | Description | Descripción |
+|---|---|---|
+| `MAC` | The MAC in an active (`a;`) entry of `uhm-grace.txt`, including entries whose grace period has expired. | La MAC de una entrada activa (`a;`) de `uhm-grace.txt`, incluidas las entradas cuyo período de gracia ya venció. |
+| `IP` | The IP stored in `uhm-grace.txt`. | La IP guardada en `uhm-grace.txt`. |
+| `Name` | The hostname stored in `uhm-grace.txt`. | El nombre de host guardado en `uhm-grace.txt`. |
+| `Expires in` | Time left before the grace period ends. Shows `EXPIRED` once it has passed. | Tiempo que falta para que termine la gracia. Muestra `EXPIRED` cuando ya pasó. |
+
+##### Consistency check
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">Shows only MACs with warnings. The summary counts all MACs found across the local sources. <strong>Check MAC</strong> and <strong>Search by IP or hostname</strong> use the same columns below.</td>
+    <td style="width: 50%; vertical-align: top;">Muestra únicamente MAC con advertencias. El resumen cuenta todas las MAC encontradas en las fuentes locales. <strong>Check MAC</strong> y <strong>Search by IP or hostname</strong> utilizan las mismas columnas siguientes.</td>
+  </tr>
+</table>
+
+| Column | Description | Descripción |
+|---|---|---|
+| `MAC` | The MAC the row describes. | La MAC que describe la fila. |
+| `uhm-auth` | Whether the MAC has an active (`a;`) entry in `uhm-auth.txt`. | Si la MAC tiene una entrada activa (`a;`) en `uhm-auth.txt`. |
+| `uhm-grace` | Whether the MAC has an active (`a;`) entry in `uhm-grace.txt`. | Si la MAC tiene una entrada activa (`a;`) en `uhm-grace.txt`. |
+| `blockdhcp` | Whether the MAC has an active (`a;`) entry in `blockdhcp.txt`. | Si la MAC tiene una entrada activa (`a;`) en `blockdhcp.txt`. |
+| `mac-*` | Whether any `mac-*.txt` contains an `a;` or `#a;` entry for the MAC. | Si algún `mac-*.txt` contiene una entrada `a;` o `#a;` para la MAC. |
+| `leases` | Whether the MAC appears in `pydhcpd.leases`; lease expiry is not checked. | Si la MAC aparece en `pydhcpd.leases`; no se comprueba el vencimiento de la concesión. |
+| `Files` | Which `mac-*.txt` files list the MAC. | Qué archivos `mac-*.txt` contienen la MAC. |
+| `Grace left` | Time left in the grace period. Shows `EXPIRED` once it runs out, and `malformed` when the stored time cannot be read. | Tiempo que queda del periodo de gracia. Muestra `EXPIRED` cuando se acaba, y `malformed` cuando la hora guardada no se puede leer. |
+| `Warnings` | Detected overlaps between lists, blocked MACs with lease records, or grace entries without lease records. The last condition can be normal with short leases. | Coincidencias entre listas, MAC bloqueadas con registros de concesión o entradas de gracia sin registros de concesión. Esta última condición puede ser normal con concesiones cortas. |
+
+##### Connection status
+
+| Column | Description | Descripción |
+|---|---|---|
+| `Endpoint` | The queried UniFi endpoint. | El endpoint de UniFi consultado. |
+| `RC` | The response code UniFi returned. | El código de respuesta que devolvió UniFi. |
+| `Entries` | How many records that endpoint returned. | Cuántos registros devolvió ese endpoint. |
+
+##### Authorized
+
+| Column | Description | Descripción |
+|---|---|---|
+| `MAC` | The authorized client's MAC address. | La dirección MAC del cliente autorizado. |
+| `IP` | The fixed hotspot address it was assigned. | La dirección fija del hotspot que se le asignó. |
+| `Hostname` | The hostname stored in `uhm-auth.txt`; it may include a voucher code suffix. | El nombre de host guardado en `uhm-auth.txt`; puede incluir el código del voucher al final. |
+| `Voucher` | The numeric voucher code suffix from the hostname, or the code from `stat/guest` when that suffix is absent. | El código numérico al final del nombre de host o el código de `stat/guest` cuando falta ese sufijo. |
+| `Status` | The voucher state returned by UniFi, or a label for a missing code or record. See the table below. | El estado del voucher devuelto por UniFi o una etiqueta por falta de código o registro. Ver la tabla siguiente. |
+| `Expires` | The authorization expiry stored in `uhm-auth.txt`, displayed in the server’s local time. | El vencimiento de la autorización guardado en `uhm-auth.txt`, mostrado en la hora local del servidor. |
+| `On` | Whether the MAC appears in the `stat/sta` response. | Si la MAC aparece en la respuesta de `stat/sta`. |
+
+| Status | Description | Descripción |
+|---|---|---|
+| `VALID` | UniFi returned `VALID_ONE`, displayed as `VALID`. | UniFi devolvió `VALID_ONE`, mostrado como `VALID`. |
+| `MULTI` | UniFi returned `VALID_MULTI` or `USED_MULTIPLE`, displayed as `MULTI`. | UniFi devolvió `VALID_MULTI` o `USED_MULTIPLE`, mostrados como `MULTI`. |
+| `NO-VOUCHER` | The client carries no voucher code. | El cliente no tiene código de voucher. |
+| `NO-RECORD` | The voucher has no record left in `stat/voucher`. UniFi drops it on quota exhaustion and on manual deletion alike, so the reason cannot be determined. | El voucher ya no tiene registro en `stat/voucher`. UniFi lo elimina igual por cuota agotada que por borrado manual, así que el motivo no se puede determinar. |
+| `N/A` | UniFi returned the voucher without a state. | UniFi devolvió el voucher sin estado. |
+
+##### Vouchers
+
+| Column | Description | Descripción |
+|---|---|---|
+| `Code` | The voucher code guests type at the captive portal. | El código del voucher que los invitados escriben en el portal cautivo. |
+| `Quota` | How many devices the voucher authorizes in total. | Cuántos dispositivos autoriza el voucher en total. |
+| `Used` | How many devices have redeemed it already. | Cuántos dispositivos lo han canjeado ya. |
+| `Duration` | The `duration` returned by UniFi, converted from minutes to compact days, hours and minutes, such as `90d` or `1d 01h 30m`. Shows `Unavailable` for a missing or invalid value. | La duración `duration` devuelta por UniFi, convertida de minutos a días, horas y minutos compactos, como `90d` o `1d 01h 30m`. Muestra `Unavailable` si falta el valor o es inválido. |
+| `Remaining` | Time until `end_time`, calculated with the browser clock when the report is rendered and rounded up to minutes, such as `11d 01h 56m`. Shows `Expired` at expiry and `Unavailable` without a valid positive timestamp. For local rows, this is the stored authorization expiry. | Tiempo hasta `end_time`, calculado con el reloj del navegador al mostrar el reporte y redondeado hacia arriba a minutos, como `11d 01h 56m`. Muestra `Expired` al vencer y `Unavailable` sin una marca de tiempo positiva válida. Para filas locales, corresponde al vencimiento guardado de la autorización. |
+| `Note` | The text written when the voucher was created. | El texto escrito al crear el voucher. |
+
+> Codes absent from `stat/voucher` are added from active (`a;`) entries in `uhm-auth.txt` whose hostname ends in a numeric code. One row is shown per code. A row rebuilt from `uhm-auth.txt` fills only `Code` and `Remaining`. That list keeps the expiry, not the counters, so `Duration` reads `Unavailable` and the rest stays empty.
+>
+> Los códigos ausentes de `stat/voucher` se agregan desde entradas activas (`a;`) de `uhm-auth.txt` cuyo nombre de host termina en un código numérico. Se muestra una fila por código. Una fila reconstruida desde `uhm-auth.txt` solo trae `Code` y `Remaining`. Esa lista guarda el vencimiento, no los contadores, así que `Duration` muestra `Unavailable` y el resto queda vacío.
+
+<p align="center">
+  <a href="https://github.com/maravento/uhm"><img src="./img/uhmweb-toolview-voucher.png" width="100%"></a>
+</p>
+<p align="center"><i>Vouchers — a code rebuilt from <code>uhm-auth.txt</code> after UniFi dropped it</i></p>
+
+> The last row holds a code UniFi no longer lists. Its expiry comes from `uhm-auth.txt` and matches what `stat/guest` still reports, so `Remaining` shows the time until the recorded authorization expiry. `Quota`, `Used`, `Duration` and `Note` are unavailable from these current records; UHM leaves them empty or displays `Unavailable`. Whether its quota ran out or someone deleted it by hand cannot be told apart, because UniFi reports both cases identically and keeps the sessions alive either way. Reported to UniFi: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813).
+>
+> La última fila contiene un código que UniFi ya no lista. Su vencimiento viene de `uhm-auth.txt` y coincide con lo que `stat/guest` sigue reportando, así que `Remaining` muestra el tiempo hasta el vencimiento registrado de la autorización. `Quota`, `Used`, `Duration` y `Note` no están disponibles en estos registros actuales; UHM los deja vacíos o muestra `Unavailable`. Si agotó su cuota o alguien lo borró a mano no se puede distinguir, porque UniFi reporta ambos casos de forma idéntica y mantiene las sesiones vivas en los dos. Reportado a UniFi: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813).
+
+##### Guest sessions
+
+| Column | Description | Descripción |
+|---|---|---|
+| `MAC` | The MAC of the guest session. | La MAC de la sesión de invitado. |
+| `Hostname` | The name UniFi recorded for the client. | El nombre que UniFi registró para el cliente. |
+| `Authorized by` | What granted the session, as UniFi recorded it. | Qué concedió la sesión, según lo registró UniFi. |
+| `Voucher` | The voucher code UniFi links to the session. | El código del voucher que UniFi vincula a la sesión. |
+| `Category` | Where the MAC lives in UHM. See the table below. | Dónde vive la MAC dentro de UHM. Ver la tabla siguiente. |
+
+| Category | Description | Descripción |
+|---|---|---|
+| `MANAGED` | The MAC is listed in a `mac-*.txt` file. | La MAC está en un archivo `mac-*.txt`. |
+| `VOUCHER` | The MAC is listed in `uhm-auth.txt`. | La MAC está en `uhm-auth.txt`. |
+| `UNKNOWN` | The MAC is in neither list. | La MAC no está en ninguna de las dos listas. |
+
+##### Unauthorized
+
+| Column | Description | Descripción |
+|---|---|---|
+| `MAC` | A MAC returned by `stat/sta` for `UHM_ESSID` with `authorized` false or absent. | Una MAC devuelta por `stat/sta` para `UHM_ESSID` con `authorized` falso o ausente. |
+| `IP` | The address UniFi reports for it. | La dirección que UniFi reporta para ella. |
+| `Hostname` | The name UniFi recorded for the client. | El nombre que UniFi registró para el cliente. |
+| `ESSID` | The wireless network it is associated to. | La red inalámbrica a la que está asociada. |
+| `Guest` | Whether UniFi treats the client as a guest. | Si UniFi trata al cliente como invitado. |
+
 ### Reconfigure
 
 <table>
@@ -1977,7 +2085,7 @@ sudo -u uosserver podman exec uosserver curl -v http://192.168.0.10:8880/guest/s
 
 | Limitation | Description | Limitación | Descripción |
 |------------|------------|-----|-----|
-| **`stat/guest` doesn't distinguish deleted vs. quota-exhausted vouchers** | When a voucher is deleted manually from the UniFi UI, `stat/guest` still retains session records tagged with that `voucher_code`, indistinguishable from a voucher whose quota simply ran out. This lets affected clients reconnect without re-entering a code. Reported to Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigated in `uhmunifi.sh` by **Revoke by voucher code** (action 4), which cleans `stat/guest`/`stat/sta` directly instead of relying on `stat/voucher` state. | **`stat/guest` no distingue vouchers eliminados de vouchers con cuota agotada** | Cuando un voucher se elimina manualmente desde la UI de UniFi, `stat/guest` sigue reteniendo registros de sesión con ese `voucher_code`, indistinguibles de un voucher cuya cuota simplemente se agotó. Esto permite que los clientes afectados se reconecten sin volver a ingresar un código. Reportado a Ubiquiti: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigado en `uhmunifi.sh` mediante **Revoke by voucher code** (acción 4), que limpia `stat/guest`/`stat/sta` directamente sin depender del estado de `stat/voucher`. |
+| **`stat/guest` doesn't distinguish deleted vs. quota-exhausted vouchers** | When a voucher is deleted manually from the UniFi UI, `stat/guest` still retains session records tagged with that `voucher_code`, indistinguishable from a voucher whose quota simply ran out. This lets affected clients reconnect without re-entering a code. Reported to UniFi: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigated in `uhmunifi.sh` by **Revoke by voucher code** (action 4), which cleans `stat/guest`/`stat/sta` directly instead of relying on `stat/voucher` state. ToolView's **Authorized** report labels these sessions `NO-RECORD`: the voucher has no record left in `stat/voucher`, and the reason for its absence cannot be determined. | **`stat/guest` no distingue vouchers eliminados de vouchers con cuota agotada** | Cuando un voucher se elimina manualmente desde la UI de UniFi, `stat/guest` sigue reteniendo registros de sesión con ese `voucher_code`, indistinguibles de un voucher cuya cuota simplemente se agotó. Esto permite que los clientes afectados se reconecten sin volver a ingresar un código. Reportado a UniFi: [community.ui.com/31faff3e](https://community.ui.com/questions/stat-guest-does-not-distinguish-manually-deleted-vouchers-from-quota-exhausted-vouchers/31faff3e-bade-4219-aa66-da8b26b73813). Mitigado en `uhmunifi.sh` mediante **Revoke by voucher code** (acción 4), que limpia `stat/guest`/`stat/sta` directamente sin depender del estado de `stat/voucher`. El reporte **Authorized** de ToolView etiqueta estas sesiones como `NO-RECORD`: el voucher ya no tiene registro en `stat/voucher` y el motivo de su ausencia no se puede determinar. |
 | **`stat/voucher` has no historical record of expired vouchers** | UniFi does not retain a voucher in `stat/voucher` once it expires or its quota is fully consumed; the entry disappears entirely instead of being marked expired. Verified directly against a live controller: five vouchers confirmed issued and consumed via `/var/log/uhm.log` (`Authorized`/`Expired` lines) returned zero matches when queried by code against `stat/voucher` after expiry. As a result, `uhmunifi.sh`'s Vouchers section and **Delete expired vouchers** (action 3) can only ever act on what the controller still tracks at query time — they cannot produce a historical report of all vouchers ever issued. The only durable record of past voucher activity is `/var/log/uhm.log`. | **`stat/voucher` no tiene registro histórico de vouchers expirados** | UniFi no retiene un voucher en `stat/voucher` una vez que expira o su cuota se consume por completo; la entrada desaparece por completo en vez de marcarse como expirada. Verificado directamente contra un controlador en vivo: cinco vouchers confirmados como emitidos y consumidos vía `/var/log/uhm.log` (líneas `Authorized`/`Expired`) devolvieron cero coincidencias al consultarlos por código contra `stat/voucher` después de expirar. Como consecuencia, la sección Vouchers de `uhmunifi.sh` y **Delete expired vouchers** (acción 3) solo pueden actuar sobre lo que el controlador todavía rastrea al momento de la consulta — no pueden producir un reporte histórico de todos los vouchers emitidos alguna vez. El único registro duradero de actividad histórica de vouchers es `/var/log/uhm.log`. |
 | **`kick-sta` can fail with HTTP 400 right after a successful authorization** | The voucher redemption itself always succeeds independently of this: the client is already promoted to `uhm-auth.txt` with its fixed hotspot IP in step 7 (sessions), well before `kick_newly_authorized()` runs in step 10. The `kick-sta` call is a best-effort convenience against the UniFi API (`cmd/stamgr`) to force the client to re-associate immediately with its new IP; if UniFi rejects that specific request with HTTP 400 (typically a race between the just-granted authorization and what `stat/sta` still reports for that MAC at that instant), the client simply keeps its old pool-range IP until its own DHCP renewal timer fires, and the client-facing symptom can be an HTTP 400/404 from UniFi's own captive-portal web layer while the browser tries to continue on the stale IP — a separate HTTP exchange from the `kick-sta` call, on a different endpoint, that just happens to surface around the same time. Nothing in this project's ACLs or firewall rules is at fault; the log line is written by `kick_newly_authorized()` itself, not by `uhmleases.sh`/`uhmiptables.sh`. Example from `/var/log/uhm.log`: `INFO: failed to kick 02:00:00:aa:bb:20 (HTTP 400) -skip`. The current code only logs the HTTP status code, not UniFi's response body, so the controller's exact rejection reason isn't recoverable from `uhm.log` alone. | **`kick-sta` puede fallar con HTTP 400 justo después de una autorización exitosa** | La redención del voucher en sí siempre tiene éxito de forma independiente a esto: el cliente ya quedó promovido a `uhm-auth.txt` con su IP fija de hotspot en el paso 7 (sessions), mucho antes de que `kick_newly_authorized()` se ejecute en el paso 10. La llamada a `kick-sta` es un intento de conveniencia (best-effort) contra la API de UniFi (`cmd/stamgr`) para forzar al cliente a reasociarse de inmediato con su nueva IP; si UniFi rechaza esa petición puntual con HTTP 400 (típicamente una condición de carrera entre la autorización recién otorgada y lo que `stat/sta` todavía reporta para ese MAC en ese instante), el cliente simplemente conserva su IP vieja del rango de pool hasta que su propio temporizador de renovación DHCP se cumpla, y el síntoma visible para el cliente puede ser un HTTP 400/404 de la propia capa web del portal cautivo de UniFi mientras el navegador intenta continuar con la IP vieja — un intercambio HTTP distinto al de `kick-sta`, sobre un endpoint diferente, que solo coincide en el tiempo. No hay ninguna falla en las ACLs ni en las reglas de firewall de este proyecto; la línea de log la escribe el propio `kick_newly_authorized()`, no `uhmleases.sh`/`uhmiptables.sh`. Ejemplo de `/var/log/uhm.log`: `INFO: failed to kick 02:00:00:aa:bb:20 (HTTP 400) -skip`. El código actual solo registra el código HTTP, no el cuerpo de la respuesta de UniFi, así que el motivo exacto del rechazo del controlador no se puede recuperar solo con `uhm.log`. |
 

@@ -72,7 +72,7 @@ unset log_stat
 
 # dependencies
 for dep_pkg in curl coreutils util-linux grep sed systemd; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi

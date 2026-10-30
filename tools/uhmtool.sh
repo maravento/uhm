@@ -32,7 +32,7 @@ fi
 
 # dependencies
 for dep_pkg in curl jq coreutils util-linux grep sed systemd; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         printf '{"error":"missing dependency %s"}\n' "$dep_pkg"
         exit 1
     fi
@@ -931,7 +931,7 @@ unifi_authorized() {
             (first($vouchers[] | select(.code == $code)) // null) as $found |
             {mac: $mac, ip: $ip, host: $host, code: $code,
              status: (if $code == "" then "NO-VOUCHER"
-                      elif $found == null then "CONSUMED"
+                      elif $found == null then "NO-RECORD"
                       else ($found.status // "N/A"
                             | sub("USED_MULTIPLE"; "MULTI")
                             | sub("VALID_MULTI"; "MULTI")
@@ -945,8 +945,21 @@ unifi_vouchers() {
     local voucher_json
 
     voucher_json=$(unifi_fetch "stat/voucher") || { printf '%s\n' "$voucher_json"; exit 1; }
-    jq -c '{rows: [(.data // [])[] | {code: .code, quota: (.quota // 0), used: (.used // 0),
-        duration: (.duration // 0), note: (.note // ""), create_time: (.create_time // 0)}]}' <<< "$voucher_json"
+    jq -c --rawfile authfile "$UHM_MACAUTH" '
+        [(.data // [])[] | {code: .code, quota: (.quota // 0), used: (.used // 0),
+            duration: (.duration // 0), end_time: (.end_time // null),
+            note: (.note // ""), create_time: (.create_time // 0)}] as $api |
+        ($api | map(.code)) as $listed |
+        ($authfile | split("\n") | map(select(startswith("a;")) | split(";"))
+           | map(select((.[3] // "") | test("-[0-9]+$")))
+           | map({code: ((.[3] | capture("-(?<c>[0-9]+)$")).c),
+                  end_time: ((.[4] // "") | try tonumber catch null)})
+           | map(select(.code as $c | ($listed | index($c)) | not))
+           | group_by(.code) | map(.[0])
+           | map({code: .code, quota: null, used: null, duration: null,
+                  end_time: .end_time, note: "", create_time: 0})) as $local |
+        {rows: ($api + $local)}
+    ' <<< "$voucher_json"
 }
 
 # Three mutually exclusive categories, decided by where the MAC lives and
