@@ -817,7 +817,8 @@ unset range_conflict
 wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
 wpad_ready=0
 if [ "$WPAD_ENABLED" = true ]; then
-    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
+    if wpad_http_code=$(curl -fsS --noproxy '*' --max-time 5 -o /dev/null --write-out '%{http_code}' "$wpad_url") \
+       && [ "$wpad_http_code" = 200 ]; then
         wpad_ready=1
     else
         log "WARNING: WPAD_ENABLED=true but not served -fallback"
