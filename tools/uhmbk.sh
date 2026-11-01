@@ -236,6 +236,7 @@ for backup_item in \
     /etc/systemd/system/uhmd.service \
     /etc/systemd/system/uhmalert.service \
     /etc/apache2/sites-available/uhmweb.conf \
+    /etc/apache2/ports.conf \
     /etc/sudoers.d/uhmweb \
     /etc/logrotate.d/uhm \
     /etc/cron.d/uhm \

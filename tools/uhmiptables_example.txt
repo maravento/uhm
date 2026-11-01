@@ -645,9 +645,9 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 # 10000  TCP - Webmin
 # 11084  TCP - UniFi/Podman (pasta userspace network)
 # 11443  TCP - UniFi OS self-hosted GUI (pasta userspace network)
-# 18100  TCP - PAC proxy
-# 18080  TCP - Internal HTTP
-# 18081  TCP - Warning page (bandata)
+# 18800  TCP - PAC proxy
+# 18770  TCP - Internal HTTP
+# 18771  TCP - Warning page (bandata)
 # 18082  TCP - Internal HTTP alternate
 # 44321  TCP - PCP pmcd (Performance Co-Pilot daemon)
 # 44322  TCP - PCP pmproxy
@@ -657,7 +657,7 @@ iptables -A FORWARD -s 127.0.0.0/8 ! -i lo -j DROP
 #else
 #    ipset flush wandropports
 #fi
-#for port_num in 25 80 "$squid_port" "$squid_intercept_port" 4330 5005 5636 5671 6789 8443 8444 9543 10000 11084 11443 "$WPAD_PORT" 18080 18081 18082 44321 44322 44323; do
+#for port_num in 25 80 "$squid_port" "$squid_intercept_port" 4330 5005 5636 5671 6789 8443 8444 9543 10000 11084 11443 "$WPAD_PORT" 18770 18771 18082 44321 44322 44323; do
 #    ipset add wandropports "$port_num" -exist
 #done
 #iptables -A INPUT -i "$wan_iface" -p tcp -m set --match-set wandropports dst -j DROP
@@ -983,7 +983,7 @@ iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p icmp -j DROP
 
 # PROXYMON: WARNING PAGE HTTP FOR BANDATA
 # https://github.com/maravento/proxymon
-iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 18081 -m set --match-set macports src -j ACCEPT
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 18771 -m set --match-set macports src -j ACCEPT
 # SMBSTACK
 # https://github.com/maravento/smbstack
 iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 3092 -m set --match-set macports src -j ACCEPT

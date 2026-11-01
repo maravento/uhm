@@ -95,8 +95,6 @@ web_port="4048"
 vhost_dest="/etc/apache2/sites-available/uhmweb.conf"
 sudoers_dest="/etc/sudoers.d/uhmweb"
 apache_ports="/etc/apache2/ports.conf"
-wpad_root="/var/www/wpad"
-wpad_vhost_dest="/etc/apache2/sites-available/wpad.conf"
 
 # Repo file expectations (relative to this script)
 repo_core="${script_dir}/core"
@@ -105,7 +103,6 @@ repo_acl="${script_dir}/acl"
 repo_uhmd="${repo_core}/uhmd.sh"
 repo_web="${script_dir}/web"
 repo_config="${script_dir}/config"
-repo_wpad="${repo_config}/wpad"
 repo_uhmweb="${repo_config}/web"
 repo_service="${repo_config}/service/uhmd.service"
 
@@ -132,8 +129,28 @@ abort() { err "$*"; exit 1; }
 
 # port in use
 check_port() {
-    local proto="$1" port="$2" role="$3"
-    if [ -n "$(ss -lnH "--${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
+    local proto="$1" port="$2" role="$3" port_listeners
+    if ! port_listeners=$(python3 - "${proto,,}" "$port" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+    ); then
+        err "cannot check ${proto^^} port $port"
+        abort "fix the ss query before installing -abort"
+    fi
+    if [ -n "$port_listeners" ]; then
         err "${proto^^} port $port in use by another $role"
         abort "stop that service before installing -abort"
     fi
@@ -1399,116 +1416,6 @@ install_web() {
     return 0
 }
 
-# Deploys the WPAD/PAC infrastructure: an apache2 virtualhost on WPAD_PORT,
-# the PAC file under $wpad_root, and the WPAD_ENABLED flip in pydhcp.env.
-#
-# pydhcp decides whether to announce DHCP option 252 by probing the PAC URL,
-# in pysetup.sh, and re-checks it on every reload, in pyleases.sh. It never
-# serves the PAC itself, so on a pydhcp-first install that probe fails and
-# WPAD_ENABLED lands as false. uhm is the component that can serve it, so
-# uhm is the one that asks.
-install_wpad() {
-    local wpad_port squid_port pac_proxy
-    wpad_port="${WPAD_PORT:-18100}"
-    pac_proxy=""
-
-    if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
-        info "WPAD already enabled in $pydhcp_env -skip"
-        return 0
-    fi
-
-    echo "WPAD serves a proxy auto-config file over HTTP, and pydhcp"
-    echo "announces its URL as DHCP option 252. It is off because nothing"
-    echo "was serving a PAC file on port ${wpad_port} when pydhcp was"
-    echo "installed. Enabling it adds an apache2 virtualhost on that port"
-    confirm "WPAD is disabled. Enable it?" "n" || return 0
-
-    # The PAC is built from what is actually running. A proxy line only makes
-    # sense if squid answers, otherwise a client honouring option 252 waits
-    # for a port nothing listens on before falling back to DIRECT.
-    # Three server package names exist: squid is the GnuTLS flavour,
-    # squid-openssl the OpenSSL one gateproxy installs, squid3 the legacy name.
-    if dpkg -s squid &>/dev/null || dpkg -s squid-openssl &>/dev/null \
-       || dpkg -s squid3 &>/dev/null; then
-        squid_port=$(awk '$1=="http_port"{print $2; exit}' /etc/squid/squid.conf 2>/dev/null)
-        squid_port="${squid_port##*:}"
-        if [[ "$squid_port" =~ $UH_UINT ]] \
-           && [ -n "$(ss -lnH -t "sport = :$squid_port" 2>/dev/null)" ]; then
-            pac_proxy="PROXY ${SERVER_IP}:${squid_port}; DIRECT"
-            info "squid answering on port ${squid_port}, PAC will use it"
-        else
-            warn "squid not listening, PAC returns DIRECT -alert"
-        fi
-    else
-        info "no squid on this host, PAC returns DIRECT"
-    fi
-    [ -n "$pac_proxy" ] || pac_proxy="DIRECT"
-
-    # Written here instead of copied from the repo: the LAN network, mask and
-    # the proxy line depend on values only known at install time, so a shipped
-    # template would be rewritten line by line anyway.
-    install -d -m 755 -o www-data -g www-data "$wpad_root"
-    cat > "${wpad_root}/wpad.pac" <<EOF
-function FindProxyForURL(url, host) {
-    if (isPlainHostName(host) || shExpMatch(host, "localhost"))
-        return "DIRECT";
-    if (isInNet(host, "${SERV_SUBNET}", "${SERV_MASK}") || shExpMatch(host, "127.*"))
-        return "DIRECT";
-    return "${pac_proxy}";
-}
-EOF
-    chown www-data:www-data "${wpad_root}/wpad.pac"
-    chmod 644 "${wpad_root}/wpad.pac"
-
-    install -m 644 -o root -g root "${repo_wpad}/wpad.conf" "$wpad_vhost_dest"
-    sed -i "s|\*:18100|*:${wpad_port}|" "$wpad_vhost_dest"
-
-    [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
-    sed -i -E "/^Listen [^[:space:]]*:${wpad_port}\$/d; /^Listen ${wpad_port}\$/d" "$apache_ports"
-    echo "Listen ${SERVER_IP}:${wpad_port}" >> "$apache_ports"
-
-    a2ensite wpad &>/dev/null || true
-    if ! apache2ctl configtest &>/dev/null; then
-        warn "apache configtest failed, WPAD not enabled -alert"
-        return 1
-    fi
-    systemctl reload apache2 &>/dev/null || true
-
-    # pyleases.sh re-probes this URL on every reload. If it does not answer,
-    # option 252 stays commented whatever the key says, so the flip below is
-    # only written once the PAC is proven reachable.
-    if ! curl -fsS --noproxy '*' --max-time 5 -o /dev/null \
-         "http://${SERVER_IP}:${wpad_port}/wpad.pac"; then
-        warn "PAC unavailable; WPAD_ENABLED unchanged -alert"
-        return 1
-    fi
-
-    if grep -q '^WPAD_ENABLED=' "$pydhcp_env"; then
-        sed -i 's|^WPAD_ENABLED=.*|WPAD_ENABLED=true|' "$pydhcp_env"
-    else
-        echo "WPAD_ENABLED=true" >> "$pydhcp_env"
-    fi
-    info "WPAD enabled: http://${SERVER_IP}:${wpad_port}/wpad.pac"
-    return 0
-}
-
-remove_wpad() {
-    local wpad_port
-    # do_uninstall never loads pydhcp.env, so the port has to be read here or
-    # the Listen line below would be deleted by its default value alone.
-    load_uhm_env "$pydhcp_env" "$env_keys" line || true
-    wpad_port="${WPAD_PORT:-18100}"
-    a2dissite wpad &>/dev/null || true
-    rm -f "$wpad_vhost_dest"
-    rm -rf "$wpad_root"
-    if [[ -f "$apache_ports" ]]; then
-        sed -i -E "/^Listen [^[:space:]]*:${wpad_port}\$/d; /^Listen ${wpad_port}\$/d" "$apache_ports"
-    fi
-    if [[ -f "$pydhcp_env" ]] && grep -q '^WPAD_ENABLED=true' "$pydhcp_env"; then
-        sed -i 's|^WPAD_ENABLED=.*|WPAD_ENABLED=false|' "$pydhcp_env"
-    fi
-}
-
 remove_web() {
     if [[ -f "$vhost_dest" ]]; then
         a2dissite uhmweb &>/dev/null || true
@@ -1649,7 +1556,7 @@ install_pydhcp() {
     info "pydhcp installed, pydhcpd active"
 }
 
-# Installs apache2, which uhm needs for the web panel and for WPAD. Unlike
+# Installs apache2, which uhm needs for the web panel. Unlike
 # apt_deps, these two are installed instead of merely verified: they are
 # uhm's own serving layer, not a tool it calls.
 install_apache2() {
@@ -1753,11 +1660,11 @@ EOF
         echo ""
     fi
 
-    step "pydhcp"
-    install_pydhcp
-
     step "apache2"
     install_apache2
+
+    step "pydhcp"
+    install_pydhcp
 
     for apache_php_ini in /etc/php/*/apache2/php.ini; do
         [ -f "$apache_php_ini" ] || continue
@@ -1810,7 +1717,6 @@ EOF
     if confirm "Install the web interface (log viewer, ACL editor, reports)?" "n"; then
         install_web || true
     fi
-    install_wpad || true
 
     final_sanity_check
 
@@ -1831,6 +1737,20 @@ EOF
 # ------------------------------------------------------------------------------
 # UPDATE
 # ------------------------------------------------------------------------------
+
+update_apache_port() {
+    local ports_file="$1" site_file="$2" bind_ip="$3" port="$4" status
+    sed -i -E "s/^([[:space:]]*<VirtualHost[[:space:]]+)[^>]+>/\1*:${port}>/" "$site_file" \
+        || update_error "cannot configure Apache site port"
+    if grep -Eq "^[[:space:]]*Listen[[:space:]]+([^[:space:]]*:)?${port}([[:space:]]|$)" "$ports_file"; then
+        return 0
+    else
+        status=$?
+        [ "$status" -eq 1 ] || update_error "cannot read Apache ports.conf"
+    fi
+    printf 'Listen %s:%s\n' "$bind_ip" "$port" >> "$ports_file" \
+        || update_error "cannot write Apache ports.conf"
+}
 
 do_update() {
     check_apt_deps
@@ -1867,14 +1787,26 @@ do_update() {
     update_target "$logrotate_file"
     update_target "$update_cron_file"
     update_target "${update_cron_file}.lock" 600
+    if [ -d "$web_root" ]; then
+        [ -f /etc/apache2/ports.conf ] && [ ! -L /etc/apache2/ports.conf ] \
+            || update_error "ports.conf is missing or invalid"
+        [ -f "$vhost_dest" ] && [ ! -L "$vhost_dest" ] \
+            || update_error "Apache site is missing or invalid"
+        update_target /etc/apache2/ports.conf
+        update_target "$vhost_dest"
+    fi
     update_preflight
-    update_backup "$uhmbk_script"
+    update_backup "$repo_tools/uhmbk.sh"
     update_begin
     update_stop_service uhmd
     if [ -d "$web_root" ]; then update_stop_service apache2; fi
     if [ -f /etc/systemd/system/uhmalert.service ]; then update_stop_service uhmalert; fi
     update_wait_jobs
     update_apply
+    if [ -d "$web_root" ]; then
+        update_apache_port /etc/apache2/ports.conf "$vhost_dest" 127.0.0.1 "$web_port"
+        apache2ctl configtest || update_error "Apache configuration invalid"
+    fi
     acl_prepare "$acl_dir" 700 600 "$acl_dir/uhm-auth.txt" "$acl_dir/uhm-queue.txt" "$acl_dir/uhm-grace.txt"
     install_logrotate warn || update_error "cannot configure uhm log rotation"
     systemctl daemon-reload || update_error "cannot reload systemd configuration"
@@ -1979,10 +1911,6 @@ perform_remove() {
     step "Web interface"
     remove_web
 
-    # WPAD (optional component)
-    step "WPAD"
-    remove_wpad
-
     # Logrotate
     step "Logrotate"
     if [[ -f "$logrotate_file" ]]; then
@@ -2052,7 +1980,26 @@ do_status() {
 
     echo ""
     echo "=== Panel Port ==="
-    if ss -tln 2>/dev/null | grep -qE ":${web_port}[[:space:]]"; then
+    local port_listeners
+    if ! port_listeners=$(python3 - tcp "$web_port" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+    ); then
+        echo ":$web_port UNKNOWN"
+    elif [ -n "$port_listeners" ]; then
         echo ":$web_port OPEN"
     else
         echo ":$web_port CLOSED"
@@ -2113,7 +2060,7 @@ show_menu() {
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$repo_tools/uhmenv.sh"
-env_keys='INTERFACESv4 SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK WPAD_ENABLED WPAD_PORT'
+env_keys='INTERFACESv4 SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK'
 
 # ------------------------------------------------------------------------------
 # ACTIONS

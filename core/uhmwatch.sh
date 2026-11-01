@@ -106,7 +106,7 @@ uhm_reload_in_progress() {
 }
 
 # dependencies
-for dep_pkg in curl jq coreutils util-linux cron grep sed systemd iproute2; do
+for dep_pkg in curl jq coreutils util-linux cron grep sed systemd iproute2 python3; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -455,6 +455,25 @@ clear_recovery_attempt() {
     rm -f "${recovery_state_dir}/${1}.attempted_at" 2>/dev/null || true
 }
 
+ss_tcp_listeners() {
+    python3 - <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnt"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+}
+
 check_uosserver() {
     # All-in-one container -- its internal MongoDB is bundled and managed by
     # the container itself, never a host-level service. Do not check/restart
@@ -488,7 +507,12 @@ check_uosserver() {
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
         log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -skip"
         # Fall back to a port check so this isn't a total no-op.
-        if ! ss -lnt | grep -qE ':11443\b'; then
+        local tcp_listeners
+        if ! tcp_listeners=$(ss_tcp_listeners); then
+            log "WARNING: UOS cannot check its ports, no restart -alert"
+            return
+        fi
+        if ! grep -qE ':11443\b' <<< "$tcp_listeners"; then
             log "WARNING: UOS BROKEN_PORTS -alert"
             if recently_restarted "uosserver.service"; then
                 log "INFO: uosserver restarted recently -skip"
@@ -579,7 +603,12 @@ check_unifi_classic() {
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
         log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -skip"
         # Fall back to a port check so this isn't a total no-op.
-        if ! ss -lnt | grep -qE ':(8443|8080)\b'; then
+        local tcp_listeners
+        if ! tcp_listeners=$(ss_tcp_listeners); then
+            log "WARNING: UniFi cannot check its ports, no restart -alert"
+            return
+        fi
+        if ! grep -qE ':(8443|8080)\b' <<< "$tcp_listeners"; then
             log "WARNING: UniFi (classic) BROKEN_PORTS -alert"
             if recently_restarted "unifi.service"; then
                 log "INFO: unifi restarted recently -skip"
