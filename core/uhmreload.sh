@@ -59,10 +59,16 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
     exit 1
 }
 exec 200>"$script_lock"
-if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -abort"
+script_lock_rc=0
+flock -n -E 75 200 || script_lock_rc=$?
+if (( script_lock_rc == 75 )); then
+    log "INFO: another uhmreload execution is in progress -skip"
+    exit 75
+elif (( script_lock_rc != 0 )); then
+    log "ERROR: cannot acquire uhmreload lock -abort"
     exit 1
 fi
+unset script_lock_rc
 
 # dependencies
 for dep_pkg in util-linux coreutils grep systemd; do
