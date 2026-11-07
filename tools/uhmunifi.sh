@@ -37,6 +37,7 @@ log() {
         echo "$log_msg"
     fi
 }
+info() { log "INFO: $*"; }
 # File-only variant -- the startup fetch summary is recorded here without
 # also echoing to the terminal, since it happens before the menu is shown
 # and would just scroll away.
@@ -149,7 +150,7 @@ unset env_owner env_perms
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
-env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH ACL_MAC_PATH UHM_RELOAD'
+env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_MAC_PATH UHM_RELOAD'
 
 # LOAD
 # pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
@@ -497,7 +498,7 @@ interactive_delete_unused() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "INFO: Failed to delete voucher: $voucher_code -skip"
+            || log "WARNING: Failed to delete voucher: $voucher_code -alert"
     done
 
     log "INFO: Unused voucher cleanup finished"
@@ -585,7 +586,7 @@ interactive_forget_no_voucher() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -skip"
+            || log "WARNING: Failed to forget: $mac_addr -alert"
     done
 
     log "INFO: Clients without voucher cleanup finished"
@@ -689,7 +690,7 @@ interactive_delete_expired() {
                 | jq -r '.meta.rc // "error"' 2>/dev/null)
             [ "$forget_rc" = "ok" ] \
                 && log "INFO: Forgotten: $mac_addr" \
-                || log "INFO: Failed to forget: $mac_addr -skip"
+                || log "WARNING: Failed to forget: $mac_addr -alert"
         done < <(echo "$guest_json" | jq -r --arg code "$voucher_code" '
             .data[]
             | select(.voucher_code == $code)
@@ -705,20 +706,24 @@ remove_voucher_local_mac() (
     local cycle_lock="/var/lock/uhmd-cycle.lock"
 
     exec 201>"$cycle_lock" || {
-        log "ERROR: cannot open cycle lock -skip"
+        log "WARNING: cannot open cycle lock -alert"
         return 1
     }
     flock -w 10 201 || {
-        log "ERROR: uhm-auth.txt busy -skip"
+        log "WARNING: uhm-auth.txt busy -alert"
         return 1
     }
+    if ! recover_uhm_expiry "$UHM_MACAUTH" "${UHM_QUEUE:-}"; then
+        log "WARNING: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -alert"
+        return 1
+    fi
     is_managed_mac "$mac_addr" && return 0
     if [[ ! -f "$UHM_MACAUTH" || -L "$UHM_MACAUTH" ]]; then
-        log "ERROR: invalid uhm-auth.txt -skip"
+        log "WARNING: invalid uhm-auth.txt -alert"
         return 1
     fi
     local_tmp=$(mktemp "${UHM_MACAUTH}.XXXXXX") || {
-        log "ERROR: cannot create uhm-auth.txt temporary file -skip"
+        log "WARNING: cannot create uhm-auth.txt temporary file -alert"
         return 1
     }
     trap 'rm -f -- "$local_tmp"' EXIT
@@ -727,7 +732,7 @@ remove_voucher_local_mac() (
         substr($4, length($4) - length(code)) == "-" code { next }
         { print }
     ' "$UHM_MACAUTH" > "$local_tmp"; then
-        log "ERROR: cannot filter uhm-auth.txt -skip"
+        log "WARNING: cannot filter uhm-auth.txt -alert"
         return 1
     fi
     if cmp -s "$local_tmp" "$UHM_MACAUTH"; then
@@ -736,7 +741,7 @@ remove_voucher_local_mac() (
     if ! { chmod --reference="$UHM_MACAUTH" "$local_tmp" &&
            chown --reference="$UHM_MACAUTH" "$local_tmp" &&
            mv -fT -- "$local_tmp" "$UHM_MACAUTH"; }; then
-        log "ERROR: cannot update uhm-auth.txt for $mac_addr -skip"
+        log "WARNING: uhm-auth.txt not updated: $mac_addr -alert"
         return 1
     fi
     log "INFO: Removed $mac_addr from uhm-auth.txt"
@@ -764,7 +769,7 @@ interactive_revoke_by_code() {
     fi
 
     if [[ "${UHM_RELOAD:-}" != /* || ! -f "${UHM_RELOAD:-}" || ! -x "${UHM_RELOAD:-}" ]]; then
-        log "ERROR: UHM_RELOAD is not an executable file -skip"
+        log "WARNING: UHM_RELOAD is not an executable file -alert"
         return 1
     fi
 
@@ -815,21 +820,10 @@ interactive_revoke_by_code() {
     echo "Name : $target_note"
     echo ""
 
-    local voucher_id
+    local voucher_id delete_failed=0
     voucher_id=$(echo "$voucher_json" | jq -r --arg code "$target_code" '
         .data[] | select(.code == $code) | ._id
     ' 2>/dev/null | head -1)
-
-    if [ -n "$voucher_id" ]; then
-        local delete_rc
-        delete_rc=$(api_post "cmd/hotspot" "{\"cmd\":\"delete-voucher\",\"_id\":\"${voucher_id}\"}" \
-            | jq -r '.meta.rc // "error"' 2>/dev/null)
-        [ "$delete_rc" = "ok" ] \
-            && log "INFO: Deleted voucher: $target_code" \
-            || log "INFO: delete voucher failed: (rc=$delete_rc) -skip"
-    else
-        log "INFO: voucher $target_code not found, proceeding with cleanup"
-    fi
 
     mapfile -t guest_macs < <(echo "$guest_json" | jq -r --arg code "$target_code" '
         .data[]
@@ -856,8 +850,8 @@ interactive_revoke_by_code() {
 
     mapfile -t all_macs < <(printf '%s\n' "${guest_macs[@]}" "${sta_macs[@]}" "${local_macs[@]}" | sort -u | grep -v '^$')
 
-    if [ ${#all_macs[@]} -eq 0 ]; then
-        log "INFO: no client records for code: $target_code"
+    if [[ ${#all_macs[@]} -eq 0 && -z "$voucher_id" ]]; then
+        log "INFO: no voucher or client records for code: $target_code"
         return
     fi
 
@@ -877,15 +871,34 @@ interactive_revoke_by_code() {
     done
 
     echo ""
-    read -rp " Confirm revocation of ${#all_macs[@]} client(s) for code $target_code? [y/N]: " confirm_answer
+    local confirm_prompt
+    if [[ -z "$voucher_id" ]]; then
+        confirm_prompt="Voucher not found. Clean up ${#all_macs[@]} linked client(s) for code $target_code?"
+    elif [ ${#all_macs[@]} -eq 0 ]; then
+        confirm_prompt="Delete voucher $target_code, which has no linked clients?"
+    else
+        confirm_prompt="Delete voucher $target_code and revoke ${#all_macs[@]} linked client(s)?"
+    fi
+    read -rp " $confirm_prompt [y/N]: " confirm_answer
     [[ ! "$confirm_answer" =~ ^[yY]$ ]] && log "INFO: Cancelled" && return
 
     echo ""
 
-    local cleanup_failed=0 local_cleanup_done=0
+    if [ -n "$voucher_id" ]; then
+        local delete_rc
+        delete_rc=$(api_post "cmd/hotspot" "{\"cmd\":\"delete-voucher\",\"_id\":\"${voucher_id}\"}" \
+            | jq -r '.meta.rc // "error"' 2>/dev/null)
+        [ "$delete_rc" = "ok" ] \
+            && log "INFO: Deleted voucher: $target_code" \
+            || { log "WARNING: delete voucher failed: (rc=$delete_rc) -alert"; delete_failed=1; }
+    else
+        log "INFO: voucher $target_code not found, proceeding with cleanup"
+    fi
+
+    local cleanup_failed=$delete_failed local_cleanup_done=0
     for mac_addr in "${all_macs[@]}"; do
         if [[ ! "$mac_addr" =~ $UH_MAC ]]; then
-            log "ERROR: invalid client MAC -skip"
+            log "WARNING: invalid client MAC -alert"
             cleanup_failed=1
             continue
         fi
@@ -906,7 +919,7 @@ interactive_revoke_by_code() {
             if [ "$unauth_rc" = "ok" ]; then
                 log "INFO: Revoked: $mac_addr"
             else
-                log "INFO: revoke failed: $mac_addr (rc=$unauth_rc) -skip"
+                log "WARNING: revoke failed: $mac_addr (rc=$unauth_rc) -alert"
                 client_failed=1
             fi
         fi
@@ -919,7 +932,7 @@ interactive_revoke_by_code() {
             if [ "$forget_rc" = "ok" ]; then
                 log "INFO: Forgotten: $mac_addr"
             else
-                log "INFO: forget failed: $mac_addr (rc=$forget_rc) -skip"
+                log "WARNING: forget failed: $mac_addr (rc=$forget_rc) -alert"
                 client_failed=1
             fi
         fi
@@ -938,10 +951,17 @@ interactive_revoke_by_code() {
 
     if (( local_cleanup_done )); then
         log "INFO: invoking $UHM_RELOAD"
-        local reload_rc=0
-        "$UHM_RELOAD" || reload_rc=$?
-        if (( reload_rc != 0 && reload_rc != 75 )); then
-            log "ERROR: uhmreload failed (code $reload_rc) -alert"
+        # 75 means the reload found a lock busy and did no work: only a later
+        # run is sure to process this change.
+        local reload_rc reload_try
+        for reload_try in {1..24}; do
+            reload_rc=0
+            "$UHM_RELOAD" || reload_rc=$?
+            (( reload_rc == 75 && reload_try < 24 )) || break
+            sleep 5
+        done
+        if (( reload_rc != 0 )); then
+            log "WARNING: uhmreload failed (code $reload_rc) -alert"
             cleanup_failed=1
         fi
     fi
@@ -1027,7 +1047,7 @@ interactive_forget_flagged() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -skip"
+            || log "WARNING: Failed to forget: $mac_addr -alert"
     done
 
     log "INFO: Marked session cleanup finished"
@@ -1094,7 +1114,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$delete_rc" = "ok" ] \
             && log "INFO: Deleted voucher: $voucher_code" \
-            || log "INFO: Failed to delete voucher: $voucher_code -skip"
+            || log "WARNING: Failed to delete voucher: $voucher_code -alert"
     done < <(echo "$voucher_json" | jq -r '.data[] | ._id' 2>/dev/null)
 
     local mac_addr unauth_rc
@@ -1118,7 +1138,7 @@ interactive_purge_all() {
             | jq -r '.meta.rc // "error"' 2>/dev/null)
         [ "$forget_rc" = "ok" ] \
             && log "INFO: Forgotten: $mac_addr" \
-            || log "INFO: Failed to forget: $mac_addr -skip"
+            || log "WARNING: Failed to forget: $mac_addr -alert"
     done < <(echo "$guest_json" | jq -r '.data[] | (.mac | ascii_downcase)' 2>/dev/null | sort -u)
 
     log "INFO: Purge complete"
@@ -1146,11 +1166,11 @@ actions_menu() {
             1) interactive_delete_unused; return 0 ;;
             2) interactive_forget_no_voucher; return 0 ;;
             3) interactive_delete_expired; return 0 ;;
-            4) interactive_revoke_by_code; return 0 ;;
+            4) interactive_revoke_by_code || return 1; return 0 ;;
             5) interactive_forget_flagged; return 0 ;;
             6) interactive_purge_all; return 0 ;;
             b|B) return 2 ;;
-            *) echo "Invalid option"; sleep 1 ;;
+            *) info "invalid option -retry"; sleep 1 ;;
         esac
     done
 }
@@ -1183,7 +1203,7 @@ main_menu() {
                 esac
                 ;;
             q|Q) log "INFO: Exiting"; break ;;
-            *) echo "Invalid option"; sleep 1 ;;
+            *) info "invalid option -retry"; sleep 1 ;;
         esac
     done
 }
@@ -1191,7 +1211,7 @@ main_menu() {
 # start
 log "uhmunifi start..."
 
-main_menu
+main_menu || { log "ERROR: revocation incomplete -abort"; exit 1; }
 
 # end
 log "uhmunifi done"

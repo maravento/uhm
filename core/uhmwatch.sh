@@ -95,7 +95,7 @@ fi
 uhm_cycle_lock="/var/lock/uhmd-cycle.lock"
 uhm_reload_in_progress() {
     [[ -e "$uhm_cycle_lock" ]] || return 1
-    exec 250>"$uhm_cycle_lock" 2>/dev/null || return 1
+    { exec 250>"$uhm_cycle_lock"; } 2>/dev/null || return 1
     if flock -n 250; then
         flock -u 250
         exec 250>&-
@@ -238,6 +238,12 @@ case "${1:-}" in
         log "uhmwatch done"
         exit 0
         ;;
+    "") ;;
+    *)
+        log "ERROR: invalid option -abort"
+        echo "Usage: $(basename "$0") [--install|--uninstall|-h|--help]"
+        exit 1
+        ;;
 esac
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch start..."
@@ -328,6 +334,12 @@ fi
 unset key_errors key_error env_key
 
 # ------------------------------------------------------------------------------
+# OWN VALUES
+# ------------------------------------------------------------------------------
+
+restart_grace_seconds=180
+
+# ------------------------------------------------------------------------------
 # CHECKS
 # ------------------------------------------------------------------------------
 
@@ -350,7 +362,7 @@ check_uhmd() {
         mark_recovery_attempt "uhmd.service"
         systemctl reset-failed uhmd.service 2>/dev/null || true
         if systemctl restart uhmd.service; then
-            log "INFO: uhmd restarted"
+            log "INFO: uhmd restarted -fixed"
         else
             log "WARNING: uhmd restart FAILED -alert"
         fi
@@ -374,7 +386,7 @@ check_ualert() {
         mark_recovery_attempt "uhmalert.service"
         systemctl reset-failed uhmalert.service 2>/dev/null || true
         if systemctl restart uhmalert.service; then
-            log "INFO: uhmalert restarted"
+            log "INFO: uhmalert restarted -fixed"
         else
             log "WARNING: uhmalert restart FAILED -alert"
         fi
@@ -404,7 +416,7 @@ check_pydhcpd() {
         mark_recovery_attempt "pydhcpd.service"
         systemctl reset-failed pydhcpd.service 2>/dev/null || true
         if systemctl restart pydhcpd.service; then
-            log "INFO: pydhcpd restarted"
+            log "INFO: pydhcpd restarted -fixed"
         else
             log "WARNING: pydhcpd restart FAILED -alert"
         fi
@@ -415,7 +427,6 @@ check_pydhcpd() {
 # ago -- gives it time to actually finish booting (UOS Server/UniFi Network
 # can take a couple of minutes) before the next cron tick (every min)
 # restarts it again mid-boot, which would otherwise never let it converge.
-restart_grace_seconds=180
 recently_restarted() {
     local service_name="$1" active_since elapsed_seconds
     active_since=$(systemctl show -p ActiveEnterTimestamp --value "$service_name" 2>/dev/null)
@@ -489,7 +500,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl start uosserver.service; then
-            log "INFO: uosserver started"
+            log "INFO: uosserver started -fixed"
         else
             log "WARNING: uosserver start FAILED -alert"
         fi
@@ -505,7 +516,7 @@ check_uosserver() {
     # payload via curl stdin (not -d), so neither ever appears in this
     # process's argv (/proc/<pid>/cmdline).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -skip"
+        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -fallback"
         # Fall back to a port check so this isn't a total no-op.
         local tcp_listeners
         if ! tcp_listeners=$(ss_tcp_listeners); then
@@ -525,7 +536,7 @@ check_uosserver() {
             mark_recovery_attempt "uosserver.service"
             systemctl reset-failed uosserver.service 2>/dev/null || true
             if systemctl restart uosserver.service; then
-                log "INFO: uosserver restarted"
+                log "INFO: uosserver restarted -fixed"
             else
                 log "WARNING: uosserver restart FAILED -alert"
             fi
@@ -567,7 +578,7 @@ check_uosserver() {
         mark_recovery_attempt "uosserver.service"
         systemctl reset-failed uosserver.service 2>/dev/null || true
         if systemctl restart uosserver.service; then
-            log "INFO: uosserver restarted (login failed)"
+            log "INFO: uosserver restarted (login failed) -fixed"
         else
             log "WARNING: uosserver restart FAILED -alert"
         fi
@@ -589,7 +600,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl start unifi.service; then
-            log "INFO: unifi started"
+            log "INFO: unifi started -fixed"
         else
             log "WARNING: unifi.service start FAILED -alert"
         fi
@@ -601,7 +612,7 @@ check_unifi_classic() {
     # embedded Mongo subprocess, see README) is actually healthy. Same login
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
     if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "INFO: UNIFI_USERNAME/UNIFI_PASSWORD not set -skip"
+        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -fallback"
         # Fall back to a port check so this isn't a total no-op.
         local tcp_listeners
         if ! tcp_listeners=$(ss_tcp_listeners); then
@@ -621,7 +632,7 @@ check_unifi_classic() {
             mark_recovery_attempt "unifi.service"
             systemctl reset-failed unifi.service 2>/dev/null || true
             if systemctl restart unifi.service; then
-                log "INFO: unifi restarted"
+                log "INFO: unifi restarted -fixed"
             else
                 log "WARNING: unifi.service restart FAILED -alert"
             fi
@@ -663,7 +674,7 @@ check_unifi_classic() {
         mark_recovery_attempt "unifi.service"
         systemctl reset-failed unifi.service 2>/dev/null || true
         if systemctl restart unifi.service; then
-            log "INFO: unifi restarted (login failed)"
+            log "INFO: unifi restarted (login failed) -fixed"
         else
             log "WARNING: unifi.service restart FAILED -alert"
         fi

@@ -517,7 +517,7 @@ acl_write() {
         if [[ "$acl_name" == "uhm-auth" || "$acl_name" == "uhm-grace" ]]; then
             local entry_epoch
             entry_epoch=$(printf '%s' "$acl_line" | cut -d';' -f5)
-            if ! [[ "$entry_epoch" =~ $UH_UINT ]]; then
+            if ! [[ "$entry_epoch" =~ $UH_UINT ]] || ! uh_fits "$entry_epoch"; then
                 jq -cn --argjson line "$line_number" --arg content "$acl_line" \
                     '{error: "invalid epoch", line: $line, content: $content}'
                 return 1
@@ -532,11 +532,26 @@ acl_write() {
     (umask 077; : >> "$cycle_lock")
     exec 201>"$cycle_lock"
     flock -w 10 201 || { json_error "ACL file busy"; return 1; }
+    if ! recover_uhm_expiry "$UHM_MACAUTH" "${UHM_QUEUE:-}"; then
+        flock -u 201
+        json_error "$(uhm_expiry_recovery_message "$UHM_MACAUTH")"
+        return 1
+    fi
 
+    # Owner, group and mode go on a sibling temporary file. One rename publishes it.
+    local publish_file
+    if ! publish_file=$(mktemp "${acl_file}.XXXXXX"); then
+        flock -u 201
+        json_error "cannot save $(basename "$acl_file")"
+        return 1
+    fi
+    temp_files+=("$publish_file")
     if ! { cp -f "$acl_file" "${acl_file}.bak" \
-        && cat "$tmp_file" > "$acl_file" \
-        && chown root:root "$acl_file" \
-        && chmod 600 "$acl_file"; }; then
+        && cat "$tmp_file" > "$publish_file" \
+        && chown root:root "$publish_file" \
+        && chmod 600 "$publish_file" \
+        && mv -fT -- "$publish_file" "$acl_file"; }; then
+        rm -f -- "$publish_file"
         flock -u 201
         json_error "cannot save $(basename "$acl_file")"
         return 1

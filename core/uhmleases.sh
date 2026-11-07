@@ -59,10 +59,16 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
     exit 1
 }
 exec 200>"$script_lock"
-if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -abort"
+script_lock_rc=0
+flock -n -E 75 200 || script_lock_rc=$?
+if (( script_lock_rc == 75 )); then
+    log "INFO: another uhmleases execution is in progress -skip"
+    exit 75
+elif (( script_lock_rc != 0 )); then
+    log "ERROR: cannot acquire uhmleases lock -abort"
     exit 1
 fi
+unset script_lock_rc
 
 # dependencies
 for dep_pkg in python3 coreutils util-linux curl grep sed systemd libc-bin; do
@@ -130,11 +136,16 @@ uh_fits() {
 # purpose and must not be restarted.
 cycle_lock="/var/lock/uhmd-cycle.lock"
 exec 201>"$cycle_lock"
-if ! flock -w 10 201; then
+cycle_lock_rc=0
+flock -w 10 -E 75 201 || cycle_lock_rc=$?
+if (( cycle_lock_rc == 75 )); then
     log "INFO: mechanism busy -skip"
-    log "uhmleases done"
-    exit 0
+    exit 75
+elif (( cycle_lock_rc != 0 )); then
+    log "ERROR: cannot acquire cycle lock -abort"
+    exit 1
 fi
+unset cycle_lock_rc
 
 # Set by is_pydhcp() if pydhcpd fails to start (even after the backup-config
 # restore attempt) -- checked at the very end of the script so the script
@@ -282,7 +293,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 initialize_empty_files() {
@@ -369,7 +380,10 @@ normalize_acl_file() {
             dropped_count=$((dropped_count + 1))
         done < "$acl_file"
         if (( dropped_count > 0 )); then
-            mv -f "$tmp_file" "$acl_file"
+            if ! mv -fT -- "$tmp_file" "$acl_file"; then
+                log "ERROR: cannot replace $(basename "$acl_file") -abort"
+                exit 1
+            fi
             chmod 600 "$acl_file"
             chown root:root "$acl_file"
         else
@@ -455,7 +469,7 @@ dedup_mac_vs() {
         }
     ' "$acl_file"
     if [[ -s "$dropped_count" ]]; then
-        if mv "$tmp_file" "$acl_file"; then
+        if mv -fT -- "$tmp_file" "$acl_file"; then
             chmod 600 "$acl_file"
             while IFS= read -r mac_addr; do
                 log "INFO: dup MAC '$mac_addr' removed from $acl_label"
@@ -502,7 +516,7 @@ dedup_uhm_auth() {
         }
     ' "$UHM_MACAUTH"
     if [[ -s "$dropped_count" ]]; then
-        if mv "$tmp_file" "$UHM_MACAUTH"; then
+        if mv -fT -- "$tmp_file" "$UHM_MACAUTH"; then
             chmod 600 "$UHM_MACAUTH"
             while IFS= read -r mac_addr; do
                 log "INFO: dup MAC '$mac_addr' removed from uhm-auth.txt"
@@ -654,7 +668,8 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
-# them, so a tampered or maliciously replaced env file cannot execute code.
+# Reads keys as data instead of sourcing the file, so a tampered or
+# maliciously replaced env file cannot execute code.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
 env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH UHM_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_MACAUTH ACL_BLOCK_FILE UHM_GRACE BLOCKDHCP_GRACE_SECONDS CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS UHM_INI_RANGE UHM_END_RANGE PYDHCPD_LEASES UHM_QUEUE DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
@@ -847,6 +862,11 @@ fi
 
 log "uhmleases start..."
 
+if ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
+    log "ERROR: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -abort"
+    exit 1
+fi
+
 verify_dhcp_service
 verify_dhcp_user
 verify_dhcp_files
@@ -880,7 +900,7 @@ expire_grace_entries() {
     # valid entry for it.
     while IFS= read -r env_line; do
         IFS=';' read -r acl_status mac_addr client_ip client_name entry_epoch _ <<< "$env_line"
-        if [[ "$acl_status" != "a" || -z "$mac_addr" || -z "$entry_epoch" ]] || ! [[ "$entry_epoch" =~ $UH_UINT ]]; then
+        if [[ "$acl_status" != "a" || -z "$mac_addr" || -z "$entry_epoch" ]] || ! [[ "$entry_epoch" =~ $UH_UINT ]] || ! uh_fits "$entry_epoch"; then
             continue
         fi
         lease_age=$(( now_epoch - entry_epoch ))
@@ -900,7 +920,10 @@ expire_grace_entries() {
         fi
     done < "$UHM_GRACE"
 
-    mv "$file_temp" "$UHM_GRACE"
+    if ! mv -fT -- "$file_temp" "$UHM_GRACE"; then
+        log "ERROR: cannot replace $(basename "$UHM_GRACE") -abort"
+        exit 1
+    fi
     chmod 600 "$UHM_GRACE"
     chown root:root "$UHM_GRACE"
 }
@@ -997,7 +1020,10 @@ is_pydhcp() {
         done < "$leases_file"
 
         if [[ -s "$temp_leases" ]]; then
-            mv -f "$temp_leases" "$leases_file"
+            if ! mv -fT -- "$temp_leases" "$leases_file"; then
+                log "ERROR: cannot replace $(basename "$leases_file") -abort"
+                exit 1
+            fi
         else
             local original_count=0
             original_count=$(grep -c '^lease ' "$leases_file" 2>/dev/null) || original_count=0
@@ -1132,7 +1158,10 @@ class "blockdhcp" {
 
         # Keep a backup of the previous config in case the new one is faulty.
         [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
-        mv -f "$dhcp_conf_temp" "$dhcp_conf"
+        if ! mv -fT -- "$dhcp_conf_temp" "$dhcp_conf"; then
+            log "ERROR: cannot replace $(basename "$dhcp_conf") -abort"
+            exit 1
+        fi
         chown root:"${DAEMON_GROUP:-pydhcpd}" "$dhcp_conf"
         chmod 640 "$dhcp_conf"
     }
@@ -1252,7 +1281,10 @@ drain_lease_queue() {
         rm -f "$tmp_file"
         return
     fi
-    mv "$tmp_file" "$dhcpd_leases"
+    if ! mv -fT -- "$tmp_file" "$dhcpd_leases"; then
+        log "ERROR: cannot replace $(basename "$dhcpd_leases") -abort"
+        exit 1
+    fi
     chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd_leases"
     chmod 640 "$dhcpd_leases"
     if ! : > "$UHM_QUEUE" 2>/dev/null; then

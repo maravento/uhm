@@ -12,7 +12,7 @@
 # sudo bash uhmsetup.sh --uninstall   Uninstall
 # sudo bash uhmsetup.sh --status      Report services, port, config and log
 # sudo bash uhmsetup.sh               Interactive menu
-# sudo bash uhmsetup.sh --help        Usage
+# sudo bash uhmsetup.sh -h, --help    Usage
 #
 # LOG: uhmsetup.log, in the directory containing this script
 #
@@ -611,7 +611,7 @@ check_conflicts() {
         for dep_pkg in "${found[@]}"; do
             warn "conflicting $role: $dep_pkg -alert"
         done
-        abort "remove them with apt purge, then re-run -abort"
+        abort "remove them with apt purge -abort"
     fi
 }
 
@@ -783,13 +783,13 @@ load_pydhcp_conf() {
     [ -f "$pydhcp_env" ] \
         || { err "$pydhcp_env not found"; abort "install pydhcp first, see its README -abort"; }
 
-    local missing_keys=() env_key
+    local absent_keys=() env_key
     for env_key in INTERFACESv4 SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
                SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS; do
-        grep -q "^${env_key}=" "$pydhcp_env" || missing_keys+=("$env_key")
+        grep -q "^${env_key}=" "$pydhcp_env" || absent_keys+=("$env_key")
     done
-    if (( ${#missing_keys[@]} > 0 )); then
-        for env_key in "${missing_keys[@]}"; do
+    if (( ${#absent_keys[@]} > 0 )); then
+        for env_key in "${absent_keys[@]}"; do
             err "$(basename "$pydhcp_env"): missing key $env_key -abort"
         done
         exit 1
@@ -877,7 +877,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 ask() {
@@ -1260,7 +1260,6 @@ UHM_MACAUTH=${acl_dir}/uhm-auth.txt
 UHM_QUEUE=${acl_dir}/uhm-queue.txt
 
 # Backup
-# Changing these defaults is not recommended
 BACKUP_DIR=/etc/bak/uhm
 # =============================================================================
 EOF
@@ -1548,7 +1547,7 @@ install_pydhcp() {
     [[ -r "${pydhcp_path}/pysetup.sh" ]] \
         || { err "pysetup.sh not found in $pydhcp_path"; abort "remove that directory and re-run -abort"; }
 
-    ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" PYDHCP_SERVER_IP="$lan_ip" bash pysetup.sh ) \
+    ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" PYDHCP_SERVER_IP="$lan_ip" bash pysetup.sh --install ) \
         || { err "pydhcp install failed"; abort "see ${pydhcp_path}/pysetup.log -abort"; }
 
     systemctl is-active --quiet pydhcpd 2>/dev/null \
@@ -1595,8 +1594,6 @@ do_install() {
     info "WAN interface: $wan_iface"
     info "LAN interface: $lan_iface ($lan_cidr_answer)"
     check_internet
-
-    trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -alert"; perform_remove; }' EXIT
 
     step "Preflight"
     check_repo_files
@@ -1660,6 +1657,8 @@ EOF
         echo ""
     fi
 
+    trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -alert"; perform_remove; }' EXIT
+
     step "apache2"
     install_apache2
 
@@ -1669,19 +1668,12 @@ EOF
     for apache_php_ini in /etc/php/*/apache2/php.ini; do
         [ -f "$apache_php_ini" ] || continue
         if ! { [ -f "${apache_php_ini}.bak" ] || cp -p "$apache_php_ini" "${apache_php_ini}.bak"; }; then
-            echo "ERROR: cannot back up $apache_php_ini -abort" >&2
-            exit 1
+            abort "cannot back up $apache_php_ini -abort"
         fi
         if grep -Eq '^[[:space:]]*;*[[:space:]]*session\.upload_progress\.enabled[[:space:]]*=' "$apache_php_ini"; then
-            sed -i 's/^[[:space:]]*;*[[:space:]]*session\.upload_progress\.enabled[[:space:]]*=.*/session.upload_progress.enabled = 0/' "$apache_php_ini" || {
-                echo "ERROR: cannot edit $apache_php_ini -abort" >&2
-                exit 1
-            }
+            sed -i 's/^[[:space:]]*;*[[:space:]]*session\.upload_progress\.enabled[[:space:]]*=.*/session.upload_progress.enabled = 0/' "$apache_php_ini" || abort "cannot edit $apache_php_ini -abort"
         else
-            printf '\nsession.upload_progress.enabled = 0\n' >> "$apache_php_ini" || {
-                echo "ERROR: cannot edit $apache_php_ini -abort" >&2
-                exit 1
-            }
+            printf '\nsession.upload_progress.enabled = 0\n' >> "$apache_php_ini" || abort "cannot edit $apache_php_ini -abort"
         fi
     done
 
@@ -1904,9 +1896,6 @@ perform_remove() {
         info "uhmalert.service not installed"
     fi
 
-    # uhmwatch (mandatory component, but --uninstall uninstalls everything
-    # regardless -- defensive check in case it was manually uninstalled)
-    step "uhmwatch"
     # Web interface (optional component)
     step "Web interface"
     remove_web

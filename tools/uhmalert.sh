@@ -328,6 +328,12 @@ case "${1:-}" in
         log "uhmalert done"
         exit 0
         ;;
+    "") ;;
+    *)
+        log "ERROR: invalid option -abort"
+        echo "Usage: $(basename "$0") [--install|--uninstall|-h|--help]"
+        exit 1
+        ;;
 esac
 
 # prevent overlapping runs of the watch loop itself -- install/uninstall above

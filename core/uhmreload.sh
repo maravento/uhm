@@ -145,13 +145,20 @@ run_step() {
     fi
     local exit_code=0
     timeout "$step_timeout" bash -x "$script_path" >/dev/null 2>"$trace_file" || exit_code=$?
+    # 75: the step found its lock busy and did no work. Nothing failed, so no
+    # trace is kept, and the chain stops without running the next step.
+    if [[ "$exit_code" == "75" ]]; then
+        rm -f "$trace_file" 2>/dev/null || true
+        log "INFO: $script_name found the lock busy -skip"
+        exit 75
+    fi
     if [[ "$exit_code" != "0" ]]; then
         # Fixed name, overwritten on every failure (not one file per
         # timestamp) -- a persistent failure retries every cycle, and an
         # unbounded trace per attempt would fill /var/log over time.
         local trace_dest="/var/log/${script_name%.sh}-failure.trace"
         local trace_ok=1
-        if ! mv -f "$trace_file" "$trace_dest" 2>/dev/null; then
+        if ! mv -fT -- "$trace_file" "$trace_dest" 2>/dev/null; then
             log "WARNING: cannot write ${trace_dest##*/} -alert"
             rm -f "$trace_file"
             trace_ok=0

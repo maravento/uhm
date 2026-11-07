@@ -45,3 +45,25 @@ load_uhm_env() {
         esac
     done < "$conf_file"
 }
+
+# Recover an interrupted expiry publication while holding the UHM cycle lock.
+recover_uhm_expiry() {
+    local auth="$1" queue="$2" recovery="$1.expiry"
+    [[ -e "$recovery" || -L "$recovery" ]] || return 0
+    [[ -d "$recovery" && ! -L "$recovery" && -n "$queue" ]] || return 1
+
+    if [[ -f "$queue.expiry-next" && -f "$recovery/auth.before" ]]; then
+        mv -fT -- "$recovery/auth.before" "$auth" || return 1
+    fi
+    rm -f -- "$queue.expiry-next" "$queue.expiry-stage" \
+        "$recovery/auth.before" "$recovery/auth.next" &&
+        rmdir -- "$recovery"
+}
+
+uhm_expiry_recovery_message() {
+    if [[ -d "$1" ]]; then
+        printf '%s\n' 'uhm-auth.txt is a directory; move it away to resume'
+    else
+        printf '%s\n' 'cannot recover expired authorizations'
+    fi
+}

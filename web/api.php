@@ -88,6 +88,11 @@ switch ($group . ':' . $action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             fail('write requires POST', 405);
         }
+        // A page from another origin cannot send this header without a CORS
+        // grant, and this API grants none.
+        if (($_SERVER['HTTP_X_UHM_ACL_WRITE'] ?? '') !== '1') {
+            fail('write header required', 403);
+        }
         $body = file_get_contents('php://input', false, null, 0, MAX_BODY_BYTES + 1);
         if ($body === false) {
             fail('cannot read request body');

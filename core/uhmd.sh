@@ -122,6 +122,8 @@ reload_ok=0
 # flag, never reusing uhm-queue.txt or the acl_snapshot_* machinery.
 mac_lists_hash_prev=""
 mac_reload_pending=0
+# Set when uhmreload.sh returns 75 (busy, no work done): next cycle retries.
+reload_busy_pending=0
 # Safety-net reload: forces UHM_RELOAD even without an ACL diff,
 # on this cadence, so idle networks still get grace->block promotion and the
 # firewall self-heals without depending on an external cron entry (see
@@ -244,6 +246,8 @@ cycle_lock="/var/lock/uhmd-cycle.lock"
 exec 201>"$cycle_lock"
 
 temp_files=()
+# MAC|IP pairs already reported as outside the LAN; kept across cycles
+declare -A outside_seen=()
 cleanup_temp() {
     local exit_code=$?
     local temp_file
@@ -321,7 +325,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 # ------------------------------------------------------------------------------
@@ -1033,7 +1037,12 @@ check_malformed() {
         return 0
     fi
     if (( dropped_count > 0 )); then
-        mv -f "$tmp_file" "$check_file" && chmod 600 "$check_file"
+        if ! mv -fT -- "$tmp_file" "$check_file"; then
+            rm -f -- "$tmp_file"
+            log "WARNING: cannot normalize $(basename "$check_file") -alert"
+            return 1
+        fi
+        chmod 600 "$check_file"
     else
         rm -f "$tmp_file"
     fi
@@ -1078,7 +1087,7 @@ dedup_mac_lists() {
             local block_mac block_ip block_name field_count
             IFS=';' read -r _ block_mac block_ip block_name _ <<< "$env_line"
             block_mac="${block_mac,,}"
-            if echo "$all_macs" | grep -q "^${block_mac}$"; then
+            if echo "$all_macs" | grep -qxF -- "$block_mac"; then
                 log "INFO: dedup -> removed $block_mac from blockdhcp.txt"
                 continue
             fi
@@ -1108,7 +1117,12 @@ dedup_mac_lists() {
             log "INFO: blockdhcp update not applied -skip"
             rm -f "$tmp_block"
         else
-            mv "$tmp_block" "$ACL_BLOCK_FILE" && chmod 600 "$ACL_BLOCK_FILE"
+            if ! mv -fT -- "$tmp_block" "$ACL_BLOCK_FILE"; then
+                log "WARNING: cannot replace blockdhcp.txt -alert"
+                rm -f -- "$tmp_block"
+                return 1
+            fi
+            chmod 600 "$ACL_BLOCK_FILE"
         fi
     fi
 
@@ -1136,11 +1150,15 @@ sort_acl_files() {
             return 1
         fi
         if [[ ! -s "$tmp_file" ]]; then
-            log "INFO: sorted output is empty, update -skip"
-            log "INFO: $UHM_MACAUTH"
+            log "INFO: $(basename "$UHM_MACAUTH") sorted empty; no update -skip"
             return
         fi
-        mv "$tmp_file" "$UHM_MACAUTH" && chmod 600 "$UHM_MACAUTH"
+        if ! mv -fT -- "$tmp_file" "$UHM_MACAUTH"; then
+            log "WARNING: cannot replace uhm-auth.txt -alert"
+            rm -f -- "$tmp_file"
+            return 1
+        fi
+        chmod 600 "$UHM_MACAUTH"
     fi
 }
 
@@ -1193,28 +1211,20 @@ add_mac_to_acl() {
     return 0
 }
 
-expire_from_hotspot() {
-    local mac_addr="$1"
-    # Release the hotspot-range IP. On reconnect, uhmleases.sh detects the
-    # client via pydhcpd.leases and the client re-enters uhm-grace.txt with a
-    # fresh grace timer, same as any other unclassified MAC.
-    if ! queue_lease_removal "$mac_addr"; then
-        log "INFO: $mac_addr expire failed, will retry -skip"
-        return 1
-    fi
-    log "INFO: expired $mac_addr, released from uhm-auth.txt"
-    return 0
-}
-
 # STEP 5: CLEAN EXPIRED MACS
 # Removes entries whose authorization time is over
 # Log lines below do not carry this function's name -- they use short,
 # generic phrasing instead.
-clean_expired_macs() {
-    local now_epoch tmp_file
+clean_expired_macs() (
+    local now_epoch mac_addr recovery="$UHM_MACAUTH.expiry"
+    local tmp_file="$UHM_MACAUTH.expiry/auth.next" queue_tmp="$UHM_QUEUE.expiry-stage"
+    local expired_macs=()
     now_epoch=$(date +%s)
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
-    temp_files+=("${tmp_file}")
+    if ! { mkdir -m 700 -- "$recovery" &&
+           (umask 077; set -o noclobber; : > "$tmp_file"); }; then
+        log "WARNING: cannot stage uhm-auth.txt -alert"
+        return 1
+    fi
 
     local before_count=0
     before_count=$(grep -c '^#\{0,1\}a;' "$UHM_MACAUTH" 2>/dev/null); before_count=$(( ${before_count:-0} + 0 ))
@@ -1235,31 +1245,23 @@ clean_expired_macs() {
         # It repairs itself: a client whose voucher is still valid is promoted
         # again next cycle by process_sessions, with an end_time from UniFi.
         if [[ "$env_line" != "a;"* && "$env_line" != "#a;"* ]]; then
-            echo "$env_line" >> "$tmp_file"
+            printf '%s\n' "$env_line" >> "$tmp_file" || return 1
             continue
         fi
-        local end_time mac_addr
+        local end_time
         end_time=$(echo "$env_line" | awk -F';' '{print $5}')
         mac_addr=$(echo "$env_line" | awk -F';' '{print $2}')
-        if [[ -z "$end_time" ]] || ! [[ "$end_time" =~ $UH_UINT ]]; then
+        if [[ -z "$end_time" ]] || ! [[ "$end_time" =~ $UH_UINT ]] || ! uh_fits "$end_time"; then
             log "WARNING: malformed end_time in uhm-auth.txt"
-            log "WARNING: $mac_addr released, no expiry -alert"
-            if ! expire_from_hotspot "$mac_addr"; then
-                log "INFO: keeping $mac_addr, will retry -skip"
-                echo "$env_line" >> "$tmp_file"
-            else
-                (( moved_count++ )) || true
-            fi
+            log "WARNING: $mac_addr has no valid expiry -alert"
+            expired_macs+=("${mac_addr,,}")
+            (( moved_count++ )) || true
         elif (( now_epoch <= end_time )); then
-            echo "$env_line" >> "$tmp_file"
+            printf '%s\n' "$env_line" >> "$tmp_file" || return 1
         else
             log "INFO: Expired $mac_addr at $(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")"
-            if ! expire_from_hotspot "$mac_addr"; then
-                log "INFO: keeping $mac_addr, will retry -skip"
-                echo "$env_line" >> "$tmp_file"
-            else
-                (( moved_count++ )) || true
-            fi
+            expired_macs+=("${mac_addr,,}")
+            (( moved_count++ )) || true
         fi
     done < "$UHM_MACAUTH"
 
@@ -1267,11 +1269,47 @@ clean_expired_macs() {
     after_count=$(grep -c '^#\{0,1\}a;' "$tmp_file" 2>/dev/null); after_count=$(( ${after_count:-0} + 0 ))
     if (( before_count - after_count != moved_count )); then
         log "INFO: count mismatch ($before_count/$after_count/$moved_count) -skip"
-        rm -f "$tmp_file"
+        recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"
         return
     fi
-    mv "$tmp_file" "$UHM_MACAUTH" && chmod 600 "$UHM_MACAUTH"
-}
+    if ! chmod 600 "$tmp_file"; then
+        log "WARNING: cannot set uhm-auth.txt permissions -alert"
+        return 1
+    fi
+
+    if (( moved_count > 0 )); then
+        if ! { cp -p -- "$UHM_MACAUTH" "$recovery/auth.before" &&
+               (umask 077; set -o noclobber; : > "$queue_tmp") &&
+               cp -p -- "$UHM_QUEUE" "$queue_tmp"; }; then
+            log "WARNING: cannot prepare lease removals -alert"
+            return 1
+        fi
+        for mac_addr in "${expired_macs[@]}"; do
+            if ! grep -qxF -- "$mac_addr" "$queue_tmp" &&
+               ! printf '%s\n' "$mac_addr" >> "$queue_tmp"; then
+                log "WARNING: cannot stage lease removal for $mac_addr -alert"
+                return 1
+            fi
+        done
+        if ! mv -fT -- "$queue_tmp" "$UHM_QUEUE.expiry-next"; then
+            log "WARNING: cannot prepare lease removal publication -alert"
+            return 1
+        fi
+    fi
+
+    if ! mv -fT -- "$tmp_file" "$UHM_MACAUTH"; then
+        log "WARNING: cannot replace uhm-auth.txt -alert"
+        rm -f -- "$tmp_file"
+        return 1
+    fi
+    if (( moved_count > 0 )); then
+        if ! mv -fT -- "$UHM_QUEUE.expiry-next" "$UHM_QUEUE"; then
+            log "WARNING: cannot publish lease removals -alert"
+            return 1
+        fi
+    fi
+    recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"
+)
 
 # STEP 6: DETECT NEW CLIENTS
 # Reads pydhcpd.leases and queues what it has not seen
@@ -1300,7 +1338,8 @@ process_new_leases() {
     local pydhcpd_leases="$PYDHCPD_LEASES"
     [[ ! -f "$pydhcpd_leases" ]] && return
 
-    local added_count=0
+    local added_count=0 outside_key
+    local -A outside_now=()
     local current_lease="" lease_content=""
 
     while IFS= read -r env_line; do
@@ -1335,14 +1374,23 @@ process_new_leases() {
                 log "INFO: ip=$client_ip host=${client_name:0:20}"
                 (( added_count++ )) || true
             elif [[ -n "$mac_addr" && -n "$client_ip" ]] && ! ip_in_lan "$client_ip"; then
-                log "INFO: new lease outside LAN subnet"
-                log "INFO: ip=$client_ip mac=$mac_addr"
-                log "INFO: subnet is $SERV_SUBNET/$SERV_MASK -skip"
+                outside_key="$mac_addr|$client_ip"
+                if [[ -z "${outside_seen[$outside_key]:-}" && -z "${outside_now[$outside_key]:-}" ]]; then
+                    log "INFO: lease outside LAN subnet"
+                    log "INFO: ip=$client_ip mac=$mac_addr"
+                    log "INFO: subnet is $SERV_SUBNET/$SERV_MASK -skip"
+                fi
+                outside_now[$outside_key]=1
             fi
             current_lease=""
             lease_content=""
         fi
     done < "$pydhcpd_leases"
+
+    outside_seen=()
+    for outside_key in "${!outside_now[@]}"; do
+        outside_seen[$outside_key]=1
+    done
 
     if (( added_count > 0 )); then
         chmod 600 "$UHM_GRACE" 2>/dev/null || true
@@ -1391,7 +1439,7 @@ process_sessions() {
             continue
         fi
         [[ -z "$end_time" || "$end_time" == "null" ]] && continue
-        if ! [[ "$end_time" =~ $UH_UINT ]]; then
+        if ! [[ "$end_time" =~ $UH_UINT ]] || ! uh_fits "$end_time"; then
             log "INFO: malformed line $mac_addr -skip"
             continue
         fi
@@ -1562,7 +1610,10 @@ revoke_unauthorized() {
         fi
         log "INFO: Revoking $mac_addr"
         log "INFO: authorized=false in UniFi; releasing from uhm-auth"
-        queue_lease_removal "$mac_addr"
+        if ! queue_lease_removal "$mac_addr"; then
+            log "INFO: keeping $mac_addr, will retry -skip"
+            continue
+        fi
         if sed -i "/^a;${mac_addr};/Id" "$UHM_MACAUTH" 2>/dev/null; then
             (( revoked_count++ )) || true
         else
@@ -1601,6 +1652,14 @@ check_and_reload_if_changed() {
     # mac-*.txt change detected last cycle by check_mac_lists_changed (an
     # independent watcher, see above) folds into this same single reload
     # decision -- never a separate uhmreload.sh invocation of its own.
+    if (( ${acl_reload_pending:-0} )); then
+        acl_changed=1
+    fi
+    local reload_busy_retry=0
+    if (( reload_busy_pending == 1 )); then
+        acl_changed=1
+        reload_busy_retry=1
+    fi
     local mac_reload_triggered=0
     if (( mac_reload_pending == 1 )); then
         acl_changed=1
@@ -1620,12 +1679,15 @@ check_and_reload_if_changed() {
         [[ "$cur_queue" != "$acl_snapshot_queue" ]] && log "INFO: lease removal queue changed"
         [[ "$cur_grace" != "$acl_snapshot_grace" ]] && log "INFO: uhm-grace.txt changed"
         (( mac_reload_triggered )) && log "INFO: mac-*.txt changed, reloading now"
+        (( reload_busy_retry )) && log "INFO: retrying busy reload"
     else
         log "INFO: ${RELOAD_SAFETY_INTERVAL_SECONDS}s since last reload"
         log "INFO: forcing safety-net reload"
     fi
 
     mac_reload_pending=0
+    reload_busy_pending=0
+    acl_reload_pending=0
 
     reload_ok=0
     if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
@@ -1639,6 +1701,12 @@ check_and_reload_if_changed() {
             last_reload_epoch=$now_epoch
         else
             exit_code=$?
+            if (( exit_code == 75 )); then
+                reload_busy_pending=1
+                log "INFO: uhmreload busy, retrying next cycle -skip"
+                flock -n 201 || log "INFO: cycle lock not reacquired after reload -skip"
+                return 0
+            fi
             # Update the epoch on failure too, not just success: a persistent
             # failure (broken uhmleases.sh/uhmiptables.sh, timeout) would otherwise
             # keep since_last stuck below RELOAD_SAFETY_INTERVAL_SECONDS forever
@@ -1727,6 +1795,12 @@ run_cycle() {
         return
     fi
 
+    if ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
+        log "WARNING: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -alert"
+        flock -u 201
+        return 1
+    fi
+
     sessions_authorized=0
     revoked_total=0
     newly_authorized_macs=()
@@ -1741,7 +1815,12 @@ run_cycle() {
 
     dedup_mac_lists
     sort_acl_files
-    clean_expired_macs
+    if ! clean_expired_macs && ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
+        log "WARNING: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -alert"
+        acl_reload_pending=1
+        flock -u 201
+        return 1
+    fi
     process_new_leases
 
     process_sessions
@@ -1904,8 +1983,13 @@ main() {
     # Force one reload here, on every daemon start, regardless of ACL state.
     if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
         log "INFO: startup, invoking uhmreload"
-        if "$UHM_RELOAD" >/dev/null 2>>"$log_file"; then
+        startup_reload_rc=0
+        "$UHM_RELOAD" >/dev/null 2>>"$log_file" || startup_reload_rc=$?
+        if (( startup_reload_rc == 0 )); then
             last_reload_epoch=$(date +%s)
+        elif (( startup_reload_rc == 75 )); then
+            reload_busy_pending=1
+            log "INFO: uhmreload busy, retrying next cycle -skip"
         else
             log "WARNING: startup reload failed"
             log "WARNING: firewall may be incomplete -alert"

@@ -285,9 +285,21 @@ window.uhRL=function(){
   if(loading)return;uhCG(true);loading=true;cP();ALL=[];CUR=[];fOff=0;nrc=0;
   document.getElementById('uhTB').innerHTML='<tr><td colspan="3" style="text-align:center;padding:40px;color:#90a4ae">Loading...</td></tr>';
   var ln=document.getElementById('uhLn').value;
+  function showLoadError(message){
+    loading=false;
+    document.getElementById('uhEM').style.display='none';
+    document.getElementById('uhTB').innerHTML='<tr><td colspan="3" class="lE">'+esc(message)+'</td></tr>';
+    document.getElementById('uhLL').textContent='ERROR';
+  }
   fj(API+'?g=log&a=tail&pos=0&lines='+ln).then(function(d){
-    if(d.error){loading=false;return}ALL=bi(d.rows||[]).reverse();fOff=d.pos||0;uhAF();ucs();loading=false;if(live)sP();
-  }).catch(function(e){if(e&&e.name==='AbortError')return;loading=false});
+    if(d.error){showLoadError(d.error);return}
+    ALL=bi(d.rows||[]).reverse();fOff=d.pos||0;uhAF();ucs();loading=false;
+    document.getElementById('uhLL').textContent=live?'LIVE':'PAUSED';
+    if(live)sP();
+  }).catch(function(e){
+    if(e&&e.name==='AbortError'){loading=false;return}
+    showLoadError('Could not load the log.');
+  });
 };
 
 function pRel(){if(pTo){clearTimeout(pTo);pTo=null}pCtrl=null}
@@ -299,12 +311,16 @@ function poll(){
   fetch(API+'?g=log&a=tail&pos='+fOff+'&lines=200',{signal:c.signal}).then(function(r){return r.json()}).then(function(d){
     if(g!==pGen)return;
     pRel();
+    if(d.error)return;
+    var indicator=document.getElementById('uhLL'),recovering=indicator.textContent==='ERROR';
+    indicator.textContent='LIVE';
+    if(recovering&&!d.rotated)uhAF(0);
     if(d.rotated){ALL=[];nrc=0;fOff=d.pos;uhAF(0);ucs()}
     if(!d.rows||!d.rows.length)return;
     var nr=bi(d.rows.reverse());fOff=d.pos;
     if(!nr.length)return;
     ALL=nr.concat(ALL);if(ALL.length>MR)ALL=ALL.slice(0,MR);nrc+=nr.length;
-    if(sp>50){document.getElementById('uhNC').textContent=nrc;document.getElementById('uhNB').style.display='block'}
+    if(sp>50&&!recovering){document.getElementById('uhNC').textContent=nrc;document.getElementById('uhNB').style.display='block'}
     else{uhAF(nr.length);ucs()}
   }).catch(function(){if(pCtrl===c)pRel()});
 }

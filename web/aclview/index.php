@@ -239,7 +239,7 @@ function saveFile(){
   var savedName=current,savedContent=ta.value;
   fetch(API+'?g=acl&a=write&name='+encodeURIComponent(savedName),{
     method:'POST',
-    headers:{'Content-Type':'text/plain'},
+    headers:{'Content-Type':'text/plain','X-UHM-ACL-Write':'1'},
     body:savedContent
   }).then(function(r){return r.json()}).then(function(d){
     button.disabled=false;

@@ -90,7 +90,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='WAN_IFACE'
 
 # LOAD
@@ -99,6 +102,23 @@ load_uhm_env "$uhm_env" "$env_keys" line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in INTERFACESv4; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "WARNING: $key_error -alert"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
 key_errors=()
 for env_key in WAN_IFACE; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
@@ -117,10 +137,6 @@ fi
 unset key_errors key_error env_key
 
 # KEY GUARD
-if [ -z "${INTERFACESv4:-}" ]; then
-    log "ERROR: INTERFACESv4 not set in pydhcp.env -abort"
-    exit 1
-fi
 if [ "$WAN_IFACE" = "$INTERFACESv4" ]; then
     log "ERROR: WAN and LAN must differ -abort"
     exit 1

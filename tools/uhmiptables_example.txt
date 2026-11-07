@@ -93,7 +93,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 # prevent overlapping runs
@@ -162,7 +162,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS UHM_PATH ACL_PATH WAN_IFACE ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_GRACE UHM_MACAUTH WPAD_PORT'
 
 # LOAD
@@ -241,10 +244,6 @@ fi
 unset key_errors key_error env_key
 
 # KEY GUARD
-if [ -z "${INTERFACESv4:-}" ]; then
-    log "ERROR: INTERFACESv4 not set in pydhcp.env -abort"
-    exit 1
-fi
 if [ "$WAN_IFACE" = "$INTERFACESv4" ]; then
     log "ERROR: WAN and LAN must differ -abort"
     exit 1
