@@ -1854,8 +1854,7 @@ sudo /etc/uhm/core/uhmwatch.sh --uninstall
 ##### Rejected credentials
 
 ```text
-2026-07-15 17:21:03 WARNING: credentials rejected (HTTP 403)
-2026-07-15 17:21:03 WARNING: check uhm.env, UOS is responding -alert
+2026-07-15 17:21:03 WARNING: UOS login failed, HTTP 403: check uhm.env -alert
 ```
 
 ##### Controller lockout (HTTP 429)

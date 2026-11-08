@@ -585,8 +585,7 @@ check_uosserver() {
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -alert"
     else
-        log "WARNING: credentials rejected (HTTP $http_code)"
-        log "WARNING: check uhm.env, UOS is responding -alert"
+        log "WARNING: UOS login failed, HTTP $http_code: check uhm.env -alert"
     fi
 }
 
@@ -681,8 +680,7 @@ check_unifi_classic() {
     elif [[ "$http_code" == "429" ]]; then
         log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -alert"
     else
-        log "WARNING: credentials rejected (HTTP $http_code)"
-        log "WARNING: check uhm.env, unifi.service is responding -alert"
+        log "WARNING: UniFi login failed, HTTP $http_code: check uhm.env -alert"
     fi
 }
 

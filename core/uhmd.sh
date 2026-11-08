@@ -540,7 +540,7 @@ ensure_executable() {
 # Refuses to run if the deployed files are missing or wrong
 verify_installation() {
     if [[ ! -f "${UHM_RELOAD:-}" ]]; then
-        log "ERROR: UHM_RELOAD not found -abort"
+        log "ERROR: UHM_RELOAD file missing or invalid -abort"
         exit 1
     fi
     # pydhcpd often boots alongside this host and may not be up yet -- give it
@@ -1252,8 +1252,7 @@ clean_expired_macs() (
         end_time=$(echo "$env_line" | awk -F';' '{print $5}')
         mac_addr=$(echo "$env_line" | awk -F';' '{print $2}')
         if [[ -z "$end_time" ]] || ! [[ "$end_time" =~ $UH_UINT ]] || ! uh_fits "$end_time"; then
-            log "WARNING: malformed end_time in uhm-auth.txt"
-            log "WARNING: $mac_addr has no valid expiry -alert"
+            log "WARNING: $mac_addr invalid ACL expiry -alert"
             expired_macs+=("${mac_addr,,}")
             (( moved_count++ )) || true
         elif (( now_epoch <= end_time )); then
@@ -1720,18 +1719,8 @@ check_and_reload_if_changed() {
         fi
         flock -n 201 || log "INFO: cycle lock not reacquired after reload -skip"
     else
-        # Same reasoning as the failure branch above: update the epoch here
-        # too, so a misconfigured UHM_RELOAD (missing or not
-        # executable) backs off to the safety-net cadence instead of
-        # re-logging this WARNING -- and re-alerting via uhmalert.sh -- on
-        # every single cycle.
-        last_reload_epoch=$now_epoch
-        if (( acl_changed == 1 )); then
-            log "WARNING: ACLs changed but UHM_RELOAD not found"
-        else
-            log "WARNING: safety-net reload due but UHM_RELOAD not found"
-        fi
-        log "WARNING: backing off, will not retry -alert"
+        log "ERROR: UHM_RELOAD file missing or invalid -abort"
+        exit 1
     fi
     return 0
 }
@@ -1752,14 +1741,9 @@ kick_newly_authorized() {
     local mac_addr kick_url http_code on_sta exit_code
     exit_code=$(echo "$sta_data" | jq -r '.meta.rc // empty' 2>/dev/null || true)
     for mac_addr in "${newly_authorized_macs[@]}"; do
-        # Defense-in-depth: process_sessions already excludes managed MACs via
-        # is_managed_mac(), so this should never trigger. Logged loudly (not a
-        # silent continue), unlike process_sessions' own routine/high-volume
-        # skip above -- this one firing at all means something upstream let a
-        # managed MAC slip through, which is itself worth surfacing.
+        grep -qi "^a;${mac_addr};" "$UHM_MACAUTH" || continue
         if is_managed_mac "$mac_addr"; then
-            log "WARNING: managed device, not kicked, upstream filter failed"
-            log "WARNING: $mac_addr reached kick loop -alert"
+            log "WARNING: No kick: $mac_addr in mac-*.txt -alert"
             continue
         fi
         if [[ "$exit_code" == "ok" ]]; then
@@ -1991,13 +1975,12 @@ main() {
             reload_busy_pending=1
             log "INFO: uhmreload busy, retrying next cycle -skip"
         else
-            log "WARNING: startup reload failed"
-            log "WARNING: firewall may be incomplete -alert"
+            log "WARNING: Boot reload failed (exit $startup_reload_rc), check uhm.log -alert"
             last_reload_epoch=$(date +%s)
         fi
     else
-        log "WARNING: UHM_RELOAD not found"
-        log "WARNING: firewall not rebuilt at startup -alert"
+        log "ERROR: UHM_RELOAD file missing or invalid -abort"
+        exit 1
     fi
 
     while true; do

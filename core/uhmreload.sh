@@ -275,7 +275,7 @@ run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 755
 # the reload chain; uhmiptables.sh only enforces at the firewall level, and ACL
 # classification keeps working correctly without it.
 if [[ ! -f "$UHM_IPTABLES" ]]; then
-    log "WARNING: uhmiptables.sh not found -alert"
+    log "WARNING: UHM_IPTABLES file missing or invalid -alert"
 else
     run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
 fi
