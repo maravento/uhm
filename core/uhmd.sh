@@ -1927,7 +1927,7 @@ check_interfaces() {
 
 # Logs in once and then repeats the cycle every POLL_INTERVAL
 main() {
-    acl_prepare "$ACL_PATH" 755 644
+    acl_prepare "$ACL_PATH" 700 600
     acl_prepare "$(dirname "$ACL_BLOCK_FILE")" 700 600 "$ACL_BLOCK_FILE"
     acl_prepare "$(dirname "$UHM_MACAUTH")" 700 600 \
         "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"

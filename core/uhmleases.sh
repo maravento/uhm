@@ -300,7 +300,6 @@ initialize_empty_files() {
     shopt -s nullglob
     local mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
-    acl_prepare "$ACL_PATH" 755 644
     acl_prepare "$ACL_MAC_PATH" 700 600 "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
         "${mac_lists[@]+"${mac_lists[@]}"}"
     acl_prepare "$ACL_DHCP_PATH" 700 600 "$ACL_BLOCK_FILE"

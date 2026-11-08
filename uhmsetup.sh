@@ -80,7 +80,7 @@ core_dir="${hotspot_dir}/core"
 tools_dir="${hotspot_dir}/tools"
 acl_dir="${hotspot_dir}/acl"
 acl_base_dir="/etc/acl"
-acl_mac_dir="${acl_base_dir}/mac"
+acl_mac_dir="$acl_base_dir"
 uhm_env="${hotspot_dir}/uhm.env"
 pydhcp_env="/etc/pydhcp/pydhcp.env"
 uhmbk_script="${tools_dir}/uhmbk.sh"
@@ -1177,10 +1177,9 @@ run_setup_wizard() {
     echo "automatically (corporate laptops, APs, printers, switches, etc.)"
     echo "They bypass entirely at DHCP level (uhmleases.sh) -- daemon"
     echo "itself never authorizes them in UniFi"
-    echo "Files are stored in /etc/acl/mac/ and managed manually"
-    acl_prepare "$acl_base_dir" 755 644
+    echo "Files are stored in /etc/acl/ and managed manually"
     acl_prepare "$acl_mac_dir" 700 600
-    info "Add your mac-*.txt files to /etc/acl/mac/"
+    info "Add your mac-*.txt files to /etc/acl/"
 
     step "Writing $uhm_env"
     (
