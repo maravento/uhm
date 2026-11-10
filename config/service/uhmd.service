@@ -1,5 +1,5 @@
 [Unit]
-Description=UniFi Hotspot Manager Daemon
+Description=UniFi Host Manager (UHM) Daemon
 After=network.target pydhcpd.service
 Wants=pydhcpd.service
 StartLimitIntervalSec=300

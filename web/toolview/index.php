@@ -5,7 +5,7 @@
  *
  * Local ACL reports and UniFi controller reports, both served by
  * uhmtool.sh through ../api.php. Read-only: the actions that delete
- * vouchers or forget clients stay in uhmunifi.sh, on the terminal.
+ * vouchers or forget clients stay in uhmhotspot.sh, on the terminal.
  */
 
 header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');

@@ -94,11 +94,15 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/n
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='WAN_IFACE'
+env_keys='WAN_IFACE UNIFI_HOTSPOT_ENABLED'
 
 # LOAD
 load_uhm_env "$pydhcp_env" 'INTERFACESv4' line || true
 load_uhm_env "$uhm_env" "$env_keys" line || true
+if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
+    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true or false in uhm.env -abort"
+    exit 1
+fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all

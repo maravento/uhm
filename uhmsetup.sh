@@ -110,7 +110,7 @@ repo_service="${repo_config}/service/uhmd.service"
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
-# uhmunifi or uhmiptables.
+# uhmhotspot or uhmiptables.
 apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect)
 
 # Discovered runtime values (filled during install)
@@ -936,12 +936,12 @@ ask_ip() {
     done
 }
 
-# ip_in_network IP NETWORK NETMASK -- returns 0 if IP belongs to the network
-ip_in_network() {
+# Return success for a usable host address in the configured subnet.
+ip_is_usable_host() {
     python3 -c "
 import ipaddress, sys
 net = ipaddress.IPv4Network(sys.argv[2] + '/' + sys.argv[3], strict=False)
-sys.exit(0 if ipaddress.IPv4Address(sys.argv[1]) in net else 1)
+sys.exit(0 if net.network_address < ipaddress.IPv4Address(sys.argv[1]) < net.broadcast_address else 1)
 " "$1" "$2" "$3"
 }
 
@@ -1007,10 +1007,8 @@ discover_unifi_controller() {
 
 # Queries the controller's configured SSIDs (rest/wlanconf) with a fresh
 # login, so run_setup_wizard can offer a select menu instead of free-text
-# entry for the guest SSID -- avoids a typo in a value that must match
-# UniFi exactly. Echoes one SSID name per line on success; nothing on any
-# failure (login, HTTP error, empty list), so the caller falls back to
-# manual entry. Site is always "default" -- see UNIFI_SITE note below.
+# entry. Returns the SSID names and their guest flags as JSON.
+# Site is always "default" -- see UNIFI_SITE note below.
 fetch_unifi_ssids() {
     local controller_url="$1" unifi_type="$2" unifi_user="$3" unifi_pass="$4"
     local login_path base_path login_payload cookie_jar
@@ -1034,7 +1032,7 @@ fetch_unifi_ssids() {
         --connect-timeout 5 <<< "$login_payload"
 
     curl -sk -b "$cookie_jar" "${controller_url}${base_path}/rest/wlanconf" --connect-timeout 5 \
-        | jq -r '.data[]?.name // empty' 2>/dev/null
+        | jq -c '[.data[]? | select(.name | type == "string" and length > 0) | {name, is_guest}]' 2>/dev/null
 
     rm -f "$cookie_jar"
 }
@@ -1047,42 +1045,6 @@ run_setup_wizard() {
     local found_url found_type
 
     step "pydhcp network configuration"
-
-    step "Hotspot IP range"
-    # Two full addresses, the same shape pydhcp already uses for its own pool
-    # (SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK) -- no netmask is assumed.
-    echo "Range of fixed addresses handed to voucher-authorized guests"
-    echo "Network: ${SERV_SUBNET}/${SERV_MASK}"
-    echo "pydhcp block pool: ${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}"
-    local net_base
-    net_base=$(echo "$SERV_SUBNET" | cut -d'.' -f1-3)
-    while true; do
-        ask_ip "Hotspot range start" "${net_base}.160" cfg_ini_range
-        ask_ip "Hotspot range end" "${net_base}.199" cfg_end_range
-        if ! ip_le "$cfg_ini_range" "$cfg_end_range"; then
-            info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
-            info "Hotspot range is inverted -retry"
-            continue
-        fi
-        if ! ip_in_network "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
-           || ! ip_in_network "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
-            info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
-            info "Hotspot range is outside $(basename "$pydhcp_env") subnet -retry"
-            continue
-        fi
-        if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
-            info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
-            info "Invalid Hotspot range: SERVER_IP is inside -retry"
-            continue
-        fi
-        if ranges_overlap "$cfg_ini_range" "$cfg_end_range" \
-                           "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK"; then
-            info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
-            info "Invalid Hotspot range: overlaps pydhcp pool -retry"
-            continue
-        fi
-        break
-    done
 
     step "UniFi credentials"
     ask "UniFi admin username" "admin" cfg_unifi_user
@@ -1113,30 +1075,103 @@ run_setup_wizard() {
         { err "no UniFi controller detected"; abort "UniFi controller: check credentials/service -abort"; }
     fi
 
-    step "Hotspot SSID"
-    # uhm only supports a single guest SSID tied to the UniFi captive
-    # portal. Exactly one found -> use it directly, no question. None found
-    # -> warn and continue; UHM_ESSID must be set before operation. More than one
-    # -> the administrator must pick which one is the captive portal SSID.
-    local ssid_list=()
-    mapfile -t ssid_list < <(fetch_unifi_ssids "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass")
+    step "SSID selection"
+    local ssid_list=() ssid_config
+    ssid_config=$(fetch_unifi_ssids "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass")
+    mapfile -t ssid_list < <(jq -r '.[] | .name' <<< "$ssid_config")
     if (( ${#ssid_list[@]} == 1 )); then
         cfg_essid="${ssid_list[0]}"
         info "SSID detected: $cfg_essid"
     elif (( ${#ssid_list[@]} > 1 )); then
-        echo "Multiple SSIDs found -- select one used by captive portal:"
+        echo "Multiple SSIDs found -- select the SSID for the managed Network:"
         select cfg_essid in "${ssid_list[@]}"; do
             [[ -n "$cfg_essid" ]] && break
             echo "Invalid selection -- enter number of one of SSIDs listed above"
         done
         if [[ -z "$cfg_essid" ]]; then
-            warn "no SSID selected from list -alert"
-            warn "set UHM_ESSID in $(basename "$uhm_env") before starting uhm -alert"
+            warn "no SSID selected; using Manual mode -alert"
         fi
     else
         cfg_essid=""
-        warn "no SSID detected on UniFi controller -alert"
-        warn "set UHM_ESSID in $(basename "$uhm_env") before starting uhm -alert"
+        warn "no SSID detected on UniFi controller; using Manual mode -alert"
+    fi
+
+    local cfg_hotspot_enabled=false
+    if [[ -n "$cfg_essid" ]]; then
+        cfg_hotspot_enabled=""
+        local hotspot_answer hotspot_attempt
+        local portal_host portal_redirect
+        portal_host=${found_url#https://}
+        portal_host=${portal_host%%/*}
+        portal_host=${portal_host%:*}
+        for (( hotspot_attempt=1; hotspot_attempt<=3; hotspot_attempt++ )); do
+            read -rp "Does the selected SSID use Hotspot? [Y/n]: " hotspot_answer \
+                || abort "no Hotspot selection received -abort"
+            case "$hotspot_answer" in
+                ""|[Yy]|[Yy][Ee][Ss])
+                    if ! jq -e --arg name "$cfg_essid" '
+                        [.[] | select(.name == $name)] |
+                        length == 1 and .[0].is_guest == true
+                    ' <<< "$ssid_config" >/dev/null; then
+                        warn "Hotspot not detected on the selected SSID -alert"
+                        continue
+                    fi
+                    # The firewall redirects clients to HTTP on port 8880.
+                    if ! portal_redirect=$(curl -sS --noproxy '*' --connect-timeout 5 --max-time 10 \
+                        --output /dev/null --write-out '%{redirect_url}' \
+                        "http://$portal_host:8880/guest/s/default/" 2>/dev/null) \
+                        || [[ "$portal_redirect" == https://* ]]; then
+                        warn "Hotspot HTTP endpoint on port 8880 unavailable or redirects to HTTPS -alert"
+                        continue
+                    fi
+                    cfg_hotspot_enabled=true
+                    break
+                    ;;
+                [Nn]|[Nn][Oo]) cfg_hotspot_enabled=false; break ;;
+                *) echo "Enter yes or no." ;;
+            esac
+        done
+        [[ -n "$cfg_hotspot_enabled" ]] || abort "Hotspot mode not confirmed; check the SSID and rerun setup -abort"
+    fi
+
+    cfg_ini_range=""
+    cfg_end_range=""
+    if [[ "$cfg_hotspot_enabled" == true ]]; then
+        step "Hotspot IP range"
+        # Two full addresses, the same shape pydhcp already uses for its own pool
+        # (SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK) -- no netmask is assumed.
+        echo "Range of fixed addresses handed to voucher-authorized guests"
+        echo "Network: ${SERV_SUBNET}/${SERV_MASK}"
+        echo "pydhcp block pool: ${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}"
+        local net_base
+        net_base=$(echo "$SERV_SUBNET" | cut -d'.' -f1-3)
+        while true; do
+            ask_ip "Hotspot range start" "${net_base}.160" cfg_ini_range
+            ask_ip "Hotspot range end" "${net_base}.199" cfg_end_range
+            if ! ip_le "$cfg_ini_range" "$cfg_end_range"; then
+                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
+                info "Hotspot range is inverted -retry"
+                continue
+            fi
+            if ! ip_is_usable_host "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
+               || ! ip_is_usable_host "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
+                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
+                info "Hotspot range endpoints must be usable host addresses in the pydhcp subnet -retry"
+                continue
+            fi
+            if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
+                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
+                info "Invalid Hotspot range: SERVER_IP is inside -retry"
+                continue
+            fi
+            if ranges_overlap "$cfg_ini_range" "$cfg_end_range" \
+                               "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK"; then
+                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
+                info "Invalid Hotspot range: overlaps pydhcp pool -retry"
+                continue
+            fi
+            break
+        done
     fi
 
     step "Dependency check"
@@ -1170,13 +1205,16 @@ run_setup_wizard() {
 
     step "Timers"
     ask_number "Daemon poll interval in seconds (POLL_INTERVAL)" "20" cfg_poll_interval
-    ask_number "Grace period before blocking unknown MACs in seconds (BLOCKDHCP_GRACE_SECONDS)" "86400" cfg_grace_seconds
+    cfg_grace_seconds=""
+    if [[ "$cfg_hotspot_enabled" == true ]]; then
+        ask_number "Grace period before blocking unknown MACs in seconds (BLOCKDHCP_GRACE_SECONDS)" "86400" cfg_grace_seconds
+    fi
 
     step "Managed MAC lists (optional)"
-    echo "mac-*.txt files allow specific devices to bypass captive portal"
-    echo "automatically (corporate laptops, APs, printers, switches, etc.)"
-    echo "They bypass entirely at DHCP level (uhmleases.sh) -- daemon"
-    echo "itself never authorizes them in UniFi"
+    echo "mac-*.txt files assign fixed IPv4 addresses to approved devices"
+    if [[ "$cfg_hotspot_enabled" == true ]]; then
+        echo "Approved devices bypass the captive portal"
+    fi
     echo "Files are stored in /etc/acl/ and managed manually"
     acl_prepare "$acl_mac_dir" 700 600
     info "Add your mac-*.txt files to /etc/acl/"
@@ -1214,6 +1252,7 @@ WAN_IFACE=${wan_iface}
 # UniFi
 # Guest SSID
 UHM_ESSID=${essid_answer}
+UNIFI_HOTSPOT_ENABLED=${cfg_hotspot_enabled}
 # Unifi Access
 UNIFI_CONTROLLER_URL=${url_answer}
 UNIFI_USERNAME=${user_answer}
@@ -1333,13 +1372,6 @@ deploy_scripts() {
 }
 
 deploy_uhmiptables() {
-    # The reference ruleset is not customized data: it is deployed on every
-    # run, before the placeholder guard below, so --update refreshes it and a
-    # host installed before it existed also gets it.
-    install -m 644 -o root -g root "${repo_tools}/uhmiptables_example.txt" \
-        "${tools_dir}/uhmiptables_example.txt"
-    info "Reference: ${tools_dir}/uhmiptables_example.txt"
-
     if [[ -f "$uhm_iptables_dest" ]]; then
         info "uhmiptables.sh already exists -skip"
         return 0
@@ -1718,7 +1750,7 @@ EOF
     echo "Next steps:"
     echo "1. Optional: ${uhm_iptables_dest} is a placeholder"
     echo "   (routing + NAT). For full enforcement, copy"
-    echo "   ${tools_dir}/uhmiptables_example.txt over it,"
+    echo "   ${repo_tools}/uhmiptables_example.txt over it,"
     echo "   then read it through and adapt it. See its header"
     echo "2. Check service: systemctl status uhmd"
     echo "3. Check logs: tail -f ${uhm_log_file}"
@@ -1747,14 +1779,20 @@ do_update() {
     check_apt_deps
     detect_dhcp_backend
     [ -d "$hotspot_dir" ] && [ -f "$core_dir/uhmd.sh" ] || abort "uhm is not installed -abort"
+    local UNIFI_HOTSPOT_ENABLED=""
+    load_uhm_env "$uhm_env" 'UNIFI_HOTSPOT_ENABLED' line || true
+    case "$UNIFI_HOTSPOT_ENABLED" in
+        true|false) ;;
+        *) abort "set UNIFI_HOTSPOT_ENABLED=true or false in $uhm_env before updating -abort" ;;
+    esac
     update_reset /etc/cron.d/uhm
     local file mode
     for file in uhmd.sh uhmreload.sh uhmleases.sh uhmwatch.sh; do
         update_file "$repo_core/$file" "$core_dir/$file" 755 root:root
     done
-    for file in uhmenv.sh uhmtool.sh uhmalert.sh uhmunifi.sh uhmbk.sh uhmiptables_example.txt; do
+    for file in uhmenv.sh uhmtool.sh uhmalert.sh uhmhotspot.sh uhmbk.sh; do
         mode=755
-        case "$file" in uhmenv.sh|uhmiptables_example.txt) mode=644 ;; esac
+        case "$file" in uhmenv.sh) mode=644 ;; esac
         update_file "$repo_tools/$file" "$tools_dir/$file" "$mode" root:root
     done
     if [ ! -e "$uhm_iptables_dest" ]; then
@@ -1824,7 +1862,7 @@ do_uninstall() {
     echo "including uhm.env, ACL lists and YOUR uhmiptables.sh"
     echo "A backup is taken with ${uhmbk_script} before anything is removed"
     echo "- ${uhm_log_file}, rotated logs"
-    echo "- uhmunifi.log and reload failure traces"
+    echo "- uhmhotspot.log and reload failure traces"
     echo "/etc/bak is NOT touched"
     echo "Package dependencies"
     echo "(curl, jq, iptables, ipset, etc.) are NOT removed"
@@ -1929,7 +1967,7 @@ perform_remove() {
     # Logs
     step "Logs"
     local extra_logs=() check_log
-    for check_log in /var/log/uhmunifi.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
+    for check_log in /var/log/uhmhotspot.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
         [[ -f "$check_log" ]] && extra_logs+=("$check_log")
     done
     if compgen -G "${uhm_log_file}*" >/dev/null || [[ ${#extra_logs[@]} -gt 0 ]]; then

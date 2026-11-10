@@ -3,7 +3,7 @@
 #
 ################################################################################
 #
-# uhmd -- UniFi Hotspot Manager Daemon
+# uhmd -- UniFi Host Manager (UHM) Daemon
 # FILE: core/uhmd.sh
 #
 # USAGE:
@@ -365,7 +365,7 @@ unset env_owner env_perms
 # Canonical parser, identical in every script of the project: a malformed
 # line aborts.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
-env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_MAC_PATH ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
+env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_MAC_PATH ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
 
 # LOAD
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
@@ -373,6 +373,10 @@ env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SI
 # win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
+if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
+    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true or false in uhm.env -abort"
+    exit 1
+fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -425,15 +429,20 @@ for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
         key_errors+=("$env_key not set")
     fi
 done
-for env_key in UHM_INI_RANGE UHM_END_RANGE; do
-    if ! grep -q "^${env_key}=" "$uhm_env"; then
-        key_errors+=("$env_key missing line")
-    elif [[ -z "${!env_key:-}" ]]; then
-        key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
-        key_errors+=("$env_key invalid IPv4")
+if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+    if [[ -z "${UHM_ESSID:-}" ]]; then
+        key_errors+=("UHM_ESSID is required in Hotspot mode")
     fi
-done
+    for env_key in UHM_INI_RANGE UHM_END_RANGE; do
+        if ! grep -q "^${env_key}=" "$uhm_env"; then
+            key_errors+=("$env_key missing line")
+        elif [[ -z "${!env_key:-}" ]]; then
+            key_errors+=("$env_key not set")
+        elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+            key_errors+=("$env_key invalid IPv4")
+        fi
+    done
+fi
 for env_key in POLL_INTERVAL UHM_LEASES_TIMEOUT_SECONDS \
                UHM_IPTABLES_TIMEOUT_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS UHM_API_TIMEOUT_SECONDS; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
@@ -486,19 +495,21 @@ subnet_int=$(ip_to_int "$SERV_SUBNET")
 mask_int=$(ip_to_int "$SERV_MASK")
 # Integer forms of the hotspot range, read by the guards below and by
 # assign_ip_and_hostname()
-hotspot_ini_int=$(ip_to_int "$UHM_INI_RANGE")
-hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
+if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+    hotspot_ini_int=$(ip_to_int "$UHM_INI_RANGE")
+    hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
 
-# KEY GUARD
-# Each key above is valid on its own. These three relations are not.
-if (( hotspot_ini_int > hotspot_end_int )); then
-    log "ERROR: hotspot range reversed in $(basename "$uhm_env") -abort"
-    exit 1
-fi
-if ! ip_in_lan "$UHM_INI_RANGE" || ! ip_in_lan "$UHM_END_RANGE"; then
-    log "ERROR: hotspot range $UHM_INI_RANGE-$UHM_END_RANGE"
-    log "ERROR: hotspot range out of $(basename "$pydhcp_env") subnet -abort"
-    exit 1
+    # KEY GUARD
+    if (( hotspot_ini_int > hotspot_end_int )); then
+        log "ERROR: hotspot range reversed in $(basename "$uhm_env") -abort"
+        exit 1
+    fi
+    hotspot_network_int=$(( subnet_int & mask_int ))
+    hotspot_broadcast_int=$(( hotspot_network_int | (0xFFFFFFFF ^ mask_int) ))
+    if (( hotspot_ini_int <= hotspot_network_int || hotspot_end_int >= hotspot_broadcast_int )); then
+        log "ERROR: hotspot range endpoints must be usable host addresses in the pydhcp subnet -abort"
+        exit 1
+    fi
 fi
 # The safety-net cadence is measured from the moment a reload starts, so at
 # this floor the daemon still rests at least twice as long as the slowest
@@ -1365,9 +1376,17 @@ process_new_leases() {
             if [[ -n "$mac_addr" && -n "$client_ip" ]] \
                && ip_in_lan "$client_ip" \
                && ! is_managed_mac "$mac_addr" \
-               && ! grep -qi "^a;${mac_addr};" "$UHM_MACAUTH" 2>/dev/null \
-               && ! grep -qi "^a;${mac_addr};" "$ACL_BLOCK_FILE" 2>/dev/null \
-               && ! grep -qi "^a;${mac_addr};" "$UHM_GRACE" 2>/dev/null; then
+               && ! grep -qi "^a;${mac_addr};" "$ACL_BLOCK_FILE" 2>/dev/null; then
+                if [[ "$UNIFI_HOTSPOT_ENABLED" == false ]]; then
+                    acl_reload_pending=1
+                    return 0
+                fi
+                if grep -qi "^a;${mac_addr};" "$UHM_MACAUTH" 2>/dev/null \
+                   || grep -qi "^a;${mac_addr};" "$UHM_GRACE" 2>/dev/null; then
+                    current_lease=""
+                    lease_content=""
+                    continue
+                fi
                 echo "a;${mac_addr};${client_ip};${client_name};$(date +%s);" >> "$UHM_GRACE"
                 log "INFO: new client $mac_addr -> grace"
                 log "INFO: ip=$client_ip host=${client_name:0:20}"
@@ -1779,6 +1798,15 @@ run_cycle() {
         return
     fi
 
+    if [[ "$UNIFI_HOTSPOT_ENABLED" == false ]]; then
+        snapshot_acls
+        check_mac_lists_changed
+        process_new_leases
+        check_and_reload_if_changed || true
+        flock -u 201
+        return
+    fi
+
     if ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
         log "WARNING: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -alert"
         flock -u 201
@@ -1927,38 +1955,40 @@ main() {
     # the controller often boot together. Retry quietly (INFO, no alert) for
     # up to STARTUP_GRACE_SECONDS before treating it as a real failure; a
     # controller that's simply still booting should never page anyone.
-    local login_start login_elapsed
-    login_start=$(date +%s)
-    until unifi_login "quiet"; do
-        login_elapsed=$(( $(date +%s) - login_start ))
-        if (( login_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "ERROR: no UniFi login in ${STARTUP_GRACE_SECONDS}s -abort"
-            exit 1
-        fi
-        sleep 10
-    done
+    if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+        local login_start login_elapsed
+        login_start=$(date +%s)
+        until unifi_login "quiet"; do
+            login_elapsed=$(( $(date +%s) - login_start ))
+            if (( login_elapsed >= STARTUP_GRACE_SECONDS )); then
+                log "ERROR: no UniFi login in ${STARTUP_GRACE_SECONDS}s -abort"
+                exit 1
+            fi
+            sleep 10
+        done
 
-    # stat/voucher can still fail right after login even though the login
-    # endpoint itself just answered -- UniFi-OS brings its subsystems up
-    # gradually after a reboot. Without this, a guest authorized by the
-    # very first run_cycle() would get its hostname written without the
-    # voucher-code suffix (process_sessions() falls back to plain "guestN"
-    # when voucher_cache is empty), and that hostname is never
-    # recomputed later. Same grace pattern as unifi_login above, but a
-    # persistent failure only logs a warning and continues instead of
-    # exiting -- the daemon can still authorize/revoke without vouchers.
-    local voucher_start voucher_elapsed
-    voucher_start=$(date +%s)
-    load_all_vouchers
-    while (( vouchers_ok == 0 )); do
-        voucher_elapsed=$(( $(date +%s) - voucher_start ))
-        if (( voucher_elapsed >= STARTUP_GRACE_SECONDS )); then
-            log "WARNING: no vouchers at startup, names without code -alert"
-            break
-        fi
-        sleep 10
+        # stat/voucher can still fail right after login even though the login
+        # endpoint itself just answered -- UniFi-OS brings its subsystems up
+        # gradually after a reboot. Without this, a guest authorized by the
+        # very first run_cycle() would get its hostname written without the
+        # voucher-code suffix (process_sessions() falls back to plain "guestN"
+        # when voucher_cache is empty), and that hostname is never
+        # recomputed later. Same grace pattern as unifi_login above, but a
+        # persistent failure only logs a warning and continues instead of
+        # exiting -- the daemon can still authorize/revoke without vouchers.
+        local voucher_start voucher_elapsed
+        voucher_start=$(date +%s)
         load_all_vouchers
-    done
+        while (( vouchers_ok == 0 )); do
+            voucher_elapsed=$(( $(date +%s) - voucher_start ))
+            if (( voucher_elapsed >= STARTUP_GRACE_SECONDS )); then
+                log "WARNING: no vouchers at startup, names without code -alert"
+                break
+            fi
+            sleep 10
+            load_all_vouchers
+        done
+    fi
 
     # iptables/ipset state does not survive a reboot, but the ACL files
     # themselves may be unchanged from before it -- check_and_reload_if_changed()

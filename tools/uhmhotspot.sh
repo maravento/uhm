@@ -3,14 +3,14 @@
 #
 ################################################################################
 #
-# uhmunifi -- UniFi Network Hotspot client audit and management tool
-# FILE: tools/uhmunifi.sh
+# uhmhotspot -- UniFi Network Hotspot client audit and management tool
+# FILE: tools/uhmhotspot.sh
 #
 # USAGE:
-# sudo bash uhmunifi.sh
+# sudo bash uhmhotspot.sh
 #
 #
-# LOG: /var/log/uhmunifi.log
+# LOG: /var/log/uhmhotspot.log
 #
 ################################################################################
 
@@ -27,7 +27,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # logging
-log_file="/var/log/uhmunifi.log"
+log_file="/var/log/uhmhotspot.log"
 log() {
     local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
     echo "$log_msg" >> "$log_file" 2>/dev/null || true
@@ -73,9 +73,9 @@ case "$log_stat" in
     *)
         if { chown root:adm "$log_file" 2>/dev/null || chown root:root "$log_file" 2>/dev/null; } &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "INFO: uhmunifi.log perms fixed -fixed"
+            log "INFO: uhmhotspot.log perms fixed -fixed"
         else
-            log "WARNING: cannot fix uhmunifi.log perms -alert"
+            log "WARNING: cannot fix uhmhotspot.log perms -alert"
         fi
         ;;
 esac
@@ -150,13 +150,17 @@ unset env_owner env_perms
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
-env_keys='UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_MAC_PATH UHM_RELOAD'
+env_keys='UNIFI_HOTSPOT_ENABLED UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_MAC_PATH UHM_RELOAD'
 
 # LOAD
 # pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
 # own keys win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
+if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true ]]; then
+    log "ERROR: uhmhotspot requires UNIFI_HOTSPOT_ENABLED=true -abort"
+    exit 1
+fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -538,9 +542,8 @@ interactive_forget_no_voucher() {
     ' 2>/dev/null | sort -u)
 
     local sta_macs
-    sta_macs=$(echo "$sta_json" | jq -r --arg essid "$UHM_ESSID" '
+    sta_macs=$(echo "$sta_json" | jq -r '
         .data[]
-        | select(.essid == $essid)
         | (.mac | ascii_downcase)
     ' 2>/dev/null | sort -u)
 
@@ -1209,9 +1212,9 @@ main_menu() {
 }
 
 # start
-log "uhmunifi start..."
+log "uhmhotspot start..."
 
 main_menu || { log "ERROR: revocation incomplete -abort"; exit 1; }
 
 # end
-log "uhmunifi done"
+log "uhmhotspot done"

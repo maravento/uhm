@@ -172,7 +172,7 @@ json_escape() {
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
-env_keys='BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
+env_keys='UNIFI_HOTSPOT_ENABLED BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
 # The log group only needs the log file, which is world-readable and has no
 # credentials in it. Loading the configuration is deferred to the groups
@@ -250,14 +250,21 @@ load_env() {
     elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         key_errors+=("UNIFI_SITE invalid characters")
     fi
-    if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
-        key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")
-    elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
-        key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
-    elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
-        key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
-    elif ! uh_fits "$BLOCKDHCP_GRACE_SECONDS"; then
-        key_errors+=("BLOCKDHCP_GRACE_SECONDS exceeds the Bash integer range")
+    if [[ "${UNIFI_HOTSPOT_ENABLED:-}" == true ]]; then
+        if [[ -z "${UHM_ESSID:-}" ]]; then
+            key_errors+=("UHM_ESSID is required in Hotspot mode")
+        fi
+        if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
+            key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")
+        elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
+            key_errors+=("BLOCKDHCP_GRACE_SECONDS not set")
+        elif ! [[ "$BLOCKDHCP_GRACE_SECONDS" =~ $UH_UINT ]]; then
+            key_errors+=("BLOCKDHCP_GRACE_SECONDS invalid seconds")
+        elif ! uh_fits "$BLOCKDHCP_GRACE_SECONDS"; then
+            key_errors+=("BLOCKDHCP_GRACE_SECONDS exceeds the Bash integer range")
+        fi
+    elif [[ "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
+        key_errors+=("UNIFI_HOTSPOT_ENABLED must be true or false")
     fi
     if (( ${#key_errors[@]} > 0 )); then
         json_error "invalid keys: ${key_errors[*]}"
@@ -875,6 +882,19 @@ unifi_fetch() {
     printf '%s' "$response_json"
 }
 
+# Check the selected WLAN before issuing a report that depends on it.
+check_selected_essid() {
+    local wlan_json
+
+    wlan_json=$(unifi_fetch "rest/wlanconf") || { printf '%s\n' "$wlan_json"; return 1; }
+    if ! jq -e --arg essid "$UHM_ESSID" '
+        [.data[] | select(.name == $essid)] | length == 1
+    ' <<< "$wlan_json" >/dev/null 2>&1; then
+        json_error "The configured SSID ($UHM_ESSID) must match exactly one SSID in UniFi. Check UHM_ESSID in uhm.env."
+        return 1
+    fi
+}
+
 # Writes every MAC listed in any mac-*.txt, active or commented, one per
 # line. A managed device is authorized through authorize-guest by design,
 # so it must never be reported as an anomaly.
@@ -913,7 +933,7 @@ unifi_status() {
                  {endpoint: "stat/voucher", rc: ($voucher.meta.rc // "error"), entries: ($voucher.data|length)}]}'
 }
 
-# Voucher resolution, same order uhmunifi.sh uses: the code written into
+# Voucher resolution, same order uhmhotspot.sh uses: the code written into
 # the hostname field at authorization time, verified against stat/voucher,
 # and stat/guest only as a fallback for a client still connected.
 unifi_authorized() {
@@ -1074,8 +1094,19 @@ case "$tool_group" in
         ;;
     unifi)
         load_env
+        case "$tool_action" in
+            --authorized|--vouchers|--guests|--unauthorized)
+                if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true ]]; then
+                    json_error "This report is only available in Hotspot mode. UHM is configured in Manual mode."
+                    exit 1
+                fi
+                ;;
+        esac
         unifi_require_config
         do_login
+        if [[ "$tool_action" == --unauthorized ]]; then
+            check_selected_essid || exit 1
+        fi
         case "$tool_action" in
             --status) unifi_status || exit 1 ;;
             --authorized) unifi_authorized || exit 1 ;;
