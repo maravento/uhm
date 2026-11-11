@@ -197,16 +197,43 @@ verify_dhcp_user() {
     fi
 }
 
+# Sets owner and mode on the opened file, never through a symlink: the
+# pydhcpd group can write /etc/pydhcp, so a path can be swapped for a link.
+# Usage: fix_dhcp_file <file> <owner> <group> <mode>
+fix_dhcp_file() {
+    if ! python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import grp, os, pwd, stat, sys
+path, owner, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 8)
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError:
+    sys.exit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        sys.exit(1)
+    os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    os.fchmod(fd, mode)
+finally:
+    os.close(fd)
+PY
+    then
+        log "ERROR: $(basename "$1") is not a regular file -abort"
+        exit 1
+    fi
+}
+
 verify_dhcp_files() {
     if [ ! -d /etc/pydhcp ]; then
         log "ERROR: /etc/pydhcp does not exist -abort"
         exit 1
     fi
-    if [ ! -f "$PYDHCPD_LEASES" ]; then
-        touch "$PYDHCPD_LEASES"
+    if [ ! -f "$PYDHCPD_LEASES" ] \
+       && ! (set -C; umask 077; : > "$PYDHCPD_LEASES") 2>/dev/null; then
+        log "ERROR: cannot create $(basename "$PYDHCPD_LEASES") -abort"
+        exit 1
     fi
-    chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$PYDHCPD_LEASES"
-    chmod 640 "$PYDHCPD_LEASES"
+    fix_dhcp_file "$PYDHCPD_LEASES" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
 }
 
 verify_dhcp_config() {
@@ -214,8 +241,7 @@ verify_dhcp_config() {
         log "ERROR: config file not found -abort"
         exit 1
     fi
-    chmod 640 "$DHCPDv4_CONF"
-    chown root:"${DAEMON_GROUP:-pydhcpd}" "$DHCPDv4_CONF"
+    fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640
 }
 
 verify_directories() {
@@ -692,12 +718,11 @@ env_keys='UNIFI_HOTSPOT_ENABLED SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK S
 load_uhm_env "$pydhcp_env" "$env_keys" line || true
 load_uhm_env "$uhm_env" "$env_keys" line || true
 if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
-    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true or false in uhm.env -abort"
+    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true/false -abort"
     exit 1
 fi
 
 # KEY CHECK
-
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
 for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
@@ -833,13 +858,13 @@ elif sys.argv[6] == 'true':
     hotspot_end = ipaddress.IPv4Address(sys.argv[5])
     net = ipaddress.IPv4Network(sys.argv[7] + '/' + sys.argv[8], strict=False)
     if not net.network_address < hotspot_start <= hotspot_end < net.broadcast_address:
-        print('Hotspot range endpoints must be usable host addresses in the pydhcp subnet')
+        print('hotspot range not usable in pydhcp.env subnet')
     elif hotspot_start <= server_ip <= hotspot_end:
         print('SERVER_IP overlaps hotspot range')
     elif pool_start <= hotspot_end and hotspot_start <= pool_end:
         print('DHCP block range overlaps hotspot range')
 " "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "${UHM_INI_RANGE:-}" "${UHM_END_RANGE:-}" "$UNIFI_HOTSPOT_ENABLED" "$SERV_SUBNET" "$SERV_MASK" 2>/dev/null) || {
-    log "ERROR: cannot validate DHCP and Hotspot address ranges -abort"
+    log "ERROR: cannot validate DHCP and Hotspot ranges -abort"
     exit 1
 }
 if [[ -n "$range_conflict" ]]; then
@@ -1062,20 +1087,22 @@ is_pydhcp() {
                 # empty result, not a parsing failure. Safe to clear.
                 log "INFO: all $total_seen lease(s) belong to blocked MACs"
                 log "INFO: clearing pydhcpd.leases"
-                : > "$leases_file"
-                rm -f "$temp_leases"
+                if ! mv -fT -- "$temp_leases" "$leases_file"; then
+                    log "ERROR: cannot replace $(basename "$leases_file") -abort"
+                    exit 1
+                fi
             elif (( original_count > 0 )); then
                 # Empty result NOT fully explained by blocked MACs (parsing
                 # failure, unexpected code path, etc.) -- preserve the original
                 # to avoid losing lease data on a transient/unknown failure.
                 log "WARNING: pydhcpd.leases unreadable, file untouched -alert"
                 rm -f "$temp_leases"
-            else
-                : > "$leases_file"
+            elif ! mv -fT -- "$temp_leases" "$leases_file"; then
+                log "ERROR: cannot replace $(basename "$leases_file") -abort"
+                exit 1
             fi
         fi
-        chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$leases_file"
-        chmod 640 "$leases_file"
+        fix_dhcp_file "$leases_file" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
 
         # Restore pipefail to whatever it was before entering this function.
         # Explicit "if" + "return 0" so the function success does not
@@ -1191,13 +1218,18 @@ class "blockdhcp" {
 }" >>"$dhcp_conf_temp"
 
         # Keep a backup of the previous config in case the new one is faulty.
-        [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
+        # -P copies a symlink as a symlink, so a restore can never read its target.
+        if [ -f "$dhcp_conf" ]; then
+            local bak_temp
+            bak_temp=$(mktemp "${dhcp_conf}.bak.XXXXXX") || { log "ERROR: cannot create config backup; check /etc/pydhcp -abort"; exit 1; }
+            temp_files+=("$bak_temp")
+            { cp -fP -- "$dhcp_conf" "$bak_temp" && mv -fT -- "$bak_temp" "${dhcp_conf}.bak"; } || rm -f -- "$bak_temp"
+        fi
         if ! mv -fT -- "$dhcp_conf_temp" "$dhcp_conf"; then
             log "ERROR: cannot replace $(basename "$dhcp_conf") -abort"
             exit 1
         fi
-        chown root:"${DAEMON_GROUP:-pydhcpd}" "$dhcp_conf"
-        chmod 640 "$dhcp_conf"
+        fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
     }
 
     # Log lines below do not carry the function name -- they use short,
@@ -1259,7 +1291,11 @@ class "blockdhcp" {
     if ! systemctl is-active --quiet pydhcpd; then
         log "WARNING: pydhcpd failed to start after rebuild -fallback"
         if [ -f "${dhcp_conf}.bak" ]; then
-            cp -f "${dhcp_conf}.bak" "$dhcp_conf"
+            if ! mv -fT -- "${dhcp_conf}.bak" "$dhcp_conf"; then
+                log "ERROR: cannot restore $(basename "$dhcp_conf") -abort"
+                exit 1
+            fi
+            fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
             log "INFO: restored backup config, retrying start"
             systemctl reset-failed pydhcpd 2>/dev/null || true
             systemctl start pydhcpd || true
@@ -1327,8 +1363,7 @@ drain_lease_queue() {
         log "ERROR: cannot replace $(basename "$dhcpd_leases") -abort"
         exit 1
     fi
-    chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd_leases"
-    chmod 640 "$dhcpd_leases"
+    fix_dhcp_file "$dhcpd_leases" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
     if ! : > "$UHM_QUEUE" 2>/dev/null; then
         log "WARNING: cannot empty uhm-queue.txt -alert"
     fi

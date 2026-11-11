@@ -166,12 +166,15 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
+# Read known key=value pairs from a config file, without sourcing it
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
 env_keys='BACKUP_DIR'
 # LOAD
+# Reads uhm.env; a malformed line aborts
 load_uhm_env "$uhm_env" "$env_keys" || { log "ERROR: cannot load uhm.env -abort"; exit 1; }
 
 # KEY CHECK
+# BACKUP_DIR must be the fixed backup path, without symlinks
 backup_dir="/etc/bak/uhm"
 if [[ "${BACKUP_DIR:-}" != "$backup_dir" ]] \
    || [[ "$(readlink -m -- "$backup_dir")" != "$backup_dir" ]]; then

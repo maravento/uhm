@@ -221,26 +221,6 @@ UHM_ALERT_DEDUP_SECONDS=300
 # ============================================================================="
         log "INFO: added 5 alert keys to $uhm_env"
     fi
-    # Insert right after their neighbor in the Alert block (not a plain
-    # >> append) so upgrading an older install doesn't scatter these
-    # variables to the end of the file, past unrelated later sections.
-    if ! grep -q '^UHM_API_FAIL_THRESHOLD=' "$uhm_env"; then
-        sed -i '/^UHM_NTFY_TOPIC=/a UHM_API_FAIL_THRESHOLD=3' "$uhm_env" \
-            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
-    fi
-    if ! grep -q '^UHM_ALERT_QUIET_PERIOD_SECONDS=' "$uhm_env"; then
-        sed -i '/^UHM_API_FAIL_THRESHOLD=/a UHM_ALERT_QUIET_PERIOD_SECONDS=120' "$uhm_env" \
-            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
-    fi
-
-    if ! grep -q '^UHM_ALERT_JITTER_SECONDS=' "$uhm_env"; then
-        sed -i '/^UHM_ALERT_QUIET_PERIOD_SECONDS=/a # Alert defaults\n# Changing these defaults is not recommended\nUHM_ALERT_JITTER_SECONDS=10' "$uhm_env" \
-            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
-    fi
-    if ! grep -q '^UHM_ALERT_DEDUP_SECONDS=' "$uhm_env"; then
-        sed -i '/^UHM_ALERT_JITTER_SECONDS=/a UHM_ALERT_DEDUP_SECONDS=300' "$uhm_env" \
-            || { log "ERROR: cannot write $(basename "$uhm_env") -abort"; exit 1; }
-    fi
 
     local self_path
     self_path="$(readlink -f "$0")"

@@ -299,6 +299,10 @@ FILE: index.html
         <span class="tab-icon">&#128269;</span>
         <span>ToolView</span>
       </button>
+      <button class="tab-pro" data-target="fwview" role="tab" aria-selected="false">
+        <span class="tab-icon">&#128737;</span>
+        <span>FWView</span>
+      </button>
     </nav>
   </header>
 
@@ -327,11 +331,19 @@ FILE: index.html
         </div>
         <iframe class="iframe-full" src="toolview/index.php" loading="lazy" onload="hideLoading(this)"></iframe>
       </div>
+
+      <div id="fwview" class="tab-content">
+        <div class="loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loading-text">Loading FWView...</div>
+        </div>
+        <iframe class="iframe-full" src="fwview/index.php" loading="lazy" onload="hideLoading(this)"></iframe>
+      </div>
     </div>
   </main>
 
   <script>
-    // The three modules read the same localStorage key, so a tab loaded
+    // The modules read the same localStorage key, so a tab loaded
     // later already comes up in the current theme without being told.
     var themeButton = document.getElementById('themeButton');
     var darkMode = false;
@@ -394,7 +406,7 @@ FILE: index.html
       });
     });
 
-    // ?tab=logview|aclview|toolview opens the panel on that tab. Each
+    // ?tab=logview|aclview|toolview|fwview opens the panel on that tab. Each
     // module directory also serves its own page, without the tab bar.
     var requested = new URLSearchParams(window.location.search).get('tab');
     if (requested) activateTab(requested);

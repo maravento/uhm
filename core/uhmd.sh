@@ -374,7 +374,7 @@ env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UN
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
 if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
-    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true or false in uhm.env -abort"
+    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true/false -abort"
     exit 1
 fi
 
@@ -500,6 +500,7 @@ if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
     hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
 
     # KEY GUARD
+    # The hotspot range must be ordered and hold usable hosts of the subnet
     if (( hotspot_ini_int > hotspot_end_int )); then
         log "ERROR: hotspot range reversed in $(basename "$uhm_env") -abort"
         exit 1
@@ -507,7 +508,7 @@ if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
     hotspot_network_int=$(( subnet_int & mask_int ))
     hotspot_broadcast_int=$(( hotspot_network_int | (0xFFFFFFFF ^ mask_int) ))
     if (( hotspot_ini_int <= hotspot_network_int || hotspot_end_int >= hotspot_broadcast_int )); then
-        log "ERROR: hotspot range endpoints must be usable host addresses in the pydhcp subnet -abort"
+        log "ERROR: hotspot range not usable in pydhcp.env subnet -abort"
         exit 1
     fi
 fi

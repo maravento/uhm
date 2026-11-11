@@ -268,17 +268,7 @@ fi
 
 run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 755
 
-# uhmsetup.sh deploys uhmiptables.sh as a minimal but working template, so a
-# normal install always has a runnable file here. Unlike uhmleases.sh above, a
-# missing uhmiptables.sh warns and continues rather than aborting --
-# uhmleases.sh is the core ACL/lease reconciliation and its absence must stop
-# the reload chain; uhmiptables.sh only enforces at the firewall level, and ACL
-# classification keeps working correctly without it.
-if [[ ! -f "$UHM_IPTABLES" ]]; then
-    log "WARNING: UHM_IPTABLES file missing or invalid -alert"
-else
-    run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
-fi
+run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
 
 # ------------------------------------------------------------------------------
 # END

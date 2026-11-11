@@ -466,25 +466,6 @@ clear_recovery_attempt() {
     rm -f "${recovery_state_dir}/${1}.attempted_at" 2>/dev/null || true
 }
 
-ss_tcp_listeners() {
-    python3 - <<'PY'
-import subprocess
-import sys
-
-try:
-    result = subprocess.run(
-        ["ss", "-lnt"],
-        capture_output=True,
-        text=True,
-    )
-except OSError:
-    sys.exit(1)
-if result.returncode != 0 or result.stderr.strip():
-    sys.exit(1)
-sys.stdout.write(result.stdout)
-PY
-}
-
 check_uosserver() {
     # All-in-one container -- its internal MongoDB is bundled and managed by
     # the container itself, never a host-level service. Do not check/restart
@@ -515,37 +496,6 @@ check_uosserver() {
     # itself relies on. Username/password go via jq env (not --arg) and the
     # payload via curl stdin (not -d), so neither ever appears in this
     # process's argv (/proc/<pid>/cmdline).
-    if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -fallback"
-        # Fall back to a port check so this isn't a total no-op.
-        local tcp_listeners
-        if ! tcp_listeners=$(ss_tcp_listeners); then
-            log "WARNING: UOS cannot check its ports, no restart -alert"
-            return
-        fi
-        if ! grep -qE ':11443\b' <<< "$tcp_listeners"; then
-            log "WARNING: UOS BROKEN_PORTS -alert"
-            if recently_restarted "uosserver.service"; then
-                log "INFO: uosserver restarted recently -skip"
-                return
-            fi
-            if recovery_on_cooldown "uosserver.service"; then
-                log "INFO: uosserver recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -skip"
-                return
-            fi
-            mark_recovery_attempt "uosserver.service"
-            systemctl reset-failed uosserver.service 2>/dev/null || true
-            if systemctl restart uosserver.service; then
-                log "INFO: uosserver restarted -fixed"
-            else
-                log "WARNING: uosserver restart FAILED -alert"
-            fi
-        else
-            clear_recovery_attempt "uosserver.service"
-        fi
-        return
-    fi
-
     local login_url login_payload http_code
     login_url="${UNIFI_CONTROLLER_URL}/api/auth/login"
     login_payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
@@ -583,7 +533,7 @@ check_uosserver() {
             log "WARNING: uosserver restart FAILED -alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -alert"
+        log "WARNING: HTTP 429; stop uhmd and uhmwatch cron -alert"
     else
         log "WARNING: UOS login failed, HTTP $http_code: check uhm.env -alert"
     fi
@@ -610,37 +560,6 @@ check_unifi_classic() {
     # is-active only proves the process is up, not that the app (and its
     # embedded Mongo subprocess, see README) is actually healthy. Same login
     # mechanism as uhmd.sh, but against the classic endpoint (/api/login).
-    if [[ -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ]]; then
-        log "WARNING: UNIFI_USERNAME/UNIFI_PASSWORD not set -fallback"
-        # Fall back to a port check so this isn't a total no-op.
-        local tcp_listeners
-        if ! tcp_listeners=$(ss_tcp_listeners); then
-            log "WARNING: UniFi cannot check its ports, no restart -alert"
-            return
-        fi
-        if ! grep -qE ':(8443|8080)\b' <<< "$tcp_listeners"; then
-            log "WARNING: UniFi (classic) BROKEN_PORTS -alert"
-            if recently_restarted "unifi.service"; then
-                log "INFO: unifi restarted recently -skip"
-                return
-            fi
-            if recovery_on_cooldown "unifi.service"; then
-                log "INFO: unifi recovery cooldown (${RECOVERY_COOLDOWN_SECONDS}s) -skip"
-                return
-            fi
-            mark_recovery_attempt "unifi.service"
-            systemctl reset-failed unifi.service 2>/dev/null || true
-            if systemctl restart unifi.service; then
-                log "INFO: unifi restarted -fixed"
-            else
-                log "WARNING: unifi.service restart FAILED -alert"
-            fi
-        else
-            clear_recovery_attempt "unifi.service"
-        fi
-        return
-    fi
-
     local login_url login_payload http_code
     login_url="${UNIFI_CONTROLLER_URL}/api/login"
     login_payload=$(UH_JQ_USER="$UNIFI_USERNAME" UH_JQ_PASS="$UNIFI_PASSWORD" jq -n \
@@ -678,7 +597,7 @@ check_unifi_classic() {
             log "WARNING: unifi.service restart FAILED -alert"
         fi
     elif [[ "$http_code" == "429" ]]; then
-        log "WARNING: HTTP 429; stop uhmd/uhmwatch cron -alert"
+        log "WARNING: HTTP 429; stop uhmd and uhmwatch cron -alert"
     else
         log "WARNING: UniFi login failed, HTTP $http_code: check uhm.env -alert"
     fi

@@ -1,6 +1,6 @@
 <?php
 /**
- * uhm web API — single endpoint for the three panel tabs
+ * uhm web API — single endpoint for the panel tabs
  * FILE: api.php
  *
  * Every answer comes from uhmtool.sh, invoked through sudo. The web user
@@ -13,6 +13,8 @@
  *   ?g=acl&a=list                 Editable ACL files
  *   ?g=acl&a=read&name=NAME       ACL file content
  *   ?g=acl&a=write&name=NAME      ACL file content (POST body)
+ *   ?g=fw&a=read                  Firewall switches
+ *   ?g=fw&a=write&key=KEY&value=V Set one switch on or off (POST)
  *   ?g=report&a=mac&q=MAC         Per-MAC report across local sources
  *   ?g=report&a=grace             Grace period list
  *   ?g=report&a=consistency       Consistency check and totals
@@ -29,6 +31,7 @@ define('MAX_BODY_BYTES', 1048576);
 $actions = [
     'log'    => ['tail', 'grep', 'status'],
     'acl'    => ['list', 'read', 'write'],
+    'fw'     => ['read', 'write'],
     'report' => ['mac', 'grace', 'consistency', 'search'],
     'unifi'  => ['status', 'authorized', 'vouchers', 'guests', 'unauthorized'],
 ];
@@ -101,6 +104,22 @@ switch ($group . ':' . $action) {
             fail('content too large', 413);
         }
         $args[] = get_param('name');
+        break;
+
+    case 'fw:write':
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            fail('write requires POST', 405);
+        }
+        if (($_SERVER['HTTP_X_UHM_FW_WRITE'] ?? '') !== '1') {
+            fail('write header required', 403);
+        }
+        $key   = get_param('key');
+        $value = get_param('value');
+        if (!preg_match('/^[A-Z][A-Z0-9_]{0,63}$/', $key) || !in_array($value, ['on', 'off'], true)) {
+            fail('invalid switch');
+        }
+        $args[] = $key;
+        $args[] = $value;
         break;
 }
 

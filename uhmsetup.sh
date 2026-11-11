@@ -88,7 +88,9 @@ log_file="${script_dir}/uhmsetup.log"
 { > "$log_file"; } 2>/dev/null || true
 uhm_log_file="/var/log/uhm.log"
 logrotate_file="/etc/logrotate.d/uhm"
-uhm_iptables_dest="${tools_dir}/uhmiptables.sh"
+fw_dir="${hotspot_dir}/firewall"
+uhm_iptables_dest="${fw_dir}/uhmiptables.sh"
+fw_conf_dest="${fw_dir}/toggles.conf"
 service_dest="/etc/systemd/system/uhmd.service"
 web_root="/var/www/uhm"
 web_port="4048"
@@ -104,6 +106,8 @@ repo_uhmd="${repo_core}/uhmd.sh"
 repo_web="${script_dir}/web"
 repo_config="${script_dir}/config"
 repo_uhmweb="${repo_config}/web"
+repo_fw_conf="${repo_config}/firewall/toggles.conf"
+repo_fw_iptables="${repo_config}/firewall/uhmiptables.sh"
 repo_service="${repo_config}/service/uhmd.service"
 
 # Required apt packages
@@ -226,6 +230,7 @@ check_internet() {
 }
 
 # UPDATE CHECKS
+# Helpers that stage, check, apply and roll back an update
 update_error() {
     if declare -F err >/dev/null; then
         err "$* -abort"
@@ -1005,20 +1010,19 @@ discover_unifi_controller() {
     return 1
 }
 
-# Queries the controller's configured SSIDs (rest/wlanconf) with a fresh
-# login, so run_setup_wizard can offer a select menu instead of free-text
-# entry. Returns the SSID names and their guest flags as JSON.
-# Site is always "default" -- see UNIFI_SITE note below.
-fetch_unifi_ssids() {
-    local controller_url="$1" unifi_type="$2" unifi_user="$3" unifi_pass="$4"
+# Queries one controller endpoint with a fresh login, so run_setup_wizard
+# can offer select menus instead of free-text entry. Prints the raw JSON.
+# Usage: fetch_unifi <url> <type> <user> <pass> <path below the API root>
+fetch_unifi() {
+    local controller_url="$1" unifi_type="$2" unifi_user="$3" unifi_pass="$4" api_path="$5"
     local login_path base_path login_payload cookie_jar
 
     if [[ "$unifi_type" == "unifi-os" ]]; then
         login_path="/api/auth/login"
-        base_path="/proxy/network/api/s/default"
+        base_path="/proxy/network/api"
     else
         login_path="/api/login"
-        base_path="/api/s/default"
+        base_path="/api"
     fi
 
     login_payload=$(UH_JQ_USER="$unifi_user" UH_JQ_PASS="$unifi_pass" jq -n \
@@ -1031,8 +1035,7 @@ fetch_unifi_ssids() {
         --data-binary @- \
         --connect-timeout 5 <<< "$login_payload"
 
-    curl -sk -b "$cookie_jar" "${controller_url}${base_path}/rest/wlanconf" --connect-timeout 5 \
-        | jq -c '[.data[]? | select(.name | type == "string" and length > 0) | {name, is_guest}]' 2>/dev/null
+    curl -sk -b "$cookie_jar" "${controller_url}${base_path}/${api_path}" --connect-timeout 5
 
     rm -f "$cookie_jar"
 }
@@ -1075,25 +1078,65 @@ run_setup_wizard() {
         { err "no UniFi controller detected"; abort "UniFi controller: check credentials/service -abort"; }
     fi
 
+    step "Site selection"
+    # UNIFI_SITE takes the site's internal name, not the name shown in UniFi
+    local site_list=() site_answer cfg_site=""
+    mapfile -t site_list < <(fetch_unifi "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass" self/sites \
+        | jq -r '.data[]? | select(.name | type == "string" and test("^[a-zA-Z0-9._-]+$")) | "\(.name)\t\(.desc // .name)"' 2>/dev/null)
+    if (( ${#site_list[@]} == 0 )); then
+        cfg_site=default
+        warn "no UniFi site listed; using default -fallback"
+    elif (( ${#site_list[@]} == 1 )); then
+        cfg_site="${site_list[0]%%$'\t'*}"
+        info "UniFi site detected: $cfg_site"
+    else
+        local site_index site_default=1
+        echo "Available UniFi sites:"
+        for site_index in "${!site_list[@]}"; do
+            printf ' [%d] %s (%s)\n' "$((site_index + 1))" "${site_list[$site_index]%%$'\t'*}" "${site_list[$site_index]#*$'\t'}"
+            [[ "${site_list[$site_index]%%$'\t'*}" == default ]] && site_default=$((site_index + 1))
+        done
+        while true; do
+            read -rp "Select UniFi site [1-${#site_list[@]}] [Default: ${site_default}]: " site_answer \
+                || abort "cannot read UniFi site selection -abort"
+            site_answer="${site_answer:-$site_default}"
+            if [[ "$site_answer" =~ $UH_UINT ]] && [ "${#site_answer}" -le 5 ] \
+               && [ "$site_answer" -ge 1 ] && [ "$site_answer" -le "${#site_list[@]}" ]; then
+                cfg_site="${site_list[$((site_answer - 1))]%%$'\t'*}"
+                break
+            fi
+            info "invalid UniFi site selection -retry"
+        done
+    fi
+
     step "SSID selection"
     local ssid_list=() ssid_config
-    ssid_config=$(fetch_unifi_ssids "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass")
+    ssid_config=$(fetch_unifi "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass" "s/$cfg_site/rest/wlanconf" \
+        | jq -c '[.data[]? | select(.name | type == "string" and length > 0) | {name, is_guest}]' 2>/dev/null)
     mapfile -t ssid_list < <(jq -r '.[] | .name' <<< "$ssid_config")
     if (( ${#ssid_list[@]} == 1 )); then
         cfg_essid="${ssid_list[0]}"
         info "SSID detected: $cfg_essid"
     elif (( ${#ssid_list[@]} > 1 )); then
-        echo "Multiple SSIDs found -- select the SSID for the managed Network:"
-        select cfg_essid in "${ssid_list[@]}"; do
-            [[ -n "$cfg_essid" ]] && break
-            echo "Invalid selection -- enter number of one of SSIDs listed above"
+        local ssid_index ssid_answer
+        echo "Available SSIDs:"
+        for ssid_index in "${!ssid_list[@]}"; do
+            printf ' [%d] %s\n' "$((ssid_index + 1))" "${ssid_list[$ssid_index]}"
         done
-        if [[ -z "$cfg_essid" ]]; then
-            warn "no SSID selected; using Manual mode -alert"
-        fi
+        while true; do
+            read -rp "Select SSID [1-${#ssid_list[@]}] [Default: 1]: " ssid_answer \
+                || abort "cannot read SSID selection -abort"
+            ssid_answer="${ssid_answer:-1}"
+            if [[ "$ssid_answer" =~ $UH_UINT ]] && [ "${#ssid_answer}" -le 5 ] \
+               && [ "$ssid_answer" -ge 1 ] && [ "$ssid_answer" -le "${#ssid_list[@]}" ]; then
+                cfg_essid="${ssid_list[$((ssid_answer - 1))]}"
+                break
+            fi
+            info "invalid SSID selection -retry"
+        done
     else
         cfg_essid=""
-        warn "no SSID detected on UniFi controller; using Manual mode -alert"
+        warn "no SSID found in UniFi; using Manual mode -alert"
     fi
 
     local cfg_hotspot_enabled=false
@@ -1119,19 +1162,19 @@ run_setup_wizard() {
                     # The firewall redirects clients to HTTP on port 8880.
                     if ! portal_redirect=$(curl -sS --noproxy '*' --connect-timeout 5 --max-time 10 \
                         --output /dev/null --write-out '%{redirect_url}' \
-                        "http://$portal_host:8880/guest/s/default/" 2>/dev/null) \
+                        "http://$portal_host:8880/guest/s/$cfg_site/" 2>/dev/null) \
                         || [[ "$portal_redirect" == https://* ]]; then
-                        warn "Hotspot HTTP endpoint on port 8880 unavailable or redirects to HTTPS -alert"
+                        warn "port 8880 unreachable or redirects to HTTPS -alert"
                         continue
                     fi
                     cfg_hotspot_enabled=true
                     break
                     ;;
                 [Nn]|[Nn][Oo]) cfg_hotspot_enabled=false; break ;;
-                *) echo "Enter yes or no." ;;
+                *) info "answer yes or no -retry" ;;
             esac
         done
-        [[ -n "$cfg_hotspot_enabled" ]] || abort "Hotspot mode not confirmed; check the SSID and rerun setup -abort"
+        [[ -n "$cfg_hotspot_enabled" ]] || abort "Hotspot not confirmed; check SSID and rerun -abort"
     fi
 
     cfg_ini_range=""
@@ -1156,7 +1199,7 @@ run_setup_wizard() {
             if ! ip_is_usable_host "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
                || ! ip_is_usable_host "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
                 info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
-                info "Hotspot range endpoints must be usable host addresses in the pydhcp subnet -retry"
+                info "range ends must be usable hosts in the subnet -retry"
                 continue
             fi
             if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
@@ -1257,9 +1300,8 @@ UNIFI_HOTSPOT_ENABLED=${cfg_hotspot_enabled}
 UNIFI_CONTROLLER_URL=${url_answer}
 UNIFI_USERNAME=${user_answer}
 UNIFI_PASSWORD=${pass_answer}
-# UniFi always creates a site named "default". If the administrator renamed it,
-# edit this value to match the exact site name shown in the UniFi controller.
-UNIFI_SITE=default
+# Internal site name selected during installation
+UNIFI_SITE=${cfg_site}
 # Unifi type (classic or unifi-os)
 UNIFI_TYPE=${found_type}
 # Cert
@@ -1280,8 +1322,9 @@ RECOVERY_COOLDOWN_SECONDS=600
 # Scripts
 UHM_RELOAD=${reload_script_answer}
 UHM_LEASES=${core_dir}/uhmleases.sh
-# By sysadmin
+# Firewall, switches in toggles.conf
 UHM_IPTABLES=${uhm_iptables_dest}
+UHM_TOGGLES=${fw_conf_dest}
 
 # Timeouts
 UHM_LEASES_TIMEOUT_SECONDS=120
@@ -1360,11 +1403,8 @@ deploy_scripts() {
     info "updated core/uhmwatch.sh"
     local repo_file
     for repo_file in "${repo_tools}/"*.sh; do
-        # uhmiptables.sh is the administrator's own file once customized, so it
-        # is deployed by deploy_uhmiptables() below (only when absent) instead
-        # of being overwritten here on every run.
         case "$(basename "$repo_file")" in
-            uhmiptables.sh|uhmenv.sh) continue ;;
+            uhmenv.sh) continue ;;
         esac
         install -m 755 -o root -g root "$repo_file" "${tools_dir}/"
         info "updated tools/$(basename "$repo_file")"
@@ -1372,12 +1412,25 @@ deploy_scripts() {
 }
 
 deploy_uhmiptables() {
+    install -d -m 700 -o root -g root -- "$fw_dir"
     if [[ -f "$uhm_iptables_dest" ]]; then
         info "uhmiptables.sh already exists -skip"
         return 0
     fi
-    install -m 750 -o root -g root "${repo_tools}/uhmiptables.sh" "$uhm_iptables_dest"
-    info "Placeholder deployed to $uhm_iptables_dest"
+    install -m 750 -o root -g root "$repo_fw_iptables" "$uhm_iptables_dest"
+    info "Firewall deployed to $uhm_iptables_dest"
+}
+
+# Firewall switches read by uhmiptables.sh and edited from FWView. The file
+# belongs to the administrator once deployed, so an existing one is kept.
+deploy_fw_switches() {
+    install -d -m 700 -o root -g root -- "$fw_dir"
+    if [[ -e "$fw_conf_dest" ]]; then
+        info "toggles.conf already exists -skip"
+        return 0
+    fi
+    install -m 600 -o root -g root "$repo_fw_conf" "$fw_conf_dest"
+    info "Switches deployed to $fw_conf_dest"
 }
 
 deploy_web_sudo_rule() (
@@ -1535,7 +1588,7 @@ final_sanity_check() {
     fi
 
     if (( issue_list > 0 )); then
-        warn "${issue_list} issue(s) need attention, uhm not fully functional -alert"
+        warn "${issue_list} issue(s): uhm not fully functional -alert"
     fi
 }
 
@@ -1721,6 +1774,7 @@ EOF
     deploy_scripts
     deploy_acl_files
     deploy_uhmiptables
+    deploy_fw_switches
 
     run_setup_wizard
 
@@ -1748,10 +1802,8 @@ EOF
     echo "uhm installed"
     echo ""
     echo "Next steps:"
-    echo "1. Optional: ${uhm_iptables_dest} is a placeholder"
-    echo "   (routing + NAT). For full enforcement, copy"
-    echo "   ${repo_tools}/uhmiptables_example.txt over it,"
-    echo "   then read it through and adapt it. See its header"
+    echo "1. Firewall: ${uhm_iptables_dest}"
+    echo "   Switches: FWView tab or ${fw_conf_dest}"
     echo "2. Check service: systemctl status uhmd"
     echo "3. Check logs: tail -f ${uhm_log_file}"
     echo ""
@@ -1783,7 +1835,7 @@ do_update() {
     load_uhm_env "$uhm_env" 'UNIFI_HOTSPOT_ENABLED' line || true
     case "$UNIFI_HOTSPOT_ENABLED" in
         true|false) ;;
-        *) abort "set UNIFI_HOTSPOT_ENABLED=true or false in $uhm_env before updating -abort" ;;
+        *) abort "UNIFI_HOTSPOT_ENABLED must be true/false -abort" ;;
     esac
     update_reset /etc/cron.d/uhm
     local file mode
@@ -1795,13 +1847,17 @@ do_update() {
         case "$file" in uhmenv.sh) mode=644 ;; esac
         update_file "$repo_tools/$file" "$tools_dir/$file" "$mode" root:root
     done
+    update_target "$fw_dir" d700 root:root
     if [ ! -e "$uhm_iptables_dest" ]; then
-        update_file "$repo_tools/uhmiptables.sh" "$uhm_iptables_dest" 750 root:root
+        update_file "$repo_fw_iptables" "$uhm_iptables_dest" 750 root:root
     fi
     if [ -d "$web_root" ]; then
-        for file in index.html api.php aclview/index.php logview/index.php toolview/index.php; do
+        for file in index.html api.php aclview/index.php logview/index.php toolview/index.php fwview/index.php; do
             update_file "$repo_web/$file" "$web_root/$file" 644 root:root
         done
+    fi
+    if [ ! -e "$fw_conf_dest" ]; then
+        update_file "$repo_fw_conf" "$fw_conf_dest" 600 root:root
     fi
     update_target "$acl_dir" d700 root:root
     local acl_name

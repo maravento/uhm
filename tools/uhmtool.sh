@@ -11,10 +11,9 @@
 #
 #   log      --tail, --grep, --status
 #   acl      --list, --read, --write
+#   fw       --read, --write
 #   report   --mac, --grace, --consistency, --search
 #   unifi    --status, --authorized, --vouchers, --guests, --unauthorized
-#
-# LOG: /var/log/uhm.log
 #
 ################################################################################
 
@@ -66,6 +65,7 @@ uhm_env="/etc/uhm/uhm.env"
 cycle_lock="/var/lock/uhmd-cycle.lock"
 max_grep_lines=3000
 max_upload_bytes=1048576
+fw_lock="/var/lock/uhmfw.lock"
 
 # ACL line formats, same definitions normalize_acl_lists() enforces in
 # uhmleases.sh. A line the daemon would reject must never be written here.
@@ -207,6 +207,7 @@ load_env() {
     done
 
     # LOAD
+    # Reads both files; a malformed line returns a JSON error
     load_uhm_env "$pydhcp_env" "$env_keys" json
     load_uhm_env "$uhm_env" "$env_keys" json
 
@@ -275,6 +276,48 @@ load_env() {
         json_error "cannot read $ACL_MAC_PATH"
         exit 1
     fi
+}
+
+# The fw group reads only the switches path. load_env would tie FWView to
+# UniFi and DHCP keys the firewall never uses.
+load_fw_env() {
+    # PERMS
+    # Owner and mode of the .env this group reads
+    local env_specs env_spec env_path env_owner_want env_perms_want
+    local env_owner env_perms
+    env_specs=("$uhm_env root:root 600")
+    for env_spec in "${env_specs[@]}"; do
+        read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+        if [ ! -f "$env_path" ]; then
+            json_error "$(basename "$env_path") not found"
+            exit 1
+        fi
+        env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+        env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+        if [[ "$env_owner" != "$env_owner_want" ]] \
+           || [[ "$env_perms" != "$env_perms_want" ]]; then
+            if ! chown "$env_owner_want" "$env_path" 2>/dev/null \
+               || ! chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+                json_error "cannot fix $(basename "$env_path") perms"
+                exit 1
+            fi
+        fi
+    done
+
+    # LOAD
+    # Reads uhm.env; a malformed line returns a JSON error
+    load_uhm_env "$uhm_env" 'UHM_TOGGLES' json
+
+    # KEY CHECK
+    # A missing or empty key stops the group before any file is touched
+    if ! grep -q "^UHM_TOGGLES=" "$uhm_env"; then
+        json_error "invalid keys: UHM_TOGGLES missing line"
+        exit 1
+    elif [[ -z "${UHM_TOGGLES:-}" ]]; then
+        json_error "invalid keys: UHM_TOGGLES not set"
+        exit 1
+    fi
+    fw_conf="$UHM_TOGGLES"
 }
 
 # ------------------------------------------------------------------------------
@@ -568,6 +611,84 @@ acl_write() {
     line_number=$(grep -c '' "$acl_file" 2>/dev/null) || line_number=0
     jq -cn --arg name "$acl_name" --argjson lines "$line_number" \
         '{saved: true, name: $name, lines: $lines}'
+}
+
+# ------------------------------------------------------------------------------
+# FIREWALL
+# ------------------------------------------------------------------------------
+
+# Same file checks uhmiptables.sh applies before it trusts the switches.
+fw_check_conf() {
+    local fw_owner fw_mode
+    if [ -L "$fw_conf" ] || [ ! -f "$fw_conf" ]; then
+        json_error "toggles.conf not found"
+        return 1
+    fi
+    fw_owner=$(stat -c %u "$fw_conf") && fw_mode=$(stat -c %a "$fw_conf") || {
+        json_error "cannot read toggles.conf"; return 1; }
+    if [[ "$fw_owner" != 0 ]] || (( (8#$fw_mode & 022) != 0 )); then
+        json_error "toggles.conf: unsafe owner or permissions"
+        return 1
+    fi
+}
+
+# Lists every switch with its value and the comment line above it as label.
+fw_read() {
+    local fw_line fw_label="" fw_key fw_value
+    fw_check_conf || return 1
+    while IFS= read -r fw_line || [ -n "$fw_line" ]; do
+        fw_line="${fw_line%$'\r'}"
+        if [[ "$fw_line" =~ ^#[[:space:]]?(.*)$ ]]; then
+            fw_label="${BASH_REMATCH[1]}"
+            continue
+        fi
+        if [[ "$fw_line" =~ ^([A-Z][A-Z0-9_]*)=(on|off)$ ]]; then
+            fw_key="${BASH_REMATCH[1]}"
+            fw_value="${BASH_REMATCH[2]}"
+            printf '%s\t%s\t%s\n' "$fw_key" "$fw_value" "$fw_label"
+        fi
+        fw_label=""
+    done < "$fw_conf" | jq -Rcn --arg path "$fw_conf" \
+        '{path: $path, toggles: [inputs | split("\t") | {key: .[0], value: .[1], label: .[2]}]}'
+}
+
+# Changes one existing switch. Only a key already in the file is accepted,
+# and only on/off as value, so the web never writes free text here.
+fw_write() {
+    local fw_key="$1" fw_value="$2" publish_file
+    if ! [[ "$fw_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || ! [[ "$fw_value" =~ ^(on|off)$ ]]; then
+        json_error "invalid switch"
+        return 1
+    fi
+    fw_check_conf || return 1
+    (umask 077; : >> "$fw_lock")
+    exec 202>"$fw_lock"
+    flock -w 10 202 || { json_error "toggles.conf busy"; return 1; }
+    if ! grep -qE "^${fw_key}=(on|off)$" "$fw_conf"; then
+        flock -u 202
+        json_error "unknown switch"
+        return 1
+    fi
+    # Owner, group and mode go on a sibling temporary file. One rename publishes it.
+    if ! publish_file=$(mktemp "${fw_conf}.XXXXXX"); then
+        flock -u 202
+        json_error "cannot save toggles.conf"
+        return 1
+    fi
+    temp_files+=("$publish_file")
+    if ! { awk -v k="$fw_key" -v v="$fw_value" \
+            '{ sub(/\r$/, "") } $0 ~ "^" k "=(on|off)$" { print k "=" v; next } { print }' \
+            "$fw_conf" > "$publish_file" \
+        && chown root:root "$publish_file" \
+        && chmod 600 "$publish_file" \
+        && mv -fT -- "$publish_file" "$fw_conf"; }; then
+        rm -f -- "$publish_file"
+        flock -u 202
+        json_error "cannot save toggles.conf"
+        return 1
+    fi
+    flock -u 202
+    jq -cn --arg key "$fw_key" --arg value "$fw_value" '{saved: true, key: $key, value: $value}'
 }
 
 # ------------------------------------------------------------------------------
@@ -1044,6 +1165,7 @@ Usage: sudo bash $(basename "$0") <group> --<action> [arguments]
 Groups and actions:
   log    --tail [pos] [lines] | --grep <term> | --status
   acl    --list | --read <name> | --write <name> (content on stdin)
+  fw     --read | --write <KEY> <on|off>
   report --mac <--mac> | --grace | --consistency | --search <query>
   unifi  --status | --authorized | --vouchers | --guests | --unauthorized
 EOF
@@ -1080,6 +1202,14 @@ case "$tool_group" in
             --read) acl_read "${3:-}" || exit 1 ;;
             --write) acl_write "${3:-}" || exit 1 ;;
             *) json_error "unknown acl action"; exit 1 ;;
+        esac
+        ;;
+    fw)
+        load_fw_env
+        case "$tool_action" in
+            --read) fw_read || exit 1 ;;
+            --write) fw_write "${3:-}" "${4:-}" || exit 1 ;;
+            *) json_error "unknown fw action"; exit 1 ;;
         esac
         ;;
     report)
