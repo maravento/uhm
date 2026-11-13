@@ -4,10 +4,10 @@
 ################################################################################
 #
 # uhmiptables -- uhm firewall ruleset
-# FILE: firewall/uhmiptables.sh
+# FILE: fw/uhmiptables.sh
 #
 # USAGE:
-# sudo bash /etc/uhm/firewall/uhmiptables.sh
+# sudo bash /etc/uhm/fw/uhmiptables.sh
 #
 # LOG: /var/log/uhm.log
 #
@@ -44,7 +44,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep curl iproute2; do
+for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep curl iproute2 libc-bin; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -57,6 +57,7 @@ done
 
 # validation -- one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
@@ -132,6 +133,34 @@ acl_fix_perms() {
         exit 1
     fi
     log "INFO: $(basename "$acl_path") perms fixed -fixed"
+}
+
+# LIST DOWNLOAD
+# Download a list only when it is missing or empty; return 1 if unavailable
+# Usage: fetch_list <file> <url>
+fetch_list() {
+    local list_file="$1" list_url="$2" list_rc=0 list_code
+    [ -s "$list_file" ] && return 0
+    # Download labels: rules.md, Etiquetas de descarga
+    list_code=$(curl -sL --connect-timeout 10 --retry 3 --retry-delay 2 \
+        -w '%{http_code}' -o "$list_file" "$list_url") || list_rc=$?
+    case "${list_code:-000}" in
+        2*) if (( list_rc == 0 )); then
+                log "SAVED: $(basename "$list_url")"
+            else
+                log "PARTIAL: $list_url"
+            fi ;;
+        000) log "TIMEOUT: $list_url" ;;
+        5*) log "BUSY: $list_code $list_url" ;;
+        404|410) log "BROKEN: $list_code $list_url" ;;
+        *) log "HTTP_ERROR: $list_code $list_url" ;;
+    esac
+    if [[ "${list_code:-000}" == 2* ]] && (( list_rc == 0 )); then
+        return 0
+    fi
+    rm -f "$list_file"
+    log "INFO: $(basename "$list_file") not available, rule -skip"
+    return 1
 }
 
 # MAC SET FILL
@@ -403,33 +432,24 @@ fi
 acl_prepare "$acl_path" 700 600
 
 # PORT LIST
-# Build the configured port set
+# Download the port list when BLOCKPORTS is on; a failure skips its rule
 blockports_file="$acl_path/blockports.txt"
-blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/blockports.txt"
-if [ ! -f "$blockports_file" ]; then
-    # Download labels: rules.md, Etiquetas de descarga
-    blockports_rc=0
-    blockports_code=$(curl -sL --connect-timeout 10 --retry 3 --retry-delay 2 \
-        -w '%{http_code}' -o "$blockports_file" "$blockports_url") || blockports_rc=$?
-    case "${blockports_code:-000}" in
-        2*) if (( blockports_rc == 0 )); then
-                log "SAVED: $(basename "$blockports_url")"
-            else
-                log "PARTIAL: $blockports_url"
-            fi ;;
-        000) log "TIMEOUT: $blockports_url" ;;
-        5*) log "BUSY: $blockports_code $blockports_url" ;;
-        404|410) log "BROKEN: $blockports_code $blockports_url" ;;
-        *) log "HTTP_ERROR: $blockports_code $blockports_url" ;;
-    esac
-    if [[ "${blockports_code:-000}" != 2* ]] || (( blockports_rc != 0 )); then
-        rm -f "$blockports_file"
-        log "ERROR: blockports.txt not available -abort"
-        exit 1
-    fi
-    unset blockports_rc blockports_code
+blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/acl/blockports.txt"
+blockports_ok=0
+if fw_on BLOCKPORTS off && fetch_list "$blockports_file" "$blockports_url"; then
+    acl_fix_perms "$blockports_file" 600
+    blockports_ok=1
 fi
-acl_fix_perms "$blockports_file" 600
+
+# BOGON LIST
+# Download the bogon list when BOGONS is on; a failure skips its rule
+bogons_file="$acl_path/bogons.txt"
+bogons_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/acl/bogons.txt"
+bogons_ok=0
+if fw_on BOGONS off && fetch_list "$bogons_file" "$bogons_url"; then
+    acl_fix_perms "$bogons_file" 600
+    bogons_ok=1
+fi
 
 # MAC SETS
 # The four MAC sets are declared and filled here, in one place, before any
@@ -710,7 +730,6 @@ iptables -A OUTPUT -o "$INTERFACESv4" -p udp --sport 67 --dport 68 -j ACCEPT
 # MASQUERADE
 # NAT for LAN to share dynamic WAN IP
 iptables -t nat -A POSTROUTING -s "$SERV_SUBNET/$netmask_int" -o "$wan_iface" -j MASQUERADE
-#
 # SNAT example for static WAN IP (more efficient)
 # wan_ip=$(ip -4 -o addr show dev "$wan_iface" | awk '{print $4}' | cut -d/ -f1)
 # iptables -t nat -A POSTROUTING -s "$SERV_SUBNET/$netmask_int" -o "$wan_iface" -j SNAT --to-source "$wan_ip"
@@ -893,6 +912,39 @@ done
 
 # Apply the network traffic protection rules
 
+# BOGONS
+# Drop reserved and unroutable ranges; the LAN range is always excluded
+if (( bogons_ok )); then
+    # Bogons: Reserved and unroutable address ranges, dropped in both directions
+    if ! ipset list bogons &>/dev/null; then
+        ipset create bogons hash:net -exist
+    else
+        ipset flush bogons
+    fi
+    for bogons_cidr in $(grep -vE '^\s*#|^\s*$' "$bogons_file" | awk '{print $1}' | sort -V -u 2>/dev/null); do
+        ipset add bogons "$bogons_cidr" -exist
+    done
+
+    # Allow 255.255.255.0/24 before BOGONS DROP
+    iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -s 255.255.255.0/24 -j ACCEPT
+    iptables -t mangle -A PREROUTING -i "$INTERFACESv4" -d 255.255.255.0/24 -j ACCEPT
+    # DROP bogons, except the LAN range
+    iptables -t mangle -A PREROUTING -i "$INTERFACESv4" ! -s "$SERV_SUBNET/$netmask_int" -m set --match-set bogons src -j DROP
+    iptables -t mangle -A PREROUTING -i "$INTERFACESv4" ! -d "$SERV_SUBNET/$netmask_int" -m set --match-set bogons dst -j DROP
+    # WAN INGRESS
+    # drop spoofed traffic claiming a reserved/private source address.
+    # dst intentionally omitted -- this host may itself sit behind CGNAT/double-NAT
+    # on a private WAN address, which a dst check would wrongly match and drop.
+    # The WAN's own subnet is excluded, so an upstream router on a private
+    # range (e.g. a 192.168.x modem) keeps reaching this host.
+    wan_net=$(ip -4 route show dev "$wan_iface" scope link proto kernel 2>/dev/null | awk 'NR == 1 {print $1}') || wan_net=""
+    if [[ "$wan_net" =~ $UH_CIDR ]]; then
+        iptables -t mangle -A PREROUTING -i "$wan_iface" ! -s "$wan_net" -m set --match-set bogons src -j DROP
+    else
+        iptables -t mangle -A PREROUTING -i "$wan_iface" -m set --match-set bogons src -j DROP
+    fi
+fi
+
 # BLOCKPORTS
 # path: /etc/acl/blockports.txt
 # Block Direct Connections:
@@ -930,7 +982,7 @@ done
 # - WINS (42) - TCP/UDP
 # - BTC/ETH (8332,8333,8545,30303) - TCP
 
-if fw_on BLOCKPORTS on; then
+if (( blockports_ok )); then
     if ! ipset list blockports &>/dev/null; then
         ipset create blockports bitmap:port range 0-65535 -exist
     else

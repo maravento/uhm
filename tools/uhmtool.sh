@@ -175,7 +175,7 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/n
     json_error "cannot load uhmenv.sh"
     exit 1
 fi
-env_keys='UNIFI_HOTSPOT_ENABLED BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
+env_keys='UNIFI_HOTSPOT_ENABLED BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
 # The log group only needs the log file, which has no
 # credentials in it. Loading the configuration is deferred to the groups
@@ -217,7 +217,7 @@ load_env() {
     # KEY CHECK
     # Collect every failure first, then decide -- a single error reports them all
     key_errors=()
-    for env_key in ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
+    for env_key in ACL_BLOCK_FILE ACL_PATH PYDHCPD_LEASES; do
         if ! grep -q "^${env_key}=" "$pydhcp_env"; then
             key_errors+=("$env_key missing line")
         elif [[ -z "${!env_key:-}" ]]; then
@@ -275,8 +275,8 @@ load_env() {
         exit 1
     fi
 
-    if [ ! -d "$ACL_MAC_PATH" ]; then
-        json_error "cannot read $ACL_MAC_PATH"
+    if [ ! -d "$ACL_PATH" ]; then
+        json_error "cannot read $ACL_PATH"
         exit 1
     fi
 }
@@ -375,8 +375,10 @@ log_status() {
         '{active: $active, pid: $pid, uptime: $uptime, mem: $mem, cpu: $cpu, log: "'"$uhm_log_file"'"}'
 }
 
+# Searches every rotation, compressed ones included, oldest first.
+# The live view (log_tail) reads only the active file.
 log_grep() {
-    local search_term="$1" grep_output file_size log_files
+    local search_term="$1" grep_output file_size rotation log_files=()
 
     if [[ -z "$search_term" ]]; then
         json_error "empty search term"
@@ -392,44 +394,17 @@ log_grep() {
     fi
 
     file_size=$(stat -c%s "$uhm_log_file" 2>/dev/null || echo 0)
-    log_files=("$uhm_log_file")
-    [[ -f "$uhm_log_file.1" ]] && log_files=("$uhm_log_file.1" "$uhm_log_file")
-    grep_output=$(timeout 20 grep -Fiah -e "$search_term" -- "${log_files[@]}" 2>/dev/null | tail -n "$max_grep_lines" || true)
-
-    printf '{"rows":'
-    print_log_rows "$grep_output"
-    printf ',"offset":%d,"grep":true}\n' "$file_size"
-}
-
-# Searches every rotation, compressed ones included, oldest first. Run on
-# demand from ToolView only: the live view never reads .gz.
-log_archive() {
-    local search_term="$1" grep_output rotation log_files=()
-
-    if [[ -z "$search_term" ]]; then
-        json_error "empty search term"
-        return 1
-    fi
-    if [[ ! "$search_term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
-        json_error "invalid search term"
-        return 1
-    fi
     for rotation in 7 6 5 4 3 2; do
         [[ -f "$uhm_log_file.$rotation.gz" ]] && log_files+=("$uhm_log_file.$rotation.gz")
     done
     [[ -f "$uhm_log_file.1" ]] && log_files+=("$uhm_log_file.1")
-    [[ -f "$uhm_log_file" ]] && log_files+=("$uhm_log_file")
-    if (( ${#log_files[@]} == 0 )); then
-        json_error "log file not found"
-        return 1
-    fi
-
+    log_files+=("$uhm_log_file")
     grep_output=$(timeout 20 zcat -f -- "${log_files[@]}" 2>/dev/null \
         | grep -Fia -e "$search_term" | tail -n "$max_grep_lines" || true)
 
     printf '{"rows":'
     print_log_rows "$grep_output"
-    printf '}\n'
+    printf ',"offset":%d,"grep":true}\n' "$file_size"
 }
 
 # Reads by byte offset instead of following the file, so a request always
@@ -499,7 +474,7 @@ acl_path_of() {
     esac
 
     shopt -s nullglob
-    for mac_file in "$ACL_MAC_PATH"/mac-*.txt; do
+    for mac_file in "$ACL_PATH"/mac-*.txt; do
         if [[ "$(basename "$mac_file" .txt)" == "$acl_name" ]]; then
             shopt -u nullglob
             printf '%s' "$mac_file"
@@ -531,7 +506,7 @@ acl_list() {
     done
 
     shopt -s nullglob
-    for mac_file in "$ACL_MAC_PATH"/mac-*.txt; do
+    for mac_file in "$ACL_PATH"/mac-*.txt; do
         entries+=("$(basename "$mac_file" .txt)")
     done
     shopt -u nullglob
@@ -741,7 +716,7 @@ found_in_leases() {
 }
 
 found_in_acl_dir() {
-    grep -qiE "^#?a;${1};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null
+    grep -qiE "^#?a;${1};" "$ACL_PATH"/mac-*.txt 2>/dev/null
 }
 
 # Per-MAC presence across every local source, plus the warnings raised by
@@ -759,7 +734,7 @@ report_mac_object() {
     found_in_leases "$mac_addr" "$PYDHCPD_LEASES" && in_leases=1
 
     if (( in_acl == 1 )); then
-        mac_files=$(grep -liE "^#?a;${mac_addr};" "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null | xargs -r -n1 basename | paste -sd, -)
+        mac_files=$(grep -liE "^#?a;${mac_addr};" "$ACL_PATH"/mac-*.txt 2>/dev/null | xargs -r -n1 basename | paste -sd, -)
     fi
 
     if (( in_grace == 1 )); then
@@ -856,7 +831,7 @@ collect_all_macs() {
     done
 
     shopt -s nullglob
-    for acl_file in "$ACL_MAC_PATH"/mac-*.txt; do
+    for acl_file in "$ACL_PATH"/mac-*.txt; do
         grep -hioE "^#?a;$UH_MAC_RE" "$acl_file" | cut -d';' -f2 \
             | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
     done
@@ -923,7 +898,7 @@ report_search() {
     done
 
     shopt -s nullglob
-    for acl_file in "$ACL_MAC_PATH"/mac-*.txt; do
+    for acl_file in "$ACL_PATH"/mac-*.txt; do
         grep -hiF -- "$search_query" "$acl_file" \
             | grep -ioE "^#?a;$UH_MAC_RE" | cut -d';' -f2 \
             | tr '[:upper:]' '[:lower:]' >> "$tmp_file"
@@ -1060,7 +1035,7 @@ managed_macs() {
     local mac_file
 
     shopt -s nullglob
-    for mac_file in "$ACL_MAC_PATH"/mac-*.txt; do
+    for mac_file in "$ACL_PATH"/mac-*.txt; do
         grep -hioE "^#?a;$UH_MAC_RE" "$mac_file" | cut -d';' -f2 | tr '[:upper:]' '[:lower:]'
     done
     shopt -u nullglob
@@ -1200,7 +1175,7 @@ usage() {
 Usage: sudo bash $(basename "$0") <group> --<action> [arguments]
 
 Groups and actions:
-  log    --tail [pos] [lines] | --grep <term> | --status | --archive <term>
+  log    --tail [pos] [lines] | --grep <term> | --status
   acl    --list | --read <name> | --write <name> (content on stdin)
   fw     --read | --write <KEY> <on|off>
   report --mac <mac> | --grace | --consistency | --search <query>
@@ -1233,7 +1208,6 @@ case "$tool_group" in
             --tail) log_tail "${3:-0}" "${4:-200}" || exit 1 ;;
             --grep) log_grep "${3:-}" || exit 1 ;;
             --status) log_status || exit 1 ;;
-            --archive) log_archive "${3:-}" || exit 1 ;;
             *) json_error "unknown log action"; exit 1 ;;
         esac
         ;;

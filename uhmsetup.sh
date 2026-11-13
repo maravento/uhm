@@ -12,7 +12,8 @@
 # sudo bash uhmsetup.sh --uninstall   Uninstall
 # sudo bash uhmsetup.sh --status      Report services, port, config and log
 # sudo bash uhmsetup.sh               Interactive menu
-# sudo bash uhmsetup.sh -h, --help    Usage
+# bash uhmsetup.sh -h                 Usage
+# bash uhmsetup.sh --help             Usage
 #
 # LOG: uhmsetup.log, in the directory containing this script
 #
@@ -88,7 +89,7 @@ log_file="${script_dir}/uhmsetup.log"
 { > "$log_file"; } 2>/dev/null || true
 uhm_log_file="/var/log/uhm.log"
 logrotate_file="/etc/logrotate.d/uhm"
-fw_dir="${hotspot_dir}/firewall"
+fw_dir="${hotspot_dir}/fw"
 uhm_iptables_dest="${fw_dir}/uhmiptables.sh"
 fw_conf_dest="${fw_dir}/toggles.conf"
 service_dest="/etc/systemd/system/uhmd.service"
@@ -106,8 +107,8 @@ repo_uhmd="${repo_core}/uhmd.sh"
 repo_web="${script_dir}/web"
 repo_config="${script_dir}/config"
 repo_uhmweb="${repo_config}/web"
-repo_fw_conf="${repo_config}/firewall/toggles.conf"
-repo_fw_iptables="${repo_config}/firewall/uhmiptables.sh"
+repo_fw_conf="${repo_config}/fw/toggles.conf"
+repo_fw_iptables="${repo_config}/fw/uhmiptables.sh"
 repo_service="${repo_config}/service/uhmd.service"
 
 # Required apt packages
@@ -1778,9 +1779,6 @@ EOF
     install_logrotate
     install_systemd_service
     register_project_cron || abort "cannot write uhm cron -abort"
-    if confirm "Install uhmalert (ntfy push notifications on connectivity loss)?" "n"; then
-        bash "${tools_dir}/uhmalert.sh" --install
-    fi
     if confirm "Install the web interface (log viewer, ACL editor, reports)?" "n"; then
         install_web || true
     fi
@@ -1882,6 +1880,7 @@ do_update() {
         update_apache_port /etc/apache2/ports.conf "$vhost_dest" 127.0.0.1 "$web_port"
         apache2ctl configtest || update_error "Apache configuration invalid"
     fi
+    acl_prepare "$acl_mac_dir" 700 600
     acl_prepare "$acl_dir" 700 600 "$acl_dir/uhm-auth.txt" "$acl_dir/uhm-queue.txt" "$acl_dir/uhm-grace.txt"
     install_logrotate warn || update_error "cannot configure uhm log rotation"
     systemctl daemon-reload || update_error "cannot reload systemd configuration"

@@ -8,9 +8,8 @@
  *
  * Params:
  *   ?g=log&a=tail&pos=N&lines=N   Read the log from a byte offset
- *   ?g=log&a=grep&q=TERM          Full-log search
+ *   ?g=log&a=grep&q=TERM          Search every rotation, .gz included
  *   ?g=log&a=status               uhmd service state
- *   ?g=log&a=archive&q=TERM       Search every rotation, .gz included
  *   ?g=acl&a=list                 Editable ACL files
  *   ?g=acl&a=read&name=NAME       ACL file content
  *   ?g=acl&a=write&name=NAME      ACL file content (POST body)
@@ -30,7 +29,7 @@ define('UHM_TOOL', '/etc/uhm/tools/uhmtool.sh');
 define('MAX_BODY_BYTES', 1048576);
 
 $actions = [
-    'log'    => ['tail', 'grep', 'status', 'archive'],
+    'log'    => ['tail', 'grep', 'status'],
     'acl'    => ['list', 'read', 'write'],
     'fw'     => ['read', 'write'],
     'report' => ['mac', 'grace', 'consistency', 'search'],
@@ -75,7 +74,6 @@ switch ($group . ':' . $action) {
         break;
 
     case 'log:grep':
-    case 'log:archive':
     case 'report:mac':
     case 'report:search':
         $query = trim(get_param('q'));

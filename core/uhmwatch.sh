@@ -7,11 +7,11 @@
 # FILE: core/uhmwatch.sh
 #
 # USAGE:
-# sudo ./uhmwatch.sh --install     Deploy the script and register its cron
-#                                entry (* * * * *)
-# sudo ./uhmwatch.sh --uninstall   Remove the cron entry
-# uhmwatch.sh                    Run the checks directly (what cron invokes)
-# uhmwatch.sh -h, --help         Show this help
+# sudo bash uhmwatch.sh --install    Deploy the script and its per-minute cron entry
+# sudo bash uhmwatch.sh --uninstall  Remove the cron entry
+# sudo bash uhmwatch.sh              Run the checks (what cron invokes)
+# bash uhmwatch.sh -h                Show this help
+# bash uhmwatch.sh --help            Show this help
 #
 # LOG: /var/log/uhm.log
 #

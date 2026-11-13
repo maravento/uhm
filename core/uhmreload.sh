@@ -7,7 +7,7 @@
 # FILE: core/uhmreload.sh
 #
 # USAGE:
-# uhmreload.sh    (no arguments)
+# sudo bash uhmreload.sh    (no arguments)
 #
 # LOG: /var/log/uhm.log
 #

@@ -195,7 +195,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
   <div class="uh-search">
     <span class="sicon">&#128269;</span>
     <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." oninput="uhBS()" onkeydown="if(event.key==='Enter')uhGS()">
-    <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Type a term first, then search the entire log file" disabled>Full log</button>
+    <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Type a term first, then search the log and all its rotations" disabled>Full log</button>
   </div>
   <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option></select>
   <select id="uhLn" onchange="uhRL()"><option value="200" selected>Last 200</option><option value="500">Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
@@ -345,7 +345,7 @@ window.uhGS=function(){
   }).catch(function(e){if(e&&e.name==='AbortError')return;loading=false;rgB();grep=false});
 };
 function sgB(){var b=document.getElementById('uhBG');b.classList.add('grep-on');b.disabled=false;b.title='Back to live mode';b.innerHTML='&#10005; Live mode'}
-function rgB(){var b=document.getElementById('uhBG');b.classList.remove('grep-on');b.innerHTML='Full log';b.title='Type a term first, then search the entire log file';uhBS()}
+function rgB(){var b=document.getElementById('uhBG');b.classList.remove('grep-on');b.innerHTML='Full log';b.title='Type a term first, then search the log and all its rotations';uhBS()}
 
 // The button only works with a search term, so it stays disabled while the
 // box is empty instead of looking active and doing nothing.

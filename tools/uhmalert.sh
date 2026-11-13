@@ -7,12 +7,11 @@
 # FILE: tools/uhmalert.sh
 #
 # USAGE:
-# sudo ./uhmalert.sh --install     Deploy the script, create+enable+start
-#                                uhmalert.service
-# sudo ./uhmalert.sh --uninstall   Stop+disable the service, remove the unit
-# uhmalert.sh                    Run the watch loop directly (what
-#                                uhmalert.service's ExecStart invokes)
-# uhmalert.sh -h, --help         Show this help
+# sudo bash uhmalert.sh --install    Deploy and start uhmalert.service
+# sudo bash uhmalert.sh --uninstall  Stop the service and remove the unit
+# sudo bash uhmalert.sh              Run the watch loop (the service ExecStart)
+# bash uhmalert.sh -h                Show this help
+# bash uhmalert.sh --help            Show this help
 #
 # LOG: /var/log/uhm.log
 #
@@ -189,8 +188,33 @@ insert_after_last_delimiter() {
     fi
 }
 
+# Undo only what this --install run created, when it fails midway.
+# Pieces that existed before the run are left as they were.
+install_rollback() {
+    local exit_code=$?
+    trap - EXIT
+    (( exit_code == 0 )) && return 0
+    log "WARNING: uhmalert install failed, removing its changes -alert"
+    if (( created_unit )); then
+        systemctl disable uhmalert.service 2>/dev/null || true
+        systemctl stop uhmalert.service 2>/dev/null || true
+        rm -f "$unit_path"
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+    (( created_script )) && rm -f "$target_path"
+    if [[ -n "$env_backup" ]]; then
+        cp -p "$env_backup" "$uhm_env" || log "ERROR: cannot restore $(basename "$uhm_env")"
+        rm -f "$env_backup"
+    fi
+    exit "$exit_code"
+}
+
 install_module() {
     local gen_topic
+    created_unit=0
+    created_script=0
+    env_backup=""
+    trap install_rollback EXIT
     echo ""
     echo "Installing uhmalert (uhm alert)"
     echo ""
@@ -208,6 +232,8 @@ install_module() {
         log "INFO: UHM_NTFY_TOPIC already set, left untouched"
     else
         gen_topic="uhm-alert-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)"
+        env_backup=$(mktemp) && cp -p "$uhm_env" "$env_backup" \
+            || { env_backup=""; log "ERROR: cannot back up $(basename "$uhm_env") -abort"; exit 1; }
         insert_after_last_delimiter "$uhm_env" "# =============================================================================
 # UHM ALERT
 # =============================================================================
@@ -226,6 +252,7 @@ UHM_ALERT_DEDUP_SECONDS=300
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Deploying script to $target_path..."
+        [[ -e "$target_path" ]] || created_script=1
         if ! { mkdir -p "$(dirname "$target_path")" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh" \
             && install -m 750 -o root -g root "$self_path" "$target_path"; }; then
@@ -235,6 +262,7 @@ UHM_ALERT_DEDUP_SECONDS=300
     fi
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Writing systemd unit ($unit_path)..."
+    [[ -e "$unit_path" ]] || created_unit=1
     if ! cat > "$unit_path" <<'UNITEOF'
 [Unit]
 Description=UniFi Hotspot Connectivity Alert Watcher
@@ -270,6 +298,9 @@ UNITEOF
         log "ERROR: cannot start uhmalert.service -abort"
         exit 1
     fi
+
+    trap - EXIT
+    [[ -n "$env_backup" ]] && rm -f "$env_backup"
 
     echo ""
     echo "Installed and started. Check with: systemctl status uhmalert"
@@ -456,7 +487,7 @@ uhmd_started_at() {
 }
 
 notify() {
-    curl -s -d "$1" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
+    curl -s --connect-timeout 60 --max-time 300 -d "$1" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
 }
 
 # Bash builtins only, no fork -- systemd's default KillMode=control-group

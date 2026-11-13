@@ -109,7 +109,7 @@ UH_BOOL='^(true|false)$'
 is_managed_mac() {
     local mac_addr="$1" mac_file
     shopt -s nullglob
-    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    local mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     for mac_file in "${mac_files[@]}"; do
         grep -qiE "^#?a;${mac_addr};" "$mac_file" && return 0
@@ -154,10 +154,10 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/n
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='UNIFI_HOTSPOT_ENABLED UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_MAC_PATH UHM_RELOAD'
+env_keys='UNIFI_HOTSPOT_ENABLED UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_PATH UHM_RELOAD'
 
 # LOAD
-# pydhcp.env first: it owns ACL_MAC_PATH. uhm.env is read after, so uhm's
+# pydhcp.env first: it owns ACL_PATH. uhm.env is read after, so uhm's
 # own keys win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
@@ -165,10 +165,10 @@ load_uhm_env "$uhm_env" "$env_keys" key || true
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
-if ! grep -q "^ACL_MAC_PATH=" "$pydhcp_env"; then
-    key_errors+=("ACL_MAC_PATH missing line")
-elif [[ -z "${ACL_MAC_PATH:-}" ]]; then
-    key_errors+=("ACL_MAC_PATH not set")
+if ! grep -q "^ACL_PATH=" "$pydhcp_env"; then
+    key_errors+=("ACL_PATH missing line")
+elif [[ -z "${ACL_PATH:-}" ]]; then
+    key_errors+=("ACL_PATH not set")
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
@@ -378,10 +378,10 @@ done
 unset endpoint_rc
 
 shopt -s nullglob
-uhm_mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
+uhm_mac_lists=("$ACL_PATH"/mac-*.txt)
 shopt -u nullglob
 if (( ${#uhm_mac_lists[@]} == 0 )); then
-    log "ERROR: no mac-*.txt in $ACL_MAC_PATH -abort"
+    log "ERROR: no mac-*.txt in $ACL_PATH -abort"
     exit 1
 fi
 for check_file in "$UHM_MACAUTH" "${uhm_mac_lists[@]}"; do

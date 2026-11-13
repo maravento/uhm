@@ -369,7 +369,7 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_MAC_PATH ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
+env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
 
 # LOAD
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
@@ -381,7 +381,7 @@ load_uhm_env "$uhm_env" "$env_keys" key || true
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
-for env_key in ACL_PATH ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES; do
+for env_key in ACL_PATH ACL_BLOCK_FILE PYDHCPD_LEASES; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -899,7 +899,7 @@ queue_lease_removal() {
 mac_lists_hashes() {
     local mac_files=()
     shopt -s nullglob
-    mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     if (( ${#mac_files[@]} == 0 )); then
         echo "none none"
@@ -940,7 +940,7 @@ is_managed_mac() {
     [[ -z "$list_mac" ]] && return 1
     [[ "$list_mac" =~ $UH_MAC ]] || return 1
     shopt -s nullglob
-    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    local mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     for mac_file in "${mac_files[@]}"; do
         grep -qiE "^#?a;${list_mac};" "$mac_file" 2>/dev/null && return 0
@@ -954,7 +954,7 @@ is_managed_mac() {
 # (see uhmleases.sh), so it must never be granted a UniFi authorization either.
 list_managed_macs() {
     shopt -s nullglob
-    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    local mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     (( ${#mac_files[@]} == 0 )) && return
     awk -F';' '/^a;/{print tolower($2)}' "${mac_files[@]}" 2>/dev/null \
@@ -1231,8 +1231,8 @@ add_mac_to_acl() {
         fi
         local exp_human
         exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
-        log "INFO: Authorized $mac_addr ip=$client_ip"
-        log "INFO: host=${client_name:0:20} expires=$exp_human"
+        log "INFO: $mac_addr $client_ip ${client_name:0:20}"
+        log "INFO: Authorized $mac_addr until $exp_human"
     fi
 
     return 0
