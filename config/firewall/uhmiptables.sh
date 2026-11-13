@@ -44,7 +44,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep curl; do
+for dep_pkg in iptables ipset arptables ebtables kmod procps util-linux ulogd2 coreutils grep curl iproute2; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -60,6 +60,7 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_BOOL='^(true|false)$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
@@ -141,7 +142,7 @@ mac_set() {
     ipset flush "$set_name"
     [ -n "$src_file" ] || return 0
     if [ ! -f "$src_file" ]; then
-        log "WARNING: $src_file not found -alert"
+        log "WARNING: $(basename "$src_file") not found -alert"
         return 0
     fi
     for mac_addr in $(awk -F";" 'NF>=2 && $1 == "a" && $2 != "" {print $2}' "$src_file"); do
@@ -215,7 +216,6 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS UHM_PATH ACL_PATH WAN_IFACE ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_GRACE UHM_MACAUTH UHM_TOGGLES WPAD_PORT'
 
 # LOAD
 # Load all configuration from the two env files (network, paths, interfaces).
@@ -224,11 +224,7 @@ env_keys='INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS UHM_PATH ACL_PAT
 # Safe key=value parsing -- files
 # are never sourced to prevent code execution.
 load_uhm_env "$pydhcp_env" 'INTERFACESv4 SERVER_IP SERV_SUBNET SERV_MASK SERV_DNS ACL_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED WPAD_PORT' line || true
-load_uhm_env "$uhm_env" 'WAN_IFACE UHM_PATH UHM_GRACE UHM_MACAUTH UHM_TOGGLES UNIFI_HOTSPOT_ENABLED' line || true
-if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
-    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true/false -abort"
-    exit 1
-fi
+load_uhm_env "$uhm_env" 'WAN_IFACE UHM_GRACE UHM_MACAUTH UHM_TOGGLES UNIFI_HOTSPOT_ENABLED' line || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -280,13 +276,20 @@ if (( ${#key_errors[@]} > 0 )); then
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
 fi
-for env_key in WAN_IFACE UHM_PATH UHM_GRACE UHM_MACAUTH UHM_TOGGLES; do
+for env_key in WAN_IFACE UHM_GRACE UHM_MACAUTH UHM_TOGGLES; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     fi
 done
+if ! grep -q "^UNIFI_HOTSPOT_ENABLED=" "$uhm_env"; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED missing line")
+elif [[ -z "${UNIFI_HOTSPOT_ENABLED:-}" ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED not set")
+elif ! [[ "$UNIFI_HOTSPOT_ENABLED" =~ $UH_BOOL ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED invalid boolean")
+fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
@@ -310,7 +313,6 @@ for iface in "$WAN_IFACE" "$INTERFACESv4"; do
 done
 
 wan_iface="$WAN_IFACE"
-# wpad/pac port (DHCP option 252 target)
 # CIDR prefix derived from SERV_MASK, already validated by KEY CHECK
 [[ " $UH_PREFIX " =~ [[:space:]]${SERV_MASK//./\\.}:([0-9]+)[[:space:]] ]]
 netmask_int="${BASH_REMATCH[1]}"
@@ -318,6 +320,11 @@ netmask_int="${BASH_REMATCH[1]}"
 # ------------------------------------------------------------------------------
 # OWN VALUES
 # ------------------------------------------------------------------------------
+
+# SERVICE PORTS
+# Web ports of other maravento projects, opened to registered devices
+proxymon_warn_port=18771
+smbstack_web_port=3092
 
 # FIREWALL SWITCHES
 # On/off switches edited from FWView; a missing switch keeps its default
@@ -340,7 +347,7 @@ if [ -e "$fw_conf" ] || [ -L "$fw_conf" ]; then
         if [[ "$fw_value" == on || "$fw_value" == off ]]; then
             fw_switch[$fw_key]="$fw_value"
         else
-            log "WARNING: toggles.conf: invalid $fw_key, default -fallback"
+            log "WARNING: toggles.conf: bad $fw_key, default -fallback"
         fi
     done < "$fw_conf"
     unset fw_key fw_value fw_owner fw_mode
@@ -381,13 +388,13 @@ dhcp_conf="/etc/pydhcp/core/pydhcpd.conf"
 # Abort if a list this script depends on is missing
 for required_file in "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" "$dhcp_conf"; do
     if [ ! -f "$required_file" ]; then
-        log "ERROR: required file not found: $required_file -abort"
+        log "ERROR: required file not found: $(basename "$required_file") -abort"
         exit 1
     fi
 done
 unset required_file
 if [ ! -d "$acl_mac_path" ]; then
-    log "ERROR: ACL_MAC_PATH missing -abort"
+    log "ERROR: ACL_PATH directory not found -abort"
     exit 1
 fi
 
@@ -400,11 +407,27 @@ acl_prepare "$acl_path" 700 600
 blockports_file="$acl_path/blockports.txt"
 blockports_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/gateproxy/acl/blockports.txt"
 if [ ! -f "$blockports_file" ]; then
-    if ! curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$blockports_file" "$blockports_url"; then
+    # Download labels: rules.md, Etiquetas de descarga
+    blockports_rc=0
+    blockports_code=$(curl -sL --connect-timeout 10 --retry 3 --retry-delay 2 \
+        -w '%{http_code}' -o "$blockports_file" "$blockports_url") || blockports_rc=$?
+    case "${blockports_code:-000}" in
+        2*) if (( blockports_rc == 0 )); then
+                log "SAVED: $(basename "$blockports_url")"
+            else
+                log "PARTIAL: $blockports_url"
+            fi ;;
+        000) log "TIMEOUT: $blockports_url" ;;
+        5*) log "BUSY: $blockports_code $blockports_url" ;;
+        404|410) log "BROKEN: $blockports_code $blockports_url" ;;
+        *) log "HTTP_ERROR: $blockports_code $blockports_url" ;;
+    esac
+    if [[ "${blockports_code:-000}" != 2* ]] || (( blockports_rc != 0 )); then
         rm -f "$blockports_file"
-        log "ERROR: cannot download $blockports_file -abort"
+        log "ERROR: blockports.txt not available -abort"
         exit 1
     fi
+    unset blockports_rc blockports_code
 fi
 acl_fix_perms "$blockports_file" 600
 
@@ -439,7 +462,7 @@ ipset add macports machotspot -exist
 # ------------------------------------------------------------------------------
 
 # start
-log "uhmiptables start..."
+log "INFO: uhmiptables start..."
 
 # Reset firewall tables before applying the configured rules
 
@@ -984,10 +1007,10 @@ iptables -A FORWARD -i "$INTERFACESv4" -o "$wan_iface" -p icmp -j DROP
 
 # PROXYMON: WARNING PAGE HTTP FOR BANDATA
 # https://github.com/maravento/proxymon
-iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 18771 -m set --match-set macports src -j ACCEPT
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport "$proxymon_warn_port" -m set --match-set macports src -j ACCEPT
 # SMBSTACK
 # https://github.com/maravento/smbstack
-iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport 3092 -m set --match-set macports src -j ACCEPT
+iptables -A INPUT -i "$INTERFACESv4" -p tcp --dport "$smbstack_web_port" -m set --match-set macports src -j ACCEPT
 
 # COMMONS PORTS
 # SMB / Microsoft-DS
@@ -1198,4 +1221,4 @@ iptables -A FORWARD "${drop_in[@]}" -j DROP
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmiptables done"
+log "INFO: uhmiptables done"

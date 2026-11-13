@@ -115,9 +115,7 @@ repo_service="${repo_config}/service/uhmd.service"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmhotspot or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect)
-
-# Discovered runtime values (filled during install)
+apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect gzip diffutils arptables ebtables kmod ulogd2)
 
 # Output helpers
 log() {
@@ -128,7 +126,6 @@ log() {
 info() { log "INFO: $*"; }
 warn() { log "WARNING: $*"; }
 err() { log "ERROR: $*"; }
-step() { :; }
 abort() { err "$*"; exit 1; }
 
 # port in use
@@ -591,13 +588,17 @@ check_repo_files() {
     info "Repo files located"
 }
 
-check_apt_deps() {
-    local dep_pkg
+install_apt_deps() {
+    local dep_pkg missing_pkgs=()
     for dep_pkg in "${apt_deps[@]}"; do
-        if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
-            abort "dependency '$dep_pkg' is not installed -abort"
-        fi
+        [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
     done
+    (( ${#missing_pkgs[@]} == 0 )) && return 0
+    check_ipv4_interfaces
+    check_internet
+    DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
+        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -abort"; }
+    info "Installed: ${missing_pkgs[*]}"
 }
 
 # Aborts if software uhm would collide with is already installed. Same shape
@@ -606,13 +607,13 @@ check_apt_deps() {
 # the three is a conflict here.
 check_conflicts() {
     local role="$1"; shift
-    local found=() dep_pkg
+    local found=()
     for dep_pkg in "$@"; do
         if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
             found+=("$dep_pkg")
         fi
     done
-    if (( ${#found[@]} > 0 )); then
+    if [ "${#found[@]}" -gt 0 ]; then
         for dep_pkg in "${found[@]}"; do
             warn "conflicting $role: $dep_pkg -alert"
         done
@@ -632,7 +633,7 @@ warn_overlap() {
 }
 
 check_preinstalled() {
-    log "EVENT: Checking for conflicting pre-installed packages..."
+    log "INFO: Checking for conflicting pre-installed packages..."
     check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
     check_conflicts "web server"  nginx lighttpd caddy
     check_conflicts "firewall"    firewalld
@@ -672,6 +673,25 @@ list_ipv4_ifaces() {
             printf '%s\n' "$iface"
         fi
     done < <(list_ifaces)
+}
+
+# check ipv4 interfaces
+check_ipv4_interfaces() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if [ -n "$(list_ipv4_ifaces)" ]; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for an interface with IPv4..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no interface with IPv4 -abort"
+    exit 1
 }
 
 # LAN SELECTION
@@ -970,7 +990,7 @@ discover_unifi_controller() {
     local check_ports=(8443 11443)
     local test_url http_code login_payload
 
-    log "EVENT: Probing ${server_ip} on ports ${check_ports[*]} ..."
+    log "INFO: Probing ${server_ip} on ports ${check_ports[*]} ..."
     # Pass username/password to jq via environment, not --arg, so the
     # plaintext password never appears in jq's own argv (readable by any
     # local user via /proc/<pid>/cmdline).
@@ -1027,7 +1047,7 @@ fetch_unifi() {
 
     login_payload=$(UH_JQ_USER="$unifi_user" UH_JQ_PASS="$unifi_pass" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    cookie_jar=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -abort"; }
+    cookie_jar=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
 
     curl -sk -c "$cookie_jar" -o /dev/null \
         -X POST "${controller_url}${login_path}" \
@@ -1046,10 +1066,6 @@ run_setup_wizard() {
     local cfg_ini_range cfg_end_range cfg_essid
     local cfg_unifi_user cfg_unifi_pass cfg_reload_script
     local found_url found_type
-
-    step "pydhcp network configuration"
-
-    step "UniFi credentials"
     ask "UniFi admin username" "admin" cfg_unifi_user
     while true; do
         read -rsp " UniFi admin password: " cfg_unifi_pass; echo ""
@@ -1063,8 +1079,6 @@ run_setup_wizard() {
         [[ -n "$cfg_unifi_pass" ]] && break
         info "Password cannot be empty -retry"
     done
-
-    step "UniFi controller discovery"
     # uhm only supports a single controller -- discover_unifi_controller()
     # returns on the first match found, so "more than one" cannot occur here.
     # Not found means a real UniFi-side problem (wrong credentials, controller
@@ -1077,8 +1091,6 @@ run_setup_wizard() {
     else
         { err "no UniFi controller detected"; abort "UniFi controller: check credentials/service -abort"; }
     fi
-
-    step "Site selection"
     # UNIFI_SITE takes the site's internal name, not the name shown in UniFi
     local site_list=() site_answer cfg_site=""
     mapfile -t site_list < <(fetch_unifi "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass" self/sites \
@@ -1108,8 +1120,6 @@ run_setup_wizard() {
             info "invalid UniFi site selection -retry"
         done
     fi
-
-    step "SSID selection"
     local ssid_list=() ssid_config
     ssid_config=$(fetch_unifi "$found_url" "$found_type" "$cfg_unifi_user" "$cfg_unifi_pass" "s/$cfg_site/rest/wlanconf" \
         | jq -c '[.data[]? | select(.name | type == "string" and length > 0) | {name, is_guest}]' 2>/dev/null)
@@ -1180,7 +1190,6 @@ run_setup_wizard() {
     cfg_ini_range=""
     cfg_end_range=""
     if [[ "$cfg_hotspot_enabled" == true ]]; then
-        step "Hotspot IP range"
         # Two full addresses, the same shape pydhcp already uses for its own pool
         # (SERV_INI_RANGE_BLOCK/SERV_END_RANGE_BLOCK) -- no netmask is assumed.
         echo "Range of fixed addresses handed to voucher-authorized guests"
@@ -1216,11 +1225,7 @@ run_setup_wizard() {
             break
         done
     fi
-
-    step "Dependency check"
     check_unifi_versions "$found_type"
-
-    step "TLS certificate pin"
     local cfg_cert_pin=""
     local pin_host="${found_url#*://}"
     pin_host="${pin_host%%/*}"
@@ -1241,19 +1246,15 @@ run_setup_wizard() {
         warn "Could not compute TLS certificate pin"
         warn "uhmd will connect without pinning -alert"
     fi
-
-    step "Reload script"
     echo "Script invoked after every ACL change (must exist and be executable)"
     ask "Path to reload script" "${core_dir}/uhmreload.sh" cfg_reload_script
-
-    step "Timers"
+    [ -f "$cfg_reload_script" ] && [ -x "$cfg_reload_script" ] \
+        || abort "reload script not found or not executable -abort"
     ask_number "Daemon poll interval in seconds (POLL_INTERVAL)" "20" cfg_poll_interval
     cfg_grace_seconds=""
     if [[ "$cfg_hotspot_enabled" == true ]]; then
         ask_number "Grace period before blocking unknown MACs in seconds (BLOCKDHCP_GRACE_SECONDS)" "86400" cfg_grace_seconds
     fi
-
-    step "Managed MAC lists (optional)"
     echo "mac-*.txt files assign fixed IPv4 addresses to approved devices"
     if [[ "$cfg_hotspot_enabled" == true ]]; then
         echo "Approved devices bypass the captive portal"
@@ -1261,8 +1262,6 @@ run_setup_wizard() {
     echo "Files are stored in /etc/acl/ and managed manually"
     acl_prepare "$acl_mac_dir" 700 600
     info "Add your mac-*.txt files to /etc/acl/"
-
-    step "Writing $uhm_env"
     (
         umask 077
         local essid_answer user_answer pass_answer url_answer reload_script_answer
@@ -1281,7 +1280,7 @@ run_setup_wizard() {
         : > "$uhm_env"
 
         local uhm_block
-        uhm_block=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -abort"; }
+        uhm_block=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
 
         cat > "$uhm_block" <<EOF
 # =============================================================================
@@ -1390,23 +1389,23 @@ deploy_acl_files() {
 deploy_scripts() {
     install -m 644 -o root -g root "${repo_tools}/uhmenv.sh" "${tools_dir}/uhmenv.sh"
     info "updated tools/uhmenv.sh"
-    install -m 755 -o root -g root "$repo_uhmd" "${core_dir}/uhmd.sh"
+    install -m 750 -o root -g root "$repo_uhmd" "${core_dir}/uhmd.sh"
     info "updated core/uhmd.sh"
-    install -m 755 -o root -g root "${repo_core}/uhmreload.sh" "${core_dir}/uhmreload.sh"
+    install -m 750 -o root -g root "${repo_core}/uhmreload.sh" "${core_dir}/uhmreload.sh"
     info "updated core/uhmreload.sh"
-    install -m 755 -o root -g root "${repo_core}/uhmleases.sh" "${core_dir}/uhmleases.sh"
+    install -m 750 -o root -g root "${repo_core}/uhmleases.sh" "${core_dir}/uhmleases.sh"
     info "updated core/uhmleases.sh"
     # uhmwatch.sh lives under core/ (not tools/) because it is mandatory,
     # not an optional utility -- deployed explicitly here for that reason,
     # same as the other three core scripts above.
-    install -m 755 -o root -g root "${repo_core}/uhmwatch.sh" "${core_dir}/uhmwatch.sh"
+    install -m 750 -o root -g root "${repo_core}/uhmwatch.sh" "${core_dir}/uhmwatch.sh"
     info "updated core/uhmwatch.sh"
     local repo_file
     for repo_file in "${repo_tools}/"*.sh; do
         case "$(basename "$repo_file")" in
             uhmenv.sh) continue ;;
         esac
-        install -m 755 -o root -g root "$repo_file" "${tools_dir}/"
+        install -m 750 -o root -g root "$repo_file" "${tools_dir}/"
         info "updated tools/$(basename "$repo_file")"
     done
 }
@@ -1487,7 +1486,7 @@ install_web() {
 
     if ! apache2ctl configtest &>/dev/null; then
         warn "apache configtest failed, not reloaded"
-        warn "check $(basename "$vhost_dest"), run: systemctl reload apache2 -alert"
+        warn "check $(basename "$vhost_dest"), reload apache2 -alert"
         return 1
     fi
     if ! systemctl reload apache2 &>/dev/null; then
@@ -1561,7 +1560,7 @@ install_logrotate() {
     fi
     cat > "$logrotate_file" <<EOF
 ${uhm_log_file} {
-    daily
+    weekly
     rotate 7
     compress
     delaycompress
@@ -1578,7 +1577,6 @@ EOF
 }
 
 final_sanity_check() {
-    step "Sanity check"
     local issue_list=0
 
     if [[ ! -x "$uhm_iptables_dest" ]]; then
@@ -1639,9 +1637,8 @@ install_pydhcp() {
     info "pydhcp installed, pydhcpd active"
 }
 
-# Installs apache2, which uhm needs for the web panel. Unlike
-# apt_deps, these two are installed instead of merely verified: they are
-# uhm's own serving layer, not a tool it calls.
+# Installs apache2, which uhm needs for the web panel. Kept apart from
+# apt_deps because it also enables the apache2 service.
 install_apache2() {
     local dep_pkg missing_pkgs=()
 
@@ -1664,27 +1661,21 @@ install_apache2() {
 # ------------------------------------------------------------------------------
 
 do_install() {
-    check_apt_deps
+    install_apt_deps
 
     if [[ -d "$hotspot_dir" ]]; then
         err "uhm is already installed at ${hotspot_dir}"
         abort "use --update to upgrade, or --uninstall first -abort"
     fi
-
-    step "Network interfaces"
     select_network_interfaces
     read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
     lan_ip="${lan_cidr_answer%/*}"
     info "WAN interface: $wan_iface"
     info "LAN interface: $lan_iface ($lan_cidr_answer)"
     check_internet
-
-    step "Preflight"
     check_repo_files
     check_preinstalled
     check_port tcp 4048 "web interface"
-
-    step "UniFi dependency"
     if dpkg -s unifi &>/dev/null || [[ -f /var/lib/uosserver/server.conf ]]; then
         info "UniFi already installed"
     else
@@ -1697,7 +1688,7 @@ do_install() {
 
         echo "1) UniFi Network Application"
         echo "2) UniFi OS Server"
-        read -rp " Select an option (1-2): " unifi_choice
+        ask "Select an option (1-2)" 1 unifi_choice
         case "$unifi_choice" in
             1) unifi_action="network" ;;
             2) unifi_action="osserver" ;;
@@ -1705,12 +1696,25 @@ do_install() {
         esac
 
         local unifisetup_tmp
-        unifisetup_tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "check free space, read-only mount, immutable -abort"; }
-        if ! curl -fsSL "https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh" -o "$unifisetup_tmp"; then
+        unifisetup_tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
+        local unifisetup_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh"
+        local unifisetup_rc=0 unifisetup_code
+        unifisetup_code=$(curl -sL -w '%{http_code}' -o "$unifisetup_tmp" "$unifisetup_url") || unifisetup_rc=$?
+        case "${unifisetup_code:-000}" in
+            2*) if (( unifisetup_rc == 0 )); then
+                    log "SAVED: unifisetup.sh"
+                else
+                    log "PARTIAL: $unifisetup_url"
+                fi ;;
+            000) log "TIMEOUT: $unifisetup_url" ;;
+            5*) log "BUSY: $unifisetup_code $unifisetup_url" ;;
+            404|410) log "BROKEN: $unifisetup_code $unifisetup_url" ;;
+            *) log "HTTP_ERROR: $unifisetup_code $unifisetup_url" ;;
+        esac
+        if [[ "${unifisetup_code:-000}" != 2* ]] || (( unifisetup_rc != 0 )); then
             rm -f "$unifisetup_tmp"
-            { err "failed to download unifisetup.sh"; abort "check network access to GitHub -abort"; }
+            abort "unifisetup.sh not available -abort"
         fi
-        log "SAVED: unifisetup.sh"
         chmod +x "$unifisetup_tmp"
         local unifi_expect
         unifi_expect=$(mktemp) || abort "cannot create temp file in /tmp -abort"
@@ -1742,11 +1746,7 @@ EOF
     fi
 
     trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -alert"; perform_remove; }' EXIT
-
-    step "apache2"
     install_apache2
-
-    step "pydhcp"
     install_pydhcp
 
     for apache_php_ini in /etc/php/*/apache2/php.ini; do
@@ -1768,8 +1768,6 @@ EOF
     # host where uhm installs pydhcp itself.
     detect_dhcp_backend
     load_pydhcp_conf
-
-    step "Filesystem layout"
     deploy_directories
     deploy_scripts
     deploy_acl_files
@@ -1777,17 +1775,9 @@ EOF
     deploy_fw_switches
 
     run_setup_wizard
-
-    step "Logrotate"
     install_logrotate
-
-    step "Systemd service"
     install_systemd_service
-
-    step "Project cron"
     register_project_cron || abort "cannot write uhm cron -abort"
-
-    step "Optional components"
     if confirm "Install uhmalert (ntfy push notifications on connectivity loss)?" "n"; then
         bash "${tools_dir}/uhmalert.sh" --install
     fi
@@ -1828,7 +1818,7 @@ update_apache_port() {
 }
 
 do_update() {
-    check_apt_deps
+    install_apt_deps
     detect_dhcp_backend
     [ -d "$hotspot_dir" ] && [ -f "$core_dir/uhmd.sh" ] || abort "uhm is not installed -abort"
     local UNIFI_HOTSPOT_ENABLED=""
@@ -1840,10 +1830,10 @@ do_update() {
     update_reset /etc/cron.d/uhm
     local file mode
     for file in uhmd.sh uhmreload.sh uhmleases.sh uhmwatch.sh; do
-        update_file "$repo_core/$file" "$core_dir/$file" 755 root:root
+        update_file "$repo_core/$file" "$core_dir/$file" 750 root:root
     done
     for file in uhmenv.sh uhmtool.sh uhmalert.sh uhmhotspot.sh uhmbk.sh; do
-        mode=755
+        mode=750
         case "$file" in uhmenv.sh) mode=644 ;; esac
         update_file "$repo_tools/$file" "$tools_dir/$file" "$mode" root:root
     done
@@ -1909,8 +1899,7 @@ do_uninstall() {
     echo ""
     echo "This will permanently remove, without asking again:"
     echo "- uhmd.service: stopped, disabled, unit file removed"
-    echo "- cron entries pointing to ${hotspot_dir}/core/uhmreload.sh"
-    echo "- uhmwatch cron entry"
+    echo "- /etc/cron.d/uhm: uhmwatch and uhmbk entries"
     echo "- uhmalert.service if installed"
     echo "- web panel, its vhost and sudo rule, if installed"
     echo "- ${logrotate_file}"
@@ -1925,7 +1914,7 @@ do_uninstall() {
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" || {
         info "Aborted by user"
-        log "EVENT: uhmsetup done"
+        log "INFO: uhmsetup done"
         exit 0
     }
 
@@ -1937,7 +1926,7 @@ do_uninstall() {
     read -rp " > " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user"
-        log "EVENT: uhmsetup done"
+        log "INFO: uhmsetup done"
         exit 0
     fi
     echo ""
@@ -1962,7 +1951,6 @@ perform_remove() {
     # step-by-step negotiation.
 
     # Systemd service
-    step "Systemd service"
     if systemctl is-active --quiet uhmd 2>/dev/null || systemctl is-enabled --quiet uhmd 2>/dev/null; then
         systemctl disable --now uhmd 2>/dev/null || true
         info "uhmd.service disabled and stopped"
@@ -1974,12 +1962,10 @@ perform_remove() {
     fi
 
     # Cron entries
-    step "Cron"
     rm -f /etc/cron.d/uhm /etc/cron.d/uhm.update-disabled
     info "Cron entries removed"
 
     # uhmalert (optional component)
-    step "uhmalert"
     if [[ -f /etc/systemd/system/uhmalert.service ]]; then
         systemctl disable --now uhmalert 2>/dev/null || true
         rm -f /etc/systemd/system/uhmalert.service
@@ -1990,11 +1976,9 @@ perform_remove() {
     fi
 
     # Web interface (optional component)
-    step "Web interface"
     remove_web
 
     # Logrotate
-    step "Logrotate"
     if [[ -f "$logrotate_file" ]]; then
         rm -f "$logrotate_file"
         info "Removed $logrotate_file"
@@ -2003,13 +1987,11 @@ perform_remove() {
     fi
 
     # uhmbk cron entry
-    step "uhmbk"
     if [[ -x "$uhmbk_script" ]]; then
         "$uhmbk_script" --uninstall || true
     fi
 
     # /etc/uhm
-    step "$hotspot_dir"
     if [[ -d "$hotspot_dir" ]]; then
         # Everything under hotspot_dir goes, including uhm.env, the ACL
         # lists and uhmiptables.sh: uninstalling means removing the project.
@@ -2021,7 +2003,6 @@ perform_remove() {
     fi
 
     # Logs
-    step "Logs"
     local extra_logs=() check_log
     for check_log in /var/log/uhmhotspot.log /var/log/uhmleases-failure.trace /var/log/uhmiptables-failure.trace; do
         [[ -f "$check_log" ]] && extra_logs+=("$check_log")
@@ -2149,7 +2130,7 @@ env_keys='INTERFACESv4 SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS S
 # ------------------------------------------------------------------------------
 
 # Run the action given on the command line, or fall back to the menu
-log "EVENT: uhmsetup start..."
+log "INFO: uhmsetup start..."
 
 case "${1:-}" in
     --install) do_install ;;
@@ -2164,4 +2145,4 @@ case "${1:-}" in
         ;;
 esac
 
-log "EVENT: uhmsetup done"
+log "INFO: uhmsetup done"

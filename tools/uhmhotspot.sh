@@ -82,7 +82,7 @@ esac
 unset log_stat
 
 # dependencies
-for dep_pkg in curl jq coreutils util-linux grep sed; do
+for dep_pkg in curl jq coreutils util-linux grep sed diffutils; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -96,6 +96,7 @@ done
 # validation -- one variable per thing validated; use directly with =~
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
+UH_BOOL='^(true|false)$'
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
@@ -149,7 +150,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UNIFI_HOTSPOT_ENABLED UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_SITE UNIFI_TYPE UNIFI_CERT_PIN UHM_ESSID UHM_MACAUTH UHM_QUEUE ACL_MAC_PATH UHM_RELOAD'
 
 # LOAD
@@ -157,10 +161,6 @@ env_keys='UNIFI_HOTSPOT_ENABLED UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWO
 # own keys win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
-if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true ]]; then
-    log "ERROR: uhmhotspot requires UNIFI_HOTSPOT_ENABLED=true -abort"
-    exit 1
-fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -178,7 +178,7 @@ if (( ${#key_errors[@]} > 0 )); then
     exit 1
 fi
 for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
-               UHM_ESSID UHM_MACAUTH UHM_RELOAD; do
+               UHM_ESSID UHM_MACAUTH UHM_QUEUE UHM_RELOAD; do
     if ! grep -q "^${env_key}=" "$uhm_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -201,6 +201,13 @@ elif [[ -z "${UNIFI_SITE:-}" ]]; then
 elif [[ ! "$UNIFI_SITE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     key_errors+=("UNIFI_SITE invalid characters")
 fi
+if ! grep -q "^UNIFI_HOTSPOT_ENABLED=" "$uhm_env"; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED missing line")
+elif [[ -z "${UNIFI_HOTSPOT_ENABLED:-}" ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED not set")
+elif ! [[ "$UNIFI_HOTSPOT_ENABLED" =~ $UH_BOOL ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED invalid boolean")
+fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
         log "WARNING: $key_error -alert"
@@ -209,6 +216,10 @@ if (( ${#key_errors[@]} > 0 )); then
     exit 1
 fi
 unset key_errors key_error env_key
+if [[ "$UNIFI_HOTSPOT_ENABLED" != true ]]; then
+    log "ERROR: uhmhotspot requires UNIFI_HOTSPOT_ENABLED=true -abort"
+    exit 1
+fi
 
 # ------------------------------------------------------------------------------
 # AUTH
@@ -716,7 +727,7 @@ remove_voucher_local_mac() (
         log "WARNING: uhm-auth.txt busy -alert"
         return 1
     }
-    if ! recover_uhm_expiry "$UHM_MACAUTH" "${UHM_QUEUE:-}"; then
+    if ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
         log "WARNING: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -alert"
         return 1
     fi
@@ -1212,9 +1223,9 @@ main_menu() {
 }
 
 # start
-log "uhmhotspot start..."
+log "INFO: uhmhotspot start..."
 
 main_menu || { log "ERROR: revocation incomplete -abort"; exit 1; }
 
 # end
-log "uhmhotspot done"
+log "INFO: uhmhotspot done"

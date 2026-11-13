@@ -178,7 +178,7 @@ insert_after_last_delimiter() {
             || { log "ERROR: cannot write $(basename "$conf_file") -abort"; exit 1; }
         return
     fi
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
     if ! { head -n "$last_line" "$conf_file" > "$tmp_file" \
         && printf '\n%s\n' "$env_block" >> "$tmp_file" \
         && tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file" \
@@ -225,16 +225,16 @@ UHM_ALERT_DEDUP_SECONDS=300
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Deploying script to $target_path..."
+        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Deploying script to $target_path..."
         if ! { mkdir -p "$(dirname "$target_path")" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh" \
-            && install -m 755 -o root -g root "$self_path" "$target_path"; }; then
+            && install -m 750 -o root -g root "$self_path" "$target_path"; }; then
             log "ERROR: cannot deploy uhmalert to $target_path -abort"
             exit 1
         fi
     fi
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Writing systemd unit ($unit_path)..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Writing systemd unit ($unit_path)..."
     if ! cat > "$unit_path" <<'UNITEOF'
 [Unit]
 Description=UniFi Hotspot Connectivity Alert Watcher
@@ -281,7 +281,7 @@ UNITEOF
 }
 
 uninstall_module() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Stopping and disabling uhmalert.service..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Stopping and disabling uhmalert.service..."
     systemctl stop uhmalert.service 2>/dev/null || true
     systemctl disable uhmalert.service 2>/dev/null || true
     if ! { rm -f "$unit_path" && systemctl daemon-reload; }; then
@@ -297,15 +297,15 @@ uninstall_module() {
 
 case "${1:-}" in
     --install)
-        log "uhmalert start..."
+        log "INFO: uhmalert start..."
         install_module
-        log "uhmalert done"
+        log "INFO: uhmalert done"
         exit 0
         ;;
     --uninstall)
-        log "uhmalert start..."
+        log "INFO: uhmalert start..."
         uninstall_module
-        log "uhmalert done"
+        log "INFO: uhmalert done"
         exit 0
         ;;
     "") ;;
@@ -361,7 +361,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UHM_NTFY_TOPIC UHM_API_FAIL_THRESHOLD UHM_ALERT_QUIET_PERIOD_SECONDS UHM_ALERT_JITTER_SECONDS UHM_ALERT_DEDUP_SECONDS UHM_API_TIMEOUT_SECONDS POLL_INTERVAL'
 
 # LOAD
@@ -469,7 +472,7 @@ on_term() {
 trap on_term TERM INT
 
 # start
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmalert start..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmalert start..."
 
 exec 3< <(tail -n0 -F "$log_file" 2>/dev/null)
 
@@ -538,15 +541,7 @@ while true; do
             fi
             last_generic_msg="$log_msg"
             last_generic_time="$now_epoch"
-            # The quoted line carries its own label and control action; both
-            # are stripped so this one does not end up with two of each.
-            alert_text="${log_msg#* }"
-            case "$alert_text" in
-                *" -abort"|*" -alert"|*" -fallback"|*" -skip"|*" -retry"|*" -fixed")
-                    alert_text="${alert_text% -*}" ;;
-            esac
             notify "uhm: $log_msg"
-            log "INFO: $alert_text"
             continue
         fi
 

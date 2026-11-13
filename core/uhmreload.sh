@@ -31,7 +31,7 @@ log() {
     local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
     echo "$log_msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then
-        echo "$log_msg" >&2
+        [[ /proc/self/fd/2 -ef "$log_file" ]] || echo "$log_msg" >&2
     else
         echo "$log_msg"
     fi
@@ -210,7 +210,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_LEASES UHM_IPTABLES'
 
 # LOAD
@@ -258,7 +261,7 @@ unset key_errors key_error env_key
 # whoever invoked it -- so nothing is lost if this wrapper goes away.
 
 # start
-log "uhmreload start..."
+log "INFO: uhmreload start..."
 
 # Abort if uhmd isn't active -- nothing downstream should run blindly.
 if ! systemctl is-active --quiet uhmd; then
@@ -266,7 +269,7 @@ if ! systemctl is-active --quiet uhmd; then
     exit 1
 fi
 
-run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 755
+run_step "$UHM_LEASES" "uhmleases.sh" "$UHM_LEASES_TIMEOUT_SECONDS" 750
 
 run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
 
@@ -274,4 +277,4 @@ run_step "$UHM_IPTABLES" "uhmiptables.sh" "$UHM_IPTABLES_TIMEOUT_SECONDS" 750
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmreload done"
+log "INFO: uhmreload done"

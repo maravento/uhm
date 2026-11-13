@@ -30,7 +30,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # dependencies
-for dep_pkg in curl jq coreutils util-linux grep sed systemd; do
+for dep_pkg in curl jq coreutils util-linux grep sed systemd gzip findutils; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         printf '{"error":"missing dependency %s"}\n' "$dep_pkg"
         exit 1
@@ -171,10 +171,13 @@ json_escape() {
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    json_error "cannot load uhmenv.sh"
+    exit 1
+fi
 env_keys='UNIFI_HOTSPOT_ENABLED BLOCKDHCP_GRACE_SECONDS UHM_MACAUTH UHM_GRACE UHM_QUEUE UHM_ESSID ACL_BLOCK_FILE ACL_MAC_PATH PYDHCPD_LEASES UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN'
 
-# The log group only needs the log file, which is world-readable and has no
+# The log group only needs the log file, which has no
 # credentials in it. Loading the configuration is deferred to the groups
 # that read ACL files or call the controller, so this stays a function
 # instead of a top-level ENV section.
@@ -221,7 +224,7 @@ load_env() {
             key_errors+=("$env_key not set")
         fi
     done
-    for env_key in UHM_MACAUTH UHM_GRACE; do
+    for env_key in UHM_MACAUTH UHM_GRACE UHM_QUEUE; do
         if ! grep -q "^${env_key}=" "$uhm_env"; then
             key_errors+=("$env_key missing line")
         elif [[ -z "${!env_key:-}" ]]; then
@@ -325,7 +328,7 @@ load_fw_env() {
 # ------------------------------------------------------------------------------
 
 # Emits the rows array of a log payload. Lines without a timestamp are
-# dropped, and a line with no level is reported as STATUS.
+# dropped, and a line with no level is reported as INFO.
 print_log_rows() {
     local log_data="$1"
     local log_line row_ts row_level row_msg first_row=1
@@ -335,13 +338,13 @@ print_log_rows() {
         [[ -z "$log_line" ]] && continue
 
         row_ts="" row_level="" row_msg=""
-        if [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR|ALERT|FIX):\ (.*) ]]; then
+        if [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (INFO|WARNING|ERROR):\ (.*) ]]; then
             row_ts="${BASH_REMATCH[1]}"
             row_level="${BASH_REMATCH[2]}"
             row_msg="${BASH_REMATCH[3]}"
         elif [[ "$log_line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\ (.*) ]]; then
             row_ts="${BASH_REMATCH[1]}"
-            row_level="STATUS"
+            row_level="INFO"
             row_msg="${BASH_REMATCH[2]}"
         else
             continue
@@ -373,7 +376,7 @@ log_status() {
 }
 
 log_grep() {
-    local search_term="$1" grep_output file_size
+    local search_term="$1" grep_output file_size log_files
 
     if [[ -z "$search_term" ]]; then
         json_error "empty search term"
@@ -389,11 +392,44 @@ log_grep() {
     fi
 
     file_size=$(stat -c%s "$uhm_log_file" 2>/dev/null || echo 0)
-    grep_output=$(timeout 20 grep -Fia -e "$search_term" -- "$uhm_log_file" 2>/dev/null | tail -n "$max_grep_lines" || true)
+    log_files=("$uhm_log_file")
+    [[ -f "$uhm_log_file.1" ]] && log_files=("$uhm_log_file.1" "$uhm_log_file")
+    grep_output=$(timeout 20 grep -Fiah -e "$search_term" -- "${log_files[@]}" 2>/dev/null | tail -n "$max_grep_lines" || true)
 
     printf '{"rows":'
     print_log_rows "$grep_output"
     printf ',"offset":%d,"grep":true}\n' "$file_size"
+}
+
+# Searches every rotation, compressed ones included, oldest first. Run on
+# demand from ToolView only: the live view never reads .gz.
+log_archive() {
+    local search_term="$1" grep_output rotation log_files=()
+
+    if [[ -z "$search_term" ]]; then
+        json_error "empty search term"
+        return 1
+    fi
+    if [[ ! "$search_term" =~ ^[[:alnum:][:space:].:/@_-]+$ ]]; then
+        json_error "invalid search term"
+        return 1
+    fi
+    for rotation in 7 6 5 4 3 2; do
+        [[ -f "$uhm_log_file.$rotation.gz" ]] && log_files+=("$uhm_log_file.$rotation.gz")
+    done
+    [[ -f "$uhm_log_file.1" ]] && log_files+=("$uhm_log_file.1")
+    [[ -f "$uhm_log_file" ]] && log_files+=("$uhm_log_file")
+    if (( ${#log_files[@]} == 0 )); then
+        json_error "log file not found"
+        return 1
+    fi
+
+    grep_output=$(timeout 20 zcat -f -- "${log_files[@]}" 2>/dev/null \
+        | grep -Fia -e "$search_term" | tail -n "$max_grep_lines" || true)
+
+    printf '{"rows":'
+    print_log_rows "$grep_output"
+    printf '}\n'
 }
 
 # Reads by byte offset instead of following the file, so a request always
@@ -415,7 +451,8 @@ log_tail() {
     (( log_lines < 50 )) && log_lines=50
 
     if (( byte_pos == 0 )) || (( byte_pos > file_size )); then
-        log_chunk=$(head -c "$file_size" "$uhm_log_file" 2>/dev/null |
+        log_chunk=$({ cat -- "$uhm_log_file.1" 2>/dev/null
+            head -c "$file_size" "$uhm_log_file" 2>/dev/null; } |
             tail -n "$log_lines"; printf X)
         log_rotated=true
     else
@@ -582,7 +619,7 @@ acl_write() {
     (umask 077; : >> "$cycle_lock")
     exec 201>"$cycle_lock"
     flock -w 10 201 || { json_error "ACL file busy"; return 1; }
-    if ! recover_uhm_expiry "$UHM_MACAUTH" "${UHM_QUEUE:-}"; then
+    if ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
         flock -u 201
         json_error "$(uhm_expiry_recovery_message "$UHM_MACAUTH")"
         return 1
@@ -1163,10 +1200,10 @@ usage() {
 Usage: sudo bash $(basename "$0") <group> --<action> [arguments]
 
 Groups and actions:
-  log    --tail [pos] [lines] | --grep <term> | --status
+  log    --tail [pos] [lines] | --grep <term> | --status | --archive <term>
   acl    --list | --read <name> | --write <name> (content on stdin)
   fw     --read | --write <KEY> <on|off>
-  report --mac <--mac> | --grace | --consistency | --search <query>
+  report --mac <mac> | --grace | --consistency | --search <query>
   unifi  --status | --authorized | --vouchers | --guests | --unauthorized
 EOF
 }
@@ -1179,12 +1216,16 @@ case "$tool_group" in
         usage
         exit 0
         ;;
+    "")
+        usage
+        exit 1
+        ;;
 esac
 
 # start
 # Both messages go to stderr: stdout carries the JSON document, and
 # web/api.php discards stderr, so neither reaches the consumer.
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool start..." >&2
+echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmtool start..." >&2
 
 case "$tool_group" in
     log)
@@ -1192,6 +1233,7 @@ case "$tool_group" in
             --tail) log_tail "${3:-0}" "${4:-200}" || exit 1 ;;
             --grep) log_grep "${3:-}" || exit 1 ;;
             --status) log_status || exit 1 ;;
+            --archive) log_archive "${3:-}" || exit 1 ;;
             *) json_error "unknown log action"; exit 1 ;;
         esac
         ;;
@@ -1256,6 +1298,6 @@ esac
 # END
 # ------------------------------------------------------------------------------
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmtool done" >&2
+echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmtool done" >&2
 
 exit 0

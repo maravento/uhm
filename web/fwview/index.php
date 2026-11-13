@@ -83,9 +83,12 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 
 /* -- Switch list ---------------------------------------------- */
 .uh-list{flex:1;overflow:auto}
-.uh-row{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border)}
+/* Three columns: label (left), action badge, state and switch (right). */
+.uh-row{display:grid;grid-template-columns:minmax(0,1fr) 72px auto;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border)}
 .uh-row:hover{background:var(--row-hover)}
-.uh-row .lbl{flex:1;min-width:0}
+.uh-row .lbl{min-width:0}
+.uh-row .act{text-align:left}
+.uh-row .ctl{display:flex;align-items:center;gap:8px}
 .uh-row .lbl div{font-size:12.5px;color:var(--text)}
 /* Action badge: blue/orange stay distinct for red-green color blindness,
    and the word plus symbol carry the meaning on their own. */
@@ -164,13 +167,15 @@ function row(t){
   // with its word and a symbol, so it never depends on color alone.
   var m=/^([A-Z0-9]+):\s+(ALLOW|DROP|LIMIT|MODE)\s+(.*)$/.exec(t.label||'');
   var name=document.createElement('div');
+  var act=document.createElement('div');act.className='act';
   if(m){
-    var tag=document.createElement('b');tag.textContent=m[1]+' ';
+    var tag=document.createElement('b');tag.textContent=m[1]+':';
+    name.appendChild(tag);
+    name.appendChild(document.createTextNode(' '+m[3]));
     var badge=document.createElement('span');
     badge.className='uh-act '+m[2].toLowerCase();
     badge.textContent=(BADGE[m[2]]||'')+' '+m[2];
-    name.appendChild(tag);name.appendChild(badge);
-    name.appendChild(document.createTextNode(' '+m[3]));
+    act.appendChild(badge);
   }else{
     name.textContent=t.label||t.key;
   }
@@ -184,7 +189,9 @@ function row(t){
   function showState(){state.textContent=box.checked?'ON':'OFF';state.className='uh-state'+(box.checked?' on':'')}
   showState();
   box.addEventListener('change',function(){showState();save(t.key,box,showState)});
-  r.appendChild(lbl);r.appendChild(state);r.appendChild(sw);
+  var ctl=document.createElement('div');ctl.className='ctl';
+  ctl.appendChild(state);ctl.appendChild(sw);
+  r.appendChild(lbl);r.appendChild(act);r.appendChild(ctl);
   return r;
 }
 

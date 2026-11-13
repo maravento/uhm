@@ -84,15 +84,15 @@ if ! flock -n 200; then
     exit 1
 fi
 
-# uhmd.sh/uhmleases.sh hold this same lock (cycle_lock in uhmd.sh) for the
-# ~1-3s a reload actively stops/reconfigures/starts pydhcpd -- a real,
-# expected gap, not a failure. Without this check, a cron tick landing in
-# that narrow window sees pydhcpd not-yet-restarted, restarts it itself, and
+# uhmleases.sh holds its own lock for its whole run, including the ~1-3s it
+# stops/reconfigures/starts pydhcpd -- a real, expected gap, not a failure.
+# Only uhmleases.sh stops pydhcpd, so only its lock means "skip". Without this
+# check, a cron tick landing in that window restarts pydhcpd itself and
 # collides with uhmleases.sh's own pending `systemctl start pydhcpd`,
 # aborting that reload (uhmleases.sh exits 1). fd 250 is used only for this
 # instantaneous non-blocking probe -- always released right after, opened
 # fresh on every call so it never competes with script_lock (fd 200) above.
-uhm_cycle_lock="/var/lock/uhmd-cycle.lock"
+uhm_cycle_lock="/var/lock/uhmleases.lock"
 uhm_reload_in_progress() {
     [[ -e "$uhm_cycle_lock" ]] || return 1
     { exec 250>"$uhm_cycle_lock"; } 2>/dev/null || return 1
@@ -190,11 +190,11 @@ install_module() {
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Deploying script to $target_path..."
+        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Deploying script to $target_path..."
         if ! { mkdir -p "$(dirname "$target_path")" \
             && mkdir -p "$(dirname "$target_path")/../tools" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/../tools/uhmenv.sh" "$(dirname "$target_path")/../tools/uhmenv.sh" \
-            && install -m 755 -o root -g root "$self_path" "$target_path"; }; then
+            && install -m 750 -o root -g root "$self_path" "$target_path"; }; then
             log "ERROR: cannot deploy to $target_path -abort"
             exit 1
         fi
@@ -227,15 +227,15 @@ uninstall_module() {
 # to the same log uhmalert.sh reads to detect real failures.
 case "${1:-}" in
     --install)
-        log "uhmwatch start..."
+        log "INFO: uhmwatch start..."
         install_module
-        log "uhmwatch done"
+        log "INFO: uhmwatch done"
         exit 0
         ;;
     --uninstall)
-        log "uhmwatch start..."
+        log "INFO: uhmwatch start..."
         uninstall_module
-        log "uhmwatch done"
+        log "INFO: uhmwatch done"
         exit 0
         ;;
     "") ;;
@@ -246,7 +246,7 @@ case "${1:-}" in
         ;;
 esac
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch start..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmwatch start..."
 
 # ------------------------------------------------------------------------------
 # ENV
@@ -280,7 +280,10 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UNIFI_TYPE UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_CERT_PIN RECOVERY_COOLDOWN_SECONDS STARTUP_GRACE_SECONDS'
 
 # LOAD
@@ -302,7 +305,7 @@ if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
 elif [[ -z "${UNIFI_TYPE:-}" ]]; then
     key_errors+=("UNIFI_TYPE not set")
 elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
-    key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
+    key_errors+=("UNIFI_TYPE invalid type")
 fi
 if ! grep -q "^RECOVERY_COOLDOWN_SECONDS=" "$uhm_env"; then
     key_errors+=("RECOVERY_COOLDOWN_SECONDS missing line")
@@ -621,4 +624,4 @@ else
 fi
 
 # end
-echo "$(date '+%Y-%m-%d %H:%M:%S') uhmwatch done"
+echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmwatch done"

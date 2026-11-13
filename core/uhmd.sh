@@ -71,7 +71,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in curl jq coreutils util-linux grep sed systemd; do
+for dep_pkg in curl jq coreutils util-linux grep sed systemd iproute2; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -86,6 +86,7 @@ done
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_BOOL='^(true|false)$'
 UH_SINT='^(0|-?[1-9][0-9]*)$'
 UH_MAX=9223372036854775807
 UH_MIN=-9223372036854775808
@@ -101,6 +102,7 @@ voucher_count=0
 sessions_authorized=0
 revoked_total=0
 newly_authorized_macs=()
+kick_pending_macs=()
 declare -A revoked_sessions=()
 # Backend readiness tracking: the login endpoint can answer well before the
 # UniFi Network application's data endpoints (stat/voucher, stat/guest,
@@ -121,6 +123,7 @@ reload_ok=0
 # ACL snapshot/reload mechanism above -- its own baseline and its own pending
 # flag, never reusing uhm-queue.txt or the acl_snapshot_* machinery.
 mac_lists_hash_prev=""
+mac_lists_norm_prev=""
 mac_reload_pending=0
 # Set when uhmreload.sh returns 75 (busy, no work done): next cycle retries.
 reload_busy_pending=0
@@ -134,9 +137,7 @@ reload_busy_pending=0
 # themselves configurable, so the floor is computed, not fixed. The cadence
 # is measured from the moment a reload starts, not when it ends, so at the
 # floor the daemon still rests at least twice as long as the slowest reload
-# the timeouts allow. Every reload stops and starts pydhcpd. Fallbacks 120
-# and 60 must stay in sync with uhmreload.sh, which reads the same two
-# values.
+# the timeouts allow. Every reload stops and starts pydhcpd.
 last_reload_epoch=0
 
 token_state_file="/run/uhmd_session"
@@ -258,7 +259,7 @@ cleanup_temp() {
         log_raw "INFO: uhmd cycle interrupted"
     fi
     if (( exit_code != 1 )) && declare -F log_raw &>/dev/null; then
-        log_raw "uhmd done"
+        log_raw "INFO: uhmd done"
     fi
 }
 trap cleanup_temp EXIT
@@ -364,7 +365,10 @@ unset env_owner env_perms
 # so a tampered or maliciously replaced config file cannot execute code.
 # Canonical parser, identical in every script of the project: a malformed
 # line aborts.
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_MAC_PATH ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
 
 # LOAD
@@ -373,10 +377,6 @@ env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UN
 # win if a name ever collides.
 load_uhm_env "$pydhcp_env" "$env_keys" key || true
 load_uhm_env "$uhm_env" "$env_keys" key || true
-if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
-    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true/false -abort"
-    exit 1
-fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -429,7 +429,14 @@ for env_key in UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD \
         key_errors+=("$env_key not set")
     fi
 done
-if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+if ! grep -q "^UNIFI_HOTSPOT_ENABLED=" "$uhm_env"; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED missing line")
+elif [[ -z "${UNIFI_HOTSPOT_ENABLED:-}" ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED not set")
+elif ! [[ "$UNIFI_HOTSPOT_ENABLED" =~ $UH_BOOL ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED invalid boolean")
+fi
+if [[ "${UNIFI_HOTSPOT_ENABLED:-}" == true ]]; then
     if [[ -z "${UHM_ESSID:-}" ]]; then
         key_errors+=("UHM_ESSID is required in Hotspot mode")
     fi
@@ -469,7 +476,7 @@ if ! grep -q "^UNIFI_TYPE=" "$uhm_env"; then
 elif [[ -z "${UNIFI_TYPE:-}" ]]; then
     key_errors+=("UNIFI_TYPE not set")
 elif [[ "$UNIFI_TYPE" != "unifi-os" ]] && [[ "$UNIFI_TYPE" != "classic" ]]; then
-    key_errors+=("UNIFI_TYPE invalid type, expected unifi-os or classic")
+    key_errors+=("UNIFI_TYPE invalid type")
 fi
 # UNIFI_SITE is interpolated directly into API URLs (api_path()) -- reject
 # anything outside the character set UniFi itself uses for site names.
@@ -637,7 +644,7 @@ unifi_login() {
         login_url="${UNIFI_CONTROLLER_URL}/api/login"
     fi
 
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
     # Pass username/password to jq via environment, not --arg, so the
     # plaintext password never appears in jq's own argv (readable by any
     # local user via /proc/<pid>/cmdline). Environment is only readable by
@@ -715,7 +722,7 @@ api_get() {
     load_session
 
     local header_file
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
 
     local curl_args=(-s -k -w "\n__CODE__:%{http_code}" -D "$header_file"
         -H "Cookie: $(session_cookie_name)=${session_token}")
@@ -768,7 +775,7 @@ api_post() {
     load_session
 
     local header_file
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
 
     local curl_args=(-s -k -w "\n__CODE__:%{http_code}" -D "$header_file"
         -X POST
@@ -884,25 +891,36 @@ queue_lease_removal() {
 # that *something* changed, with zero parsing of MACs/status.
 #
 # A change detected this cycle does NOT reload immediately -- it only sets
-# mac_reload_pending for check_and_reload_if_changed to pick up next cycle,
+# mac_reload_pending for check_and_reload_if_changed later in this cycle,
 # so it never causes a second, separate uhmreload.sh invocation in the same run
 # as one already triggered by the uhm-auth/blockdhcp/queue/uhm-grace diff.
-check_mac_lists_changed() {
-    local cur_hash
+# Prints the raw hash of mac-*.txt and the hash of their content, which
+# ignores order, empty lines and lines repeated exactly
+mac_lists_hashes() {
+    local mac_files=()
     shopt -s nullglob
-    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    mac_files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
-    if (( ${#mac_files[@]} > 0 )); then
-        cur_hash=$(md5sum "${mac_files[@]}" 2>/dev/null | sort | md5sum | awk '{print $1}')
-    else
-        cur_hash="none"
+    if (( ${#mac_files[@]} == 0 )); then
+        echo "none none"
+        return
     fi
+    printf '%s %s\n' \
+        "$(md5sum "${mac_files[@]}" 2>/dev/null | sort | md5sum | awk '{print $1}')" \
+        "$(awk '$0 != "" {print FILENAME ";" $0}' "${mac_files[@]}" 2>/dev/null \
+            | LC_ALL=C sort -u | md5sum | awk '{print $1}')"
+}
+
+check_mac_lists_changed() {
+    local cur_hash cur_norm
+    read -r cur_hash cur_norm < <(mac_lists_hashes)
 
     if [[ -n "$mac_lists_hash_prev" && "$cur_hash" != "$mac_lists_hash_prev" ]]; then
         mac_reload_pending=1
-        log "INFO: mac-*.txt changed, reload next cycle"
+        log "INFO: mac-*.txt changed, reload queued"
     fi
     mac_lists_hash_prev="$cur_hash"
+    mac_lists_norm_prev="$cur_norm"
 }
 
 # MANAGED MAC CHECK
@@ -1012,7 +1030,7 @@ check_malformed() {
     local check_file="$1" line_pattern="$2" check_ip="${3:-1}" on_malformed="${4:-drop}"
     [[ -f "$check_file" ]] || return 0
     local tmp_file env_line client_ip dropped_count=0 write_failed=0
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
     temp_files+=("$tmp_file")
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ -z "$env_line" ]] && continue
@@ -1088,7 +1106,7 @@ dedup_mac_lists() {
 
     if [[ -f "$ACL_BLOCK_FILE" ]]; then
         local tmp_block
-        tmp_block=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+        tmp_block=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
         temp_files+=("${tmp_block}")
         while IFS= read -r env_line || [[ -n "$env_line" ]]; do
             [[ -z "$env_line" ]] && continue
@@ -1154,7 +1172,7 @@ sort_acl_files() {
     local tmp_file
 
     if [[ -s "$UHM_MACAUTH" ]]; then
-        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -abort"; exit 1; }
+        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
         temp_files+=("${tmp_file}")
         if ! sort -t';' -k3,3V "$UHM_MACAUTH" | uniq > "$tmp_file"; then
             log "WARNING: cannot sort uhm-auth.txt -alert"
@@ -1201,8 +1219,7 @@ add_mac_to_acl() {
                 log "INFO: end_time update failed for $mac_addr -skip"
                 return 1
             fi
-            log "INFO: updated end_time for $mac_addr"
-            log "INFO: new end_time $existing_end -> $end_time"
+            log "INFO: end_time $mac_addr $existing_end -> $end_time"
         fi
     else
         if ! queue_lease_removal "$mac_addr"; then
@@ -1214,10 +1231,8 @@ add_mac_to_acl() {
         fi
         local exp_human
         exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
-        log "INFO: Authorized $mac_addr"
-        log "INFO: ip=$client_ip"
-        log "INFO: host=${client_name:0:20}"
-        log "INFO: expires=$exp_human"
+        log "INFO: Authorized $mac_addr ip=$client_ip"
+        log "INFO: host=${client_name:0:20} expires=$exp_human"
     fi
 
     return 0
@@ -1501,10 +1516,7 @@ process_sessions() {
             # authorized -- only the expiration time is updated.
             # assign_ip_and_hostname() is never called here since no new
             # IP is needed.
-            log "INFO: renewal for $mac_addr"
-            log "INFO: end_time $existing_end -> $end_time"
-            log "INFO: keeping ip=$existing_ip for $mac_addr"
-            log "INFO: host=${existing_hostname:0:20}"
+            log "INFO: renewal $mac_addr keeps ip=$existing_ip"
             if add_mac_to_acl "$mac_addr" "$existing_ip" "$existing_hostname" "$end_time"; then
                 (( added_count++ )) || true
             fi
@@ -1709,7 +1721,7 @@ check_and_reload_if_changed() {
     acl_reload_pending=0
 
     reload_ok=0
-    if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
+    if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 750; then
         log "INFO: invoking $UHM_RELOAD"
         # Release the mechanism lock before delegating: uhmleases.sh acquires
         # it itself, with its own descriptor, and cannot do so while this
@@ -1718,6 +1730,10 @@ check_and_reload_if_changed() {
         if "$UHM_RELOAD" >/dev/null 2>>"$log_file"; then
             reload_ok=1
             last_reload_epoch=$now_epoch
+            # Same content after the reload: the change is uhmleases.sh normalizing
+            local cur_hash cur_norm
+            read -r cur_hash cur_norm < <(mac_lists_hashes)
+            [[ "$cur_norm" == "$mac_lists_norm_prev" ]] && mac_lists_hash_prev="$cur_hash"
         else
             exit_code=$?
             if (( exit_code == 75 )); then
@@ -1760,7 +1776,7 @@ kick_newly_authorized() {
     local sta_data="$1"
     local mac_addr kick_url http_code on_sta exit_code
     exit_code=$(echo "$sta_data" | jq -r '.meta.rc // empty' 2>/dev/null || true)
-    for mac_addr in "${newly_authorized_macs[@]}"; do
+    for mac_addr in "${kick_pending_macs[@]}"; do
         grep -qi "^a;${mac_addr};" "$UHM_MACAUTH" || continue
         if is_managed_mac "$mac_addr"; then
             log "WARNING: No kick: $mac_addr in mac-*.txt -alert"
@@ -1873,16 +1889,21 @@ run_cycle() {
     # Summary line is only useful when something actually changed this cycle --
     # logging it unconditionally at POLL_INTERVAL cadence (default 20s) drowns
     # the log in identical lines during idle periods.
+    local kick_mac
+    for kick_mac in "${newly_authorized_macs[@]+"${newly_authorized_macs[@]}"}"; do
+        [[ " ${kick_pending_macs[*]} " == *" $kick_mac "* ]] || kick_pending_macs+=("$kick_mac")
+    done
     if check_and_reload_if_changed; then
         local authorized_total grace_total
         authorized_total=$(grep -c "^a;" "$UHM_MACAUTH" 2>/dev/null || true)
         authorized_total=$(( ${authorized_total:-0} + 0 ))
         grace_total=$(grep -c "^a;" "$UHM_GRACE" 2>/dev/null || true)
         grace_total=$(( ${grace_total:-0} + 0 ))
-        log "vouchers=$voucher_count|auth=$authorized_total|grace=$grace_total|newauth=$sessions_authorized|revoked=$revoked_total"
+        log "INFO: vouchers=$voucher_count|auth=$authorized_total|grace=$grace_total|newauth=$sessions_authorized|revoked=$revoked_total"
 
-        if [[ "$reload_ok" == "1" && ${#newly_authorized_macs[@]} -gt 0 ]]; then
+        if [[ "$reload_ok" == "1" && ${#kick_pending_macs[@]} -gt 0 ]]; then
             kick_newly_authorized "$sta_data"
+            kick_pending_macs=()
         fi
     fi
 
@@ -1946,7 +1967,7 @@ main() {
         "$UHM_MACAUTH" "$UHM_GRACE" "$UHM_QUEUE"
     verify_installation
 
-    log "uhmd start..."
+    log "INFO: uhmd start..."
 
     if ! check_interfaces; then
         log "WARNING: no operational interface -alert"
@@ -1996,7 +2017,7 @@ main() {
     # (used inside run_cycle) would then never trigger a reload, leaving the
     # firewall empty until the next ACL change or the safety-net interval.
     # Force one reload here, on every daemon start, regardless of ACL state.
-    if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 755; then
+    if ensure_executable "${UHM_RELOAD:-}" "UHM_RELOAD" 750; then
         log "INFO: startup, invoking uhmreload"
         startup_reload_rc=0
         "$UHM_RELOAD" >/dev/null 2>>"$log_file" || startup_reload_rc=$?

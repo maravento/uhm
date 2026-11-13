@@ -156,16 +156,14 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
 .ct{color:var(--ts-color);font-size:11px;font-family:'Consolas','Liberation Mono',monospace}
 
 /* Level badges -- one distinctive color per level:
-   lI INFO blue, lW WARNING amber, lE ERROR red, lR STATUS grey */
+   lI INFO blue, lW WARNING amber, lE ERROR red */
 .cl{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.4px;min-width:60px;text-align:center}
 .cl.lI{background:#d1ecf1;color:#0c5460;border:1px solid #bee5eb}
 .cl.lW{background:#fff3cd;color:#856404;border:1px solid #ffeeba}
 .cl.lE{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb}
-.cl.lR{background:#e2e3e5;color:#383d41;border:1px solid #d6d8db}
 #uhmod.dark .cl.lI{background:#1a2a3a;color:#90caf9;border-color:#1565c0}
 #uhmod.dark .cl.lW{background:#3a2a00;color:#ffc107;border-color:#d29922}
 #uhmod.dark .cl.lE{background:#3a1a1a;color:#f85149;border-color:#6e1a1a}
-#uhmod.dark .cl.lR{background:#1c2128;color:#8b949e;border-color:#30363d}
 
 .hl{background:var(--hl-bg);border-radius:2px;color:var(--hl-color)}
 .mc{color:var(--mc-color);font-weight:600}
@@ -199,7 +197,7 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
     <input id="uhQ" type="text" placeholder="Filter by MAC, IP, message..." oninput="uhBS()" onkeydown="if(event.key==='Enter')uhGS()">
     <button class="uh-bgrep" id="uhBG" onclick="uhTG()" title="Type a term first, then search the entire log file" disabled>Full log</button>
   </div>
-  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="STATUS">STATUS</option></select>
+  <select id="uhLv" onchange="uhAF()"><option value="">All levels</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option></select>
   <select id="uhLn" onchange="uhRL()"><option value="200" selected>Last 200</option><option value="500">Last 500</option><option value="1000">Last 1000</option><option value="2000">Last 2000</option></select>
   <select id="uhIv" onchange="uhCI()"><option value="1000" selected>1s</option><option value="3000">3s</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
   <button class="uh-btn" onclick="uhRL()" title="Reload log">Reload</button>
@@ -268,7 +266,7 @@ function rt(q,an){
   var sl=CUR.slice(0,RC);
   tb.innerHTML=sl.map(function(r,i){
     var c=i<an?'nr':'';
-    var lc=r.level==='INFO'?'lI':r.level==='WARNING'?'lW':r.level==='ERROR'?'lE':'lR';
+    var lc=r.level==='INFO'?'lI':r.level==='WARNING'?'lW':r.level==='ERROR'?'lE':'lI';
     return '<tr class="'+c+'"><td class="ct">'+esc(r.ts)+'</td><td class="cl '+lc+'">'+esc(r.level)+'</td><td class="cm">'+cm(r.msg,q)+'</td></tr>'
   }).join('');
 }

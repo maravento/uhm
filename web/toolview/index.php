@@ -132,6 +132,9 @@ html,body{height:100%;margin:0;background:var(--bg,#fff)}
       <option value="unifi:guests">Guest sessions</option>
       <option value="unifi:unauthorized">Unauthorized</option>
     </optgroup>
+    <optgroup label="Logs">
+      <option value="log:archive">Search log archives</option>
+    </optgroup>
   </select>
   <div class="uh-search">
     <input id="uhQ" type="text" placeholder="MAC address" onkeydown="if(event.key==='Enter')uhRun()">
@@ -207,6 +210,11 @@ var COLUMNS={
     {key:'is_guest',label:'Guest',type:'mark'}
   ]
 };
+COLUMNS['log:archive']=[
+  {key:'ts',label:'Date',cls:'mono'},
+  {key:'level',label:'Level',type:'tag'},
+  {key:'msg',label:'Message'}
+];
 COLUMNS['report:consistency']=COLUMNS['report:mac'];
 COLUMNS['report:search']=COLUMNS['report:mac'];
 
@@ -231,12 +239,12 @@ var select=document.getElementById('uhReport');
 var message=document.getElementById('uhMsg');
 
 function needsQuery(){
-  return select.value==='report:mac'||select.value==='report:search';
+  return select.value==='report:mac'||select.value==='report:search'||select.value==='log:archive';
 }
 
 function syncInput(){
   input.disabled=!needsQuery();
-  input.placeholder=select.value==='report:search'?'IP address or hostname':'MAC address';
+  input.placeholder=select.value==='report:search'?'IP address or hostname':select.value==='log:archive'?'Text to search':'MAC address';
   if(input.disabled){
     input.value='';
   }else{

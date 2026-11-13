@@ -139,7 +139,7 @@ exec 201>"$cycle_lock"
 cycle_lock_rc=0
 flock -w 10 -E 75 201 || cycle_lock_rc=$?
 if (( cycle_lock_rc == 75 )); then
-    log "INFO: mechanism busy -skip"
+    log "INFO: uhmd-cycle.lock busy -skip"
     exit 75
 elif (( cycle_lock_rc != 0 )); then
     log "ERROR: cannot acquire cycle lock -abort"
@@ -238,7 +238,7 @@ verify_dhcp_files() {
 
 verify_dhcp_config() {
     if [ ! -f "$DHCPDv4_CONF" ]; then
-        log "ERROR: config file not found -abort"
+        log "ERROR: pydhcpd.conf not found -abort"
         exit 1
     fi
     fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640
@@ -401,7 +401,7 @@ normalize_acl_file() {
                 log "ERROR: $line_error in $(basename "$acl_file") -abort"
                 exit 1
             fi
-            log "INFO: $line_error in $(basename "$acl_file") -skip"
+            log "INFO: $line_error in $(basename "$acl_file") -fixed"
             dropped_count=$((dropped_count + 1))
         done < "$acl_file"
         if (( dropped_count > 0 )); then
@@ -420,8 +420,38 @@ normalize_acl_file() {
     # command substitution strips a trailing \n from its output, so
     # a non-empty result here means the last byte was NOT a newline.
     if [ -s "$acl_file" ] && [ -n "$(tail -c1 "$acl_file" 2>/dev/null)" ]; then
-        log "INFO: adding trailing newline to $(basename "$acl_file")"
+        log "INFO: adding trailing newline to $(basename "$acl_file") -fixed"
         printf '\n' >> "$acl_file"
+    fi
+}
+
+# LIST ORDER
+# Sorts a list by its key and drops lines repeated exactly
+# Usage: order_acl_list <file> [sort options]
+order_acl_list() {
+    local acl_file="$1" tmp_file before_count after_count
+    shift
+    [ -s "$acl_file" ] || return 0
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
+    temp_files+=("$tmp_file")
+    if ! sort "$@" -- "$acl_file" | uniq > "$tmp_file"; then
+        log "ERROR: cannot sort $(basename "$acl_file") -abort"
+        exit 1
+    fi
+    if [[ "$(md5sum < "$tmp_file")" == "$(md5sum < "$acl_file")" ]]; then
+        rm -f -- "$tmp_file"
+        return 0
+    fi
+    before_count=$(wc -l < "$acl_file")
+    after_count=$(wc -l < "$tmp_file")
+    if ! mv -fT -- "$tmp_file" "$acl_file"; then
+        log "ERROR: cannot replace $(basename "$acl_file") -abort"
+        exit 1
+    fi
+    chmod 600 "$acl_file"
+    chown root:root "$acl_file"
+    if (( before_count > after_count )); then
+        log "INFO: $(basename "$acl_file"): $((before_count - after_count)) duplicate(s) removed -fixed"
     fi
 }
 
@@ -445,13 +475,18 @@ normalize_acl_lists() {
     shopt -u nullglob
     for check_file in "${mac_files[@]}"; do
         normalize_acl_file "$check_file" "$commentable_no_epoch_pattern"
+        order_acl_list "$check_file" -t';' -k3,3V
     done
     normalize_acl_file "$ACL_BLOCK_FILE" "$strict_no_epoch_pattern" 1 drop
+    order_acl_list "$ACL_BLOCK_FILE" -V
 
     if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
         normalize_acl_file "$UHM_MACAUTH" "$commentable_epoch_pattern"
+        order_acl_list "$UHM_MACAUTH" -t';' -k3,3V
         normalize_acl_file "$UHM_GRACE" "$strict_epoch_pattern" 1 drop
+        order_acl_list "$UHM_GRACE" -V
         [ -f "$UHM_QUEUE" ] && normalize_acl_file "$UHM_QUEUE" "$bare_mac_pattern" 0 drop
+        order_acl_list "$UHM_QUEUE"
     fi
 }
 
@@ -499,7 +534,7 @@ dedup_mac_vs() {
         if mv -fT -- "$tmp_file" "$acl_file"; then
             chmod 600 "$acl_file"
             while IFS= read -r mac_addr; do
-                log "INFO: dup MAC '$mac_addr' removed from $acl_label"
+                log "INFO: dup MAC $mac_addr in $acl_label -fixed"
             done < "$dropped_count"
         else
             while IFS= read -r mac_addr; do
@@ -706,7 +741,10 @@ unset env_owner env_perms
 # LOAD_CONF
 # Reads keys as data instead of sourcing the file, so a tampered or
 # maliciously replaced env file cannot execute code.
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='UNIFI_HOTSPOT_ENABLED SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH UHM_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_MACAUTH ACL_BLOCK_FILE UHM_GRACE BLOCKDHCP_GRACE_SECONDS CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS UHM_INI_RANGE UHM_END_RANGE PYDHCPD_LEASES UHM_QUEUE DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
 # single source of truth for them. uhm.env is read after, so the uhm keys
@@ -717,10 +755,6 @@ env_keys='UNIFI_HOTSPOT_ENABLED SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK S
 # A missing key is handled by the check below.
 load_uhm_env "$pydhcp_env" "$env_keys" line || true
 load_uhm_env "$uhm_env" "$env_keys" line || true
-if [[ "${UNIFI_HOTSPOT_ENABLED:-}" != true && "${UNIFI_HOTSPOT_ENABLED:-}" != false ]]; then
-    log "ERROR: UNIFI_HOTSPOT_ENABLED must be true/false -abort"
-    exit 1
-fi
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
@@ -802,7 +836,14 @@ for env_key in UHM_PATH UHM_MACAUTH UHM_GRACE UHM_QUEUE; do
         key_errors+=("$env_key not set")
     fi
 done
-if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+if ! grep -q "^UNIFI_HOTSPOT_ENABLED=" "$uhm_env"; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED missing line")
+elif [[ -z "${UNIFI_HOTSPOT_ENABLED:-}" ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED not set")
+elif ! [[ "$UNIFI_HOTSPOT_ENABLED" =~ $UH_BOOL ]]; then
+    key_errors+=("UNIFI_HOTSPOT_ENABLED invalid boolean")
+fi
+if [[ "${UNIFI_HOTSPOT_ENABLED:-}" == true ]]; then
     if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
         key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")
     elif [[ -z "${BLOCKDHCP_GRACE_SECONDS:-}" ]]; then
@@ -908,7 +949,7 @@ fi
 # MAIN
 # ------------------------------------------------------------------------------
 
-log "uhmleases start..."
+log "INFO: uhmleases start..."
 
 if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]] && ! recover_uhm_expiry "$UHM_MACAUTH" "$UHM_QUEUE"; then
     log "ERROR: $(uhm_expiry_recovery_message "$UHM_MACAUTH") -abort"
@@ -953,8 +994,7 @@ expire_grace_entries() {
         fi
         lease_age=$(( now_epoch - entry_epoch ))
         if (( lease_age >= BLOCKDHCP_GRACE_SECONDS )); then
-            log "INFO: $mac_addr expired (age=${lease_age}s)"
-            log "INFO: add $mac_addr to blockdhcp"
+            log "INFO: $mac_addr expired (age=${lease_age}s) -> blockdhcp"
             if ! grep -qi "^a;${mac_addr};" "$ACL_BLOCK_FILE" 2>/dev/null; then
                 echo "a;${mac_addr};${client_ip};${client_name};" >> "$ACL_BLOCK_FILE"
             fi
@@ -1268,7 +1308,6 @@ class "blockdhcp" {
     fi
 
     clean_acl
-    log "INFO: stopping pydhcpd"
     trap 'rm -f "${temp_files[@]}" 2>/dev/null; systemctl reset-failed pydhcpd 2>/dev/null; systemctl is-active --quiet pydhcpd || systemctl start pydhcpd' EXIT
     systemctl stop pydhcpd || {
         local stop_rc=$?
@@ -1278,13 +1317,9 @@ class "blockdhcp" {
     if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
         drain_lease_queue
     fi
-    log "INFO: processing leases"
     read_leases
-    log "INFO: sorting ACL files"
     order_files_acl
-    log "INFO: rebuilding pydhcpd.conf"
     update_dhcp_conf
-    log "INFO: starting pydhcpd"
     systemctl reset-failed pydhcpd 2>/dev/null || true
     systemctl start pydhcpd || true
     sleep 1
@@ -1380,7 +1415,7 @@ check_mac_ip_ranges
 
 # Final summary
 count_active() { local active_count=0; active_count=$(grep -c '^a;' "$1" 2>/dev/null) || active_count=0; echo "$active_count"; }
-log "blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$ACL_MAC_LIMITED")|unlimited=$(count_active "$ACL_MAC_UNLIMITED")|hotspot=$(count_active "$UHM_MACAUTH")|grace=$(count_active "$UHM_GRACE")"
+log "INFO: blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$ACL_MAC_LIMITED")|unlimited=$(count_active "$ACL_MAC_UNLIMITED")|hotspot=$(count_active "$UHM_MACAUTH")|grace=$(count_active "$UHM_GRACE")"
 
 # ------------------------------------------------------------------------------
 # END
@@ -1391,4 +1426,4 @@ if (( pydhcpd_start_failed )); then
     exit 1
 fi
 
-log "uhmleases done"
+log "INFO: uhmleases done"

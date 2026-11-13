@@ -122,8 +122,14 @@ register_cron() {
             log "ERROR: cannot create $(dirname "$installed_path") -abort"
             exit 1
         fi
-        install -m 644 -o root -g root "$(dirname "$script_path")/uhmenv.sh" "$(dirname "$installed_path")/uhmenv.sh"
-        install -m 755 -o root -g root "$script_path" "$installed_path"
+        install -m 644 -o root -g root "$(dirname "$script_path")/uhmenv.sh" "$(dirname "$installed_path")/uhmenv.sh" \
+            || { log "ERROR: cannot deploy uhmenv.sh -abort"; exit 1; }
+        cmp -s -- "$(dirname "$script_path")/uhmenv.sh" "$(dirname "$installed_path")/uhmenv.sh" \
+            || { log "ERROR: src and dst do not match: uhmenv.sh -abort"; exit 1; }
+        install -m 750 -o root -g root "$script_path" "$installed_path" \
+            || { log "ERROR: cannot deploy $(basename "$installed_path") -abort"; exit 1; }
+        cmp -s -- "$script_path" "$installed_path" \
+            || { log "ERROR: src and dst do not match: $(basename "$installed_path") -abort"; exit 1; }
         log "INFO: deployed to $installed_path"
     fi
 
@@ -166,15 +172,14 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
-# Read known key=value pairs from a config file, without sourcing it
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/uhmenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load uhmenv.sh -abort"
+    exit 1
+fi
 env_keys='BACKUP_DIR'
 # LOAD
-# Reads uhm.env; a malformed line aborts
 load_uhm_env "$uhm_env" "$env_keys" || { log "ERROR: cannot load uhm.env -abort"; exit 1; }
 
-# KEY CHECK
-# BACKUP_DIR must be the fixed backup path, without symlinks
 backup_dir="/etc/bak/uhm"
 if [[ "${BACKUP_DIR:-}" != "$backup_dir" ]] \
    || [[ "$(readlink -m -- "$backup_dir")" != "$backup_dir" ]]; then
@@ -186,19 +191,19 @@ backup_zip="${backup_dir}/uhmbk_$(date +%Y%m%d_%H%M%S).zip"
 # Start
 case "${1:-}" in
     --install)
-        log "uhmbk start..."
+        log "INFO: uhmbk start..."
         register_cron || exit 1
-        log "uhmbk done"
+        log "INFO: uhmbk done"
         exit 0
         ;;
     --uninstall)
-        log "uhmbk start..."
+        log "INFO: uhmbk start..."
         deregister_cron || exit 1
-        log "uhmbk done"
+        log "INFO: uhmbk done"
         exit 0
         ;;
     "")
-        log "uhmbk start..."
+        log "INFO: uhmbk start..."
         ;;
     *)
         log "ERROR: invalid option -abort"
@@ -234,7 +239,7 @@ do
     if [ -e "$backup_item" ]; then
         backup_list+=("$backup_item")
     else
-        log "INFO: $backup_item not present -skip"
+        log "INFO: $(basename "$backup_item") not present"
     fi
 done
 
@@ -293,7 +298,7 @@ else
     zip_status=$?
     trap - INT
     rm -f "$backup_part"
-    log "ERROR: cannot write archive $(basename "$backup_zip") (zip exit $zip_status) -abort"
+    log "ERROR: zip failed ($zip_status): $(basename "$backup_zip") -abort"
     exit 1
 fi
 
@@ -301,4 +306,4 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-log "uhmbk done"
+log "INFO: uhmbk done"
