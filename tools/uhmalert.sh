@@ -7,11 +7,12 @@
 # FILE: tools/uhmalert.sh
 #
 # USAGE:
-# sudo bash uhmalert.sh --install    Deploy and start uhmalert.service
-# sudo bash uhmalert.sh --uninstall  Stop the service and remove the unit
-# sudo bash uhmalert.sh              Run the watch loop (the service ExecStart)
-# bash uhmalert.sh -h                Show this help
-# bash uhmalert.sh --help            Show this help
+# ACTION                                      COMMAND
+# Deploy and start uhmalert.service           sudo bash uhmalert.sh --install
+# Stop the service and remove the unit        sudo bash uhmalert.sh --uninstall
+# Run the watch loop (the service ExecStart)  sudo bash uhmalert.sh
+# Show this help                              bash uhmalert.sh -h
+# Show this help                              bash uhmalert.sh --help
 #
 # LOG: /var/log/uhm.log
 #
@@ -220,8 +221,8 @@ install_module() {
     echo ""
 
     if [[ ! -f "$uhm_env" ]]; then
-        log "ERROR: $uhm_env not found"
-        log "ERROR: install and configure uhm first -abort"
+        log "ERROR: [1/2] $uhm_env not found"
+        log "ERROR: [2/2] install and configure uhm first -abort"
         exit 1
     fi
 

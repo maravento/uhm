@@ -7,7 +7,8 @@
 # FILE: fw/uhmiptables.sh
 #
 # USAGE:
-# sudo bash /etc/uhm/fw/uhmiptables.sh
+# ACTION          COMMAND
+# (no arguments)  sudo bash /etc/uhm/fw/uhmiptables.sh
 #
 # LOG: /var/log/uhm.log
 #

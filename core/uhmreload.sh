@@ -7,7 +7,8 @@
 # FILE: core/uhmreload.sh
 #
 # USAGE:
-# sudo bash uhmreload.sh    (no arguments)
+# ACTION          COMMAND
+# (no arguments)  sudo bash uhmreload.sh
 #
 # LOG: /var/log/uhm.log
 #
@@ -164,14 +165,14 @@ run_step() {
             trace_ok=0
         fi
         if [[ "$exit_code" == "124" ]]; then
-            log "ERROR: $script_name timed out after ${step_timeout}s"
+            log "ERROR: [1/2] $script_name timed out after ${step_timeout}s"
         else
-            log "ERROR: $script_name failed (exit $exit_code)"
+            log "ERROR: [1/2] $script_name failed (exit $exit_code)"
         fi
         if (( trace_ok )); then
-            log "ERROR: trace: ${trace_dest##*/} -abort"
+            log "ERROR: [2/2] trace: ${trace_dest##*/} -abort"
         else
-            log "ERROR: no trace saved -abort"
+            log "ERROR: [2/2] no trace saved -abort"
         fi
         exit 1
     fi

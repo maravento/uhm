@@ -7,13 +7,14 @@
 # FILE: uhmsetup.sh
 #
 # USAGE:
-# sudo bash uhmsetup.sh --install     Install (aborts if already installed)
-# sudo bash uhmsetup.sh --update      Update scripts only (keeps config/ACLs)
-# sudo bash uhmsetup.sh --uninstall   Uninstall
-# sudo bash uhmsetup.sh --status      Report services, port, config and log
-# sudo bash uhmsetup.sh               Interactive menu
-# bash uhmsetup.sh -h                 Usage
-# bash uhmsetup.sh --help             Usage
+# ACTION                                   COMMAND
+# Install (aborts if already installed)    sudo bash uhmsetup.sh --install
+# Update scripts only (keeps config/ACLs)  sudo bash uhmsetup.sh --update
+# Uninstall                                sudo bash uhmsetup.sh --uninstall
+# Report services, port, config and log    sudo bash uhmsetup.sh --status
+# Interactive menu                         sudo bash uhmsetup.sh
+# Usage                                    bash uhmsetup.sh -h
+# Usage                                    bash uhmsetup.sh --help
 #
 # LOG: uhmsetup.log, in the directory containing this script
 #
@@ -58,6 +59,58 @@ if [[ "$(id -u)" != "0" ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+check_requirements() {
+    local network_command
+    for network_command in ip awk python3; do
+        command -v "$network_command" >/dev/null 2>&1 \
+            || abort "network command '$network_command' missing -abort"
+    done
+    case "$1" in
+        install)
+            check_repo_files
+            check_port tcp 4048 "web interface"
+            require_static_lan_candidate
+            if [[ -d "$hotspot_dir" ]]; then
+            err "[1/2] uhm is already installed at ${hotspot_dir}"
+            abort "[2/2] use --update, or --uninstall first -abort"
+            fi
+            check_preinstalled
+            select_network_interfaces
+            read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
+            check_static_lan "$lan_iface" "${lan_cidr_answer%/*}"
+            ;;
+        update)
+            detect_dhcp_backend
+            [ -d "$hotspot_dir" ] && [ -f "$core_dir/uhmd.sh" ] \
+                || abort "uhm is not installed -abort"
+            local INTERFACESv4="" SERVER_IP="" WAN_IFACE=""
+            load_uhm_env "$pydhcp_env" 'INTERFACESv4 SERVER_IP' line
+            load_uhm_env "$uhm_env" 'WAN_IFACE' line
+            local network_key
+            for network_key in WAN_IFACE INTERFACESv4 SERVER_IP; do
+                [ -n "${!network_key:-}" ] \
+                    || abort "$network_key not set -abort"
+            done
+            choose_lan_interface "$WAN_IFACE" "" WAN
+            choose_lan_interface "$INTERFACESv4" "$WAN_IFACE" LAN
+            check_static_lan "$INTERFACESv4" "$SERVER_IP"
+            ;;
+    esac
+    check_ipv4_interfaces
+    if [ "$1" = install ]; then
+        check_internet
+    else
+        local package
+        for package in "${apt_deps[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+                | grep -q "ok installed"; then
+                check_internet
+                break
+            fi
+        done
+    fi
+}
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
@@ -116,7 +169,7 @@ repo_service="${repo_config}/service/uhmd.service"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmhotspot or uhmiptables.
-apt_deps=(curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect gzip diffutils arptables ebtables kmod ulogd2)
+apt_deps=(python3-yaml curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect gzip diffutils arptables ebtables kmod ulogd2 unbound)
 
 # Output helpers
 log() {
@@ -149,12 +202,12 @@ if result.returncode != 0 or result.stderr.strip():
 sys.stdout.write(result.stdout)
 PY
     ); then
-        err "cannot check ${proto^^} port $port"
-        abort "fix the ss query before installing -abort"
+        err "[1/2] cannot check ${proto^^} port $port"
+        abort "[2/2] fix the ss query before installing -abort"
     fi
     if [ -n "$port_listeners" ]; then
-        err "${proto^^} port $port in use by another $role"
-        abort "stop that service before installing -abort"
+        err "[1/2] ${proto^^} port $port in use by another $role"
+        abort "[2/2] stop that service before installing -abort"
     fi
 }
 
@@ -173,8 +226,8 @@ check_unifi_versions() {
             abort "cannot read UniFi OS version from server.conf -abort"
         fi
         if ! version_ge "$os_version" "5.0.0"; then
-            err "UniFi OS version: $os_version"
-            abort "UniFi OS requires 5x or later -abort"
+            err "[1/2] UniFi OS version: $os_version"
+            abort "[2/2] UniFi OS requires 5x or later -abort"
         fi
         command -v podman &>/dev/null \
             || abort "cannot check UniFi Network: podman is missing -abort"
@@ -187,8 +240,8 @@ check_unifi_versions() {
         abort "cannot detect UniFi Network version -abort"
     fi
     if ! version_ge "$network_version" "10.0.0"; then
-        err "UniFi Network version: $network_version"
-        abort "UniFi Network requires 10x or later -abort"
+        err "[1/2] UniFi Network version: $network_version"
+        abort "[2/2] UniFi Network requires 10x or later -abort"
     fi
 }
 
@@ -475,8 +528,8 @@ update_apply() {
             if (( ${#compared_file} <= 19 )); then
                 update_error "src and dst do not match: $compared_file"
             fi
-            log "ERROR: src and dst: $compared_file"
-            update_error "src and dst do not match"
+            log "ERROR: [1/2] src and dst: $compared_file"
+            update_error "[2/2] src and dst do not match"
         }
         info "updated $(basename "$target")"
     done
@@ -578,18 +631,21 @@ confirm() {
 check_repo_files() {
     [[ -r "$repo_uhmd" ]] || { err "missing $(basename "$repo_uhmd")"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
     [[ -r "$repo_service" ]] || { err "missing $(basename "$repo_service")"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmreload.sh" ]] || { err "missing core/uhmreload.sh"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmleases.sh" ]] || { err "missing core/uhmleases.sh"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "missing core/uhmwatch.sh"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_tools" ]] || { err "missing tools/ directory"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_tools}/uhmenv.sh" ]] || { err "missing tools/uhmenv.sh"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_acl" ]] || { err "missing acl/ directory"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_web" ]] || { err "missing web/ directory"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_config" ]] || { err "missing config/ directory"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmreload.sh" ]] || { err "[1/2] missing core/uhmreload.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmleases.sh" ]] || { err "[1/2] missing core/uhmleases.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "[1/2] missing core/uhmwatch.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -d "$repo_tools" ]] || { err "[1/2] missing tools/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -r "${repo_tools}/uhmenv.sh" ]] || { err "[1/2] missing tools/uhmenv.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -d "$repo_acl" ]] || { err "[1/2] missing acl/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -d "$repo_web" ]] || { err "[1/2] missing web/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -d "$repo_config" ]] || { err "[1/2] missing config/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
     info "Repo files located"
 }
 
 install_apt_deps() {
+    if ! command -v awk >/dev/null 2>&1; then
+        abort "awk is not installed -abort"
+    fi
     local dep_pkg missing_pkgs=()
     for dep_pkg in "${apt_deps[@]}"; do
         [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
@@ -598,7 +654,7 @@ install_apt_deps() {
     check_ipv4_interfaces
     check_internet
     DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -abort"; }
+        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
     info "Installed: ${missing_pkgs[*]}"
 }
 
@@ -652,8 +708,8 @@ detect_dhcp_backend() {
     if $pydhcp_active; then
         info "DHCP backend detected: pydhcpd"
     else
-        err "pydhcpd is not active"
-        abort "pydhcpd: install github.com/maravento/pydhcp -abort"
+        err "[1/2] pydhcpd is not active"
+        abort "[2/2] install github.com/maravento/pydhcp -abort"
     fi
 }
 
@@ -723,8 +779,8 @@ choose_lan_interface() {
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
         iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
-        iface_addrs=$(ip -4 -o addr show dev "$iface_name" scope global | awk '{print $4}' | paste -sd' ')
-        printf ' [%d] %s (%s, %s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state" "${iface_addrs:-no IPv4}"
+        printf ' [%d] %s (%s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state"
+        describe_lan_ipv4 "$iface_name"
     done
     while true; do
         read -r -p "Select $iface_label Interface [1-${#lan_candidates[@]}]: " iface_choice || {
@@ -748,6 +804,171 @@ select_network_interfaces() {
     wan_iface="$lan_iface_answer"
     choose_lan_interface "${UHM_LAN_IFACE:-}" "$wan_iface" LAN
     lan_iface="$lan_iface_answer"
+}
+
+check_static_lan() {
+    local static_result
+    static_result=$(python3 -I - "$1" "$2" <<'STATIC_LAN'
+import configparser
+import fnmatch
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+iface, address = sys.argv[1:]
+
+def run(*args):
+    return subprocess.check_output(
+        args, text=True, stderr=subprocess.DEVNULL, timeout=10,
+        env={**os.environ, 'LC_ALL': 'C', 'SYSTEMD_PAGER': 'cat'}).strip()
+
+def has_address(values):
+    return any(str(ipaddress.ip_interface(value.split(',')[0]).ip)
+               == address for value in values)
+
+def persistent_static():
+    data = json.loads(run('ip', '-j', '-4', 'addr', 'show', 'dev', iface))
+    selected = [entry for link in data for entry in link['addr_info']
+                if entry.get('local') == address]
+    if len(selected) != 1:
+        return 'unknown'
+    entry = selected[0]
+    if entry.get('dynamic') or 'dynamic' in entry.get('flags', []):
+        return 'dhcp'
+
+    nm_active = False
+    if shutil.which('nmcli'):
+        try:
+            uuid = run('nmcli', '-g', 'GENERAL.CON-UUID',
+                       'device', 'show', iface)
+            if uuid and uuid != '--':
+                nm_active = True
+                method = run('nmcli', '-g', 'ipv4.method',
+                             'connection', 'show', uuid)
+                addresses = run('nmcli', '-g', 'ipv4.addresses',
+                                'connection', 'show', uuid)
+                if method != 'manual' or not has_address(
+                        addresses.split(', ')):
+                    return 'unknown'
+                rows = run('nmcli', '-t', '--escape', 'no',
+                           '-f', 'UUID,FILENAME', 'connection', 'show')
+                netplan_profile = False
+                for row in rows.splitlines():
+                    key, _, filename = row.partition(':')
+                    if key != uuid:
+                        continue
+                    netplan_profile = (filename.startswith('/run/') and
+                                       '/netplan-' in filename)
+                    if not filename.startswith('/etc/'):
+                        continue
+                    config = configparser.ConfigParser(interpolation=None)
+                    config.read(filename)
+                    if config.get('ipv4', 'method') != 'manual':
+                        return 'unknown'
+                    values = [value for key, value in config['ipv4'].items()
+                              if re.fullmatch(r'address\d+', key)]
+                    if has_address(values):
+                        return 'static'
+                if not netplan_profile:
+                    return 'unknown'
+        except (OSError, ValueError, configparser.Error,
+                subprocess.SubprocessError):
+            if nm_active:
+                return 'unknown'
+
+    if not shutil.which('netplan'):
+        return 'unknown'
+    # Runtime Netplan overrides cannot prove persistent configuration.
+    if list(Path('/run/netplan').glob('*.yaml')):
+        return 'unknown'
+    if not nm_active:
+        status = run('networkctl', '--no-pager', 'status', iface)
+        if not re.search(r'Network File: .*netplan.*\.network', status):
+            return 'unknown'
+    import yaml
+    try:
+        network = yaml.safe_load(run('netplan', 'get')).get('network', {})
+    except yaml.YAMLError:
+        return 'unknown'
+    for kind in ('ethernets', 'wifis', 'bridges', 'bonds', 'vlans'):
+        for name, config in network.get(kind, {}).items():
+            match = config.get('match', {})
+            if match:
+                mac = data[0].get('permaddr', data[0].get('address', ''))
+                matches = not (set(match) - {'name', 'macaddress'})
+                if 'name' in match:
+                    matches &= fnmatch.fnmatchcase(iface, match['name'])
+                if 'macaddress' in match:
+                    matches &= mac.lower() == match['macaddress'].lower()
+                if config.get('set-name') == iface:
+                    matches = True
+            else:
+                matches = name == iface
+            if matches and has_address(config.get('addresses', [])):
+                return 'static'
+    return 'unknown'
+
+try:
+    print(persistent_static())
+except (OSError, ValueError, KeyError, TypeError, AttributeError,
+        ImportError, subprocess.SubprocessError):
+    print('unknown')
+STATIC_LAN
+    ) || static_result=unknown
+    if [ "${3:-}" = probe ]; then
+        printf '%s\n' "$static_result"
+        return 0
+    fi
+    case "$static_result" in
+        static) return 0 ;;
+        dhcp)
+            log "ERROR: [1/2] LAN $1: $2 uses DHCP"
+            log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+            ;;
+        *)
+            log "ERROR: [1/2] LAN $1: $2"
+            log "ERROR: [2/2] cannot verify persistent static IPv4 -abort"
+            ;;
+    esac
+    exit 1
+}
+
+lan_ipv4_condition() {
+    case "$(check_static_lan "$1" "$2" probe)" in
+        static) printf 'static' ;;
+        dhcp) printf 'dynamic' ;;
+        *) printf 'unverified' ;;
+    esac
+}
+
+describe_lan_ipv4() {
+    local cidr
+    while read -r cidr; do
+        printf '      %s (%s)\n' "$cidr" \
+            "$(lan_ipv4_condition "$1" "${cidr%/*}")"
+    done < <(ip -4 -o addr show dev "$1" scope global | awk '{print $4}')
+}
+
+require_static_lan_candidate() {
+    local iface cidr
+    local -a candidates=()
+    mapfile -t candidates < <(list_ipv4_ifaces)
+    (( ${#candidates[@]} > 1 )) || return 0
+    for iface in "${candidates[@]}"; do
+        while read -r cidr; do
+            if [ "$(check_static_lan "$iface" "${cidr%/*}" probe)" = static ]; then
+                return 0
+            fi
+        done < <(ip -4 -o addr show dev "$iface" scope global | awk '{print $4}')
+    done
+    log "ERROR: [1/2] no interface has a verified static IPv4"
+    log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+    exit 1
 }
 
 read_lan_ipv4() {
@@ -780,7 +1001,10 @@ read_lan_ipv4() {
     fi
     echo "IPv4 addresses on LAN '$selected_iface':"
     for ipv4_index in "${!lan_addresses[@]}"; do
-        printf ' [%d] %s\n' "$((ipv4_index + 1))" "${lan_addresses[$ipv4_index]}"
+        printf ' [%d] %s (%s)\n' "$((ipv4_index + 1))" \
+            "${lan_addresses[$ipv4_index]}" \
+            "$(lan_ipv4_condition "$selected_iface" \
+                "${lan_addresses[$ipv4_index]%/*}")"
     done
     while true; do
         read -r -p "Select LAN IPv4 number: " ipv4_choice || {
@@ -807,7 +1031,7 @@ read_lan_ipv4() {
 # run_setup_wizard.
 load_pydhcp_conf() {
     [ -f "$pydhcp_env" ] \
-        || { err "$pydhcp_env not found"; abort "install pydhcp first, see its README -abort"; }
+        || { err "[1/2] $pydhcp_env not found"; abort "[2/2] install pydhcp first, see its README -abort"; }
 
     local absent_keys=() env_key
     for env_key in INTERFACESv4 SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK \
@@ -831,12 +1055,12 @@ load_pydhcp_conf() {
     for check_var in SERVER_IP SERV_SUBNET SERV_BROADCAST \
               SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
         [[ "${!check_var:-}" =~ $UH_IPV4 ]] \
-            || { err "invalid IPv4 in ${check_var}: '${!check_var:-}'"; abort "fix it in $pydhcp_env and retry -abort"; }
+            || { err "[1/2] invalid IPv4 in ${check_var}: '${!check_var:-}'"; abort "[2/2] fix it in $pydhcp_env and retry -abort"; }
     done
     [[ "${SERV_MASK:-}" =~ $UH_NETMASK ]] \
-        || { err "invalid netmask in SERV_MASK: '${SERV_MASK:-}'"; abort "fix it in $pydhcp_env and retry -abort"; }
+        || { err "[1/2] invalid netmask in SERV_MASK: '${SERV_MASK:-}'"; abort "[2/2] fix it in $pydhcp_env and retry -abort"; }
     [[ "${SERV_DNS:-}" =~ $UH_DNS ]] \
-        || { err "invalid SERV_DNS list: '${SERV_DNS:-}'"; abort "fix it in $pydhcp_env and retry -abort"; }
+        || { err "[1/2] invalid SERV_DNS list: '${SERV_DNS:-}'"; abort "[2/2] fix it in $pydhcp_env and retry -abort"; }
 }
 
 # INTERACTIVE PROMPTS
@@ -1048,7 +1272,7 @@ fetch_unifi() {
 
     login_payload=$(UH_JQ_USER="$unifi_user" UH_JQ_PASS="$unifi_pass" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    cookie_jar=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
+    cookie_jar=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
 
     curl -sk -c "$cookie_jar" -o /dev/null \
         -X POST "${controller_url}${login_path}" \
@@ -1090,7 +1314,7 @@ run_setup_wizard() {
         found_url="$discovered_url"
         found_type="$discovered_type"
     else
-        { err "no UniFi controller detected"; abort "UniFi controller: check credentials/service -abort"; }
+        { err "[1/2] no UniFi controller detected"; abort "[2/2] UniFi controller: check credentials/service -abort"; }
     fi
     # UNIFI_SITE takes the site's internal name, not the name shown in UniFi
     local site_list=() site_answer cfg_site=""
@@ -1244,8 +1468,8 @@ run_setup_wizard() {
         cfg_cert_pin="sha256//${cfg_cert_pin}"
         info "TLS certificate pinned"
     else
-        warn "Could not compute TLS certificate pin"
-        warn "uhmd will connect without pinning -alert"
+        warn "[1/2] Could not compute TLS certificate pin"
+        warn "[2/2] uhmd will connect without pinning -alert"
     fi
     echo "Script invoked after every ACL change (must exist and be executable)"
     ask "Path to reload script" "${core_dir}/uhmreload.sh" cfg_reload_script
@@ -1281,7 +1505,7 @@ run_setup_wizard() {
         : > "$uhm_env"
 
         local uhm_block
-        uhm_block=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
+        uhm_block=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
 
         cat > "$uhm_block" <<EOF
 # =============================================================================
@@ -1486,8 +1710,8 @@ install_web() {
     a2ensite uhmweb &>/dev/null || true
 
     if ! apache2ctl configtest &>/dev/null; then
-        warn "apache configtest failed, not reloaded"
-        warn "check $(basename "$vhost_dest"), reload apache2 -alert"
+        warn "[1/2] apache configtest failed, not reloaded"
+        warn "[2/2] check $(basename "$vhost_dest"), reload apache2 -alert"
         return 1
     fi
     if ! systemctl reload apache2 &>/dev/null; then
@@ -1581,8 +1805,8 @@ final_sanity_check() {
     local issue_list=0
 
     if [[ ! -x "$uhm_iptables_dest" ]]; then
-        warn "uhmiptables.sh is missing or not executable"
-        warn "ACL changes will not reach firewall -alert"
+        warn "[1/2] uhmiptables.sh is missing or not executable"
+        warn "[2/2] ACL changes will not reach firewall -alert"
         (( issue_list++ )) || true
     fi
 
@@ -1598,8 +1822,8 @@ install_systemd_service() {
     if systemctl restart uhmd; then
         info "uhmd enabled and started"
     else
-        warn "Could not start uhmd"
-        warn "check it with: systemctl status uhmd -alert"
+        warn "[1/2] Could not start uhmd"
+        warn "[2/2] check it with: systemctl status uhmd -alert"
     fi
 }
 
@@ -1624,17 +1848,17 @@ install_pydhcp() {
 
     if [[ ! -d "$pydhcp_path" ]]; then
         git clone https://github.com/maravento/pydhcp "$pydhcp_path" \
-            || { err "cannot clone pydhcp"; abort "check network access, then re-run -abort"; }
+            || { err "[1/2] cannot clone pydhcp"; abort "[2/2] check network access, then re-run -abort"; }
     fi
 
     [[ -r "${pydhcp_path}/pysetup.sh" ]] \
-        || { err "pysetup.sh not found in $pydhcp_path"; abort "remove that directory and re-run -abort"; }
+        || { err "[1/2] pysetup.sh not found in $pydhcp_path"; abort "[2/2] remove that directory and re-run -abort"; }
 
     ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" PYDHCP_SERVER_IP="$lan_ip" bash pysetup.sh --install ) \
-        || { err "pydhcp install failed"; abort "see ${pydhcp_path}/pysetup.log -abort"; }
+        || { err "[1/2] pydhcp install failed"; abort "[2/2] see ${pydhcp_path}/pysetup.log -abort"; }
 
     systemctl is-active --quiet pydhcpd 2>/dev/null \
-        || { err "pydhcpd is not active after install"; abort "check it with: systemctl status pydhcpd -abort"; }
+        || { err "[1/2] pydhcpd is not active after install"; abort "[2/2] check it with: systemctl status pydhcpd -abort"; }
     info "pydhcp installed, pydhcpd active"
 }
 
@@ -1652,7 +1876,7 @@ install_apache2() {
     fi
 
     DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -abort"; }
+        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
     systemctl enable apache2 &>/dev/null || true
     info "Installed: ${missing_pkgs[*]}"
 }
@@ -1662,21 +1886,12 @@ install_apache2() {
 # ------------------------------------------------------------------------------
 
 do_install() {
+    check_requirements install
     install_apt_deps
 
-    if [[ -d "$hotspot_dir" ]]; then
-        err "uhm is already installed at ${hotspot_dir}"
-        abort "use --update to upgrade, or --uninstall first -abort"
-    fi
-    select_network_interfaces
-    read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
     lan_ip="${lan_cidr_answer%/*}"
     info "WAN interface: $wan_iface"
     info "LAN interface: $lan_iface ($lan_cidr_answer)"
-    check_internet
-    check_repo_files
-    check_preinstalled
-    check_port tcp 4048 "web interface"
     if dpkg -s unifi &>/dev/null || [[ -f /var/lib/uosserver/server.conf ]]; then
         info "UniFi already installed"
     else
@@ -1697,7 +1912,7 @@ do_install() {
         esac
 
         local unifisetup_tmp
-        unifisetup_tmp=$(mktemp) || { err "cannot create temp file in /tmp"; abort "temp file: check space, read-only, immutable -abort"; }
+        unifisetup_tmp=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
         local unifisetup_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh"
         local unifisetup_rc=0 unifisetup_code
         unifisetup_code=$(curl -sL -w '%{http_code}' -o "$unifisetup_tmp" "$unifisetup_url") || unifisetup_rc=$?
@@ -1816,8 +2031,8 @@ update_apache_port() {
 }
 
 do_update() {
+    check_requirements update
     install_apt_deps
-    detect_dhcp_backend
     [ -d "$hotspot_dir" ] && [ -f "$core_dir/uhmd.sh" ] || abort "uhm is not installed -abort"
     local UNIFI_HOTSPOT_ENABLED=""
     load_uhm_env "$uhm_env" 'UNIFI_HOTSPOT_ENABLED' line || true

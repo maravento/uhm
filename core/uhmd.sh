@@ -7,7 +7,11 @@
 # FILE: core/uhmd.sh
 #
 # USAGE:
-# systemctl {start|stop|restart|status} uhmd
+# ACTION               COMMAND
+# Start the daemon     sudo systemctl start uhmd
+# Stop the daemon      sudo systemctl stop uhmd
+# Restart the daemon   sudo systemctl restart uhmd
+# Show service status  sudo systemctl status uhmd
 #
 # LOG: /var/log/uhm.log
 #
@@ -533,8 +537,8 @@ reload_floor=$(uh_calc mul 3 "$reload_floor") || {
 }
 (( reload_floor < 600 )) && reload_floor=600
 if (( RELOAD_SAFETY_INTERVAL_SECONDS < reload_floor )); then
-    log "ERROR: reload interval RELOAD_SAFETY_INTERVAL_SECONDS=$RELOAD_SAFETY_INTERVAL_SECONDS"
-    log "ERROR: reload interval minimum $reload_floor in $(basename "$uhm_env") -abort"
+    log "ERROR: [1/2] RELOAD_SAFETY_INTERVAL_SECONDS=$RELOAD_SAFETY_INTERVAL_SECONDS"
+    log "ERROR: [2/2] reload interval minimum $reload_floor in $(basename "$uhm_env") -abort"
     exit 1
 fi
 unset reload_floor

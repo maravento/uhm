@@ -7,7 +7,8 @@
 # FILE: core/uhmleases.sh
 #
 # USAGE:
-# sudo bash uhmleases.sh    (no arguments; normally invoked by uhmreload.sh)
+# ACTION                                            COMMAND
+# (no arguments; normally invoked by uhmreload.sh)  sudo bash uhmleases.sh
 #
 # LOG: /var/log/uhm.log
 #
@@ -71,7 +72,11 @@ fi
 unset script_lock_rc
 
 # dependencies
-for dep_pkg in python3 coreutils util-linux curl grep sed systemd libc-bin; do
+if ! command -v awk >/dev/null 2>&1; then
+    log "ERROR: awk is not installed -abort"
+    exit 1
+fi
+for dep_pkg in python3 coreutils util-linux curl grep sed systemd unbound libc-bin; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
@@ -85,6 +90,7 @@ done
 # validation -- one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_SINT='^(0|-?[1-9][0-9]*)$'
@@ -757,7 +763,7 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='UNIFI_HOTSPOT_ENABLED SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_DHCP_PATH UHM_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_MACAUTH ACL_BLOCK_FILE UHM_GRACE BLOCKDHCP_GRACE_SECONDS CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS UHM_INI_RANGE UHM_END_RANGE PYDHCPD_LEASES UHM_QUEUE DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
+env_keys='UNIFI_HOTSPOT_ENABLED SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS SERV_DOMAIN ACL_PATH ACL_DHCP_PATH UHM_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED UHM_MACAUTH ACL_BLOCK_FILE UHM_GRACE BLOCKDHCP_GRACE_SECONDS CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS UHM_INI_RANGE UHM_END_RANGE PYDHCPD_LEASES UHM_QUEUE DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
 # single source of truth for them. uhm.env is read after, so the uhm keys
 # win if a name ever collides.
@@ -824,6 +830,13 @@ elif [[ -z "${SERV_MASK:-}" ]]; then
     key_errors+=("SERV_MASK not set")
 elif ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
     key_errors+=("SERV_MASK invalid netmask")
+fi
+if ! grep -q "^SERV_DOMAIN=" "$pydhcp_env"; then
+    key_errors+=("SERV_DOMAIN missing line")
+elif [[ -z "${SERV_DOMAIN:-}" ]]; then
+    key_errors+=("SERV_DOMAIN not set")
+elif [[ ! "$SERV_DOMAIN" =~ $UH_FQDN ]] || (( ${#SERV_DOMAIN} > 253 )); then
+    key_errors+=("SERV_DOMAIN invalid domain")
 fi
 if ! grep -q "^SERV_DNS=" "$pydhcp_env"; then
     key_errors+=("SERV_DNS missing line")
@@ -1255,6 +1268,7 @@ class "blockdhcp" {
     option routers $SERVER_IP;
     option broadcast-address $SERV_BROADCAST;
     option domain-name-servers $SERV_DNS;
+    option domain-name \"$SERV_DOMAIN\";
     min-lease-time $AUTHORIZED_LEASE_TIME;
     default-lease-time $AUTHORIZED_LEASE_TIME;
     max-lease-time $AUTHORIZED_LEASE_TIME;
@@ -1437,5 +1451,10 @@ if (( pydhcpd_start_failed )); then
     log "ERROR: pydhcpd is down -abort"
     exit 1
 fi
+
+python3 -I /etc/pydhcp/core/pydns.py --configure || {
+    log "ERROR: cannot synchronize DNS configuration -abort"
+    exit 1
+}
 
 log "INFO: uhmleases done"

@@ -7,13 +7,26 @@
 # FILE: tools/uhmtool.sh
 #
 # USAGE:
-# sudo bash uhmtool.sh <group> --<action> [arguments]
-#
-#   log      --tail, --grep, --status
-#   acl      --list, --read, --write
-#   fw       --read, --write
-#   report   --mac, --grace, --consistency, --search
-#   unifi    --status, --authorized, --vouchers, --guests, --unauthorized
+# ACTION                     COMMAND
+# Read log lines             sudo bash uhmtool.sh log --tail [pos] [lines]
+# Search the log             sudo bash uhmtool.sh log --grep <term>
+# Show log status            sudo bash uhmtool.sh log --status
+# List ACL files             sudo bash uhmtool.sh acl --list
+# Read an ACL                sudo bash uhmtool.sh acl --read <name>
+# Write an ACL from stdin    sudo bash uhmtool.sh acl --write <name>
+# Read firewall settings     sudo bash uhmtool.sh fw --read
+# Set a firewall option      sudo bash uhmtool.sh fw --write <KEY> <on|off>
+# Look up a MAC address      sudo bash uhmtool.sh report --mac <mac>
+# Show grace periods         sudo bash uhmtool.sh report --grace
+# Check consistency          sudo bash uhmtool.sh report --consistency
+# Search records             sudo bash uhmtool.sh report --search <query>
+# Show UniFi status          sudo bash uhmtool.sh unifi --status
+# List authorized clients    sudo bash uhmtool.sh unifi --authorized
+# List vouchers              sudo bash uhmtool.sh unifi --vouchers
+# List guests                sudo bash uhmtool.sh unifi --guests
+# List unauthorized clients  sudo bash uhmtool.sh unifi --unauthorized
+# Show usage                 sudo bash uhmtool.sh -h
+# Show usage                 sudo bash uhmtool.sh --help
 #
 ################################################################################
 
