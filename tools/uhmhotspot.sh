@@ -7,8 +7,8 @@
 # FILE: tools/uhmhotspot.sh
 #
 # USAGE:
-# sudo bash uhmhotspot.sh
-#
+# ACTION          COMMAND
+# (no arguments)  sudo bash uhmhotspot.sh
 #
 # LOG: /var/log/uhmhotspot.log
 #
@@ -370,8 +370,8 @@ voucher_rc=$(echo "$voucher_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 # no results rather than an error.
 for endpoint_rc in "stat/sta:$sta_rc" "stat/guest:$guest_rc" "stat/voucher:$voucher_rc"; do
     if [[ "${endpoint_rc#*:}" != "ok" ]]; then
-        log "ERROR: controller may be unavailable, try again later"
-        log "ERROR: ${endpoint_rc%%:*} query failed -abort"
+        log "ERROR: [1/2] controller may be unavailable, try again later"
+        log "ERROR: [2/2] ${endpoint_rc%%:*} query failed -abort"
         exit 1
     fi
 done
