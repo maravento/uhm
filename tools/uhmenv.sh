@@ -7,8 +7,8 @@
 # FILE: tools/uhmenv.sh
 #
 # USAGE:
-# ACTION                            COMMAND
-# Load shared environment settings  source uhmenv.sh
+# COMMAND           ACTION
+# source uhmenv.sh  Load shared environment settings
 #
 ################################################################################
 

@@ -7,12 +7,12 @@
 # FILE: tools/uhmalert.sh
 #
 # USAGE:
-# ACTION                                      COMMAND
-# Deploy and start uhmalert.service           sudo bash uhmalert.sh --install
-# Stop the service and remove the unit        sudo bash uhmalert.sh --uninstall
-# Run the watch loop (the service ExecStart)  sudo bash uhmalert.sh
-# Show this help                              bash uhmalert.sh -h
-# Show this help                              bash uhmalert.sh --help
+# COMMAND                            ACTION
+# sudo bash uhmalert.sh --install    Deploy and start uhmalert.service
+# sudo bash uhmalert.sh --uninstall  Stop the service and remove the unit
+# sudo bash uhmalert.sh              Run the watch loop (the service ExecStart)
+# bash uhmalert.sh -h                Show this help
+# bash uhmalert.sh --help            Show this help
 #
 # LOG: /var/log/uhm.log
 #

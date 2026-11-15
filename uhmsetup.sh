@@ -7,14 +7,14 @@
 # FILE: uhmsetup.sh
 #
 # USAGE:
-# ACTION                                   COMMAND
-# Install (aborts if already installed)    sudo bash uhmsetup.sh --install
-# Update scripts only (keeps config/ACLs)  sudo bash uhmsetup.sh --update
-# Uninstall                                sudo bash uhmsetup.sh --uninstall
-# Report services, port, config and log    sudo bash uhmsetup.sh --status
-# Interactive menu                         sudo bash uhmsetup.sh
-# Usage                                    bash uhmsetup.sh -h
-# Usage                                    bash uhmsetup.sh --help
+# COMMAND                            ACTION
+# sudo bash uhmsetup.sh --install    Install (aborts if already installed)
+# sudo bash uhmsetup.sh --update     Update scripts only (keeps config/ACLs)
+# sudo bash uhmsetup.sh --uninstall  Uninstall
+# sudo bash uhmsetup.sh --status     Report services, port, config and log
+# sudo bash uhmsetup.sh              Interactive menu
+# bash uhmsetup.sh -h                Usage
+# bash uhmsetup.sh --help            Usage
 #
 # LOG: uhmsetup.log, in the directory containing this script
 #

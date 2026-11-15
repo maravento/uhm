@@ -7,11 +7,11 @@
 # FILE: core/uhmd.sh
 #
 # USAGE:
-# ACTION               COMMAND
-# Start the daemon     sudo systemctl start uhmd
-# Stop the daemon      sudo systemctl stop uhmd
-# Restart the daemon   sudo systemctl restart uhmd
-# Show service status  sudo systemctl status uhmd
+# COMMAND                      ACTION
+# sudo systemctl start uhmd    Start the daemon
+# sudo systemctl stop uhmd     Stop the daemon
+# sudo systemctl restart uhmd  Restart the daemon
+# sudo systemctl status uhmd   Show service status
 #
 # LOG: /var/log/uhm.log
 #

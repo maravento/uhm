@@ -7,8 +7,8 @@
 # FILE: tools/uhmhotspot.sh
 #
 # USAGE:
-# ACTION          COMMAND
-# (no arguments)  sudo bash uhmhotspot.sh
+# COMMAND                  ACTION
+# sudo bash uhmhotspot.sh  (no arguments)
 #
 # LOG: /var/log/uhmhotspot.log
 #

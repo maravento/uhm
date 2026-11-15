@@ -7,10 +7,10 @@
 # FILE: tools/uhmbk.sh
 #
 # USAGE:
-# ACTION                                  COMMAND
-# Create a backup now                     sudo bash uhmbk.sh
-# Register the @monthly cron entry        sudo bash uhmbk.sh --install
-# Remove the cron entry (keeps archives)  sudo bash uhmbk.sh --uninstall
+# COMMAND                         ACTION
+# sudo bash uhmbk.sh              Create a backup now
+# sudo bash uhmbk.sh --install    Register the @monthly cron entry
+# sudo bash uhmbk.sh --uninstall  Remove the cron entry (keeps archives)
 #
 # LOG: /var/log/uhm.log
 #
