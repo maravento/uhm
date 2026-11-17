@@ -202,7 +202,7 @@ load_env() {
     # PERMS
     # Owner and mode of every .env this script reads
     local env_specs env_spec env_path env_owner_want env_perms_want
-    local env_owner env_perms key_errors key_error env_key
+    local env_owner env_perms key_errors env_key
     env_specs=("$pydhcp_env root:pydhcpd 640" "$uhm_env root:root 600")
     for env_spec in "${env_specs[@]}"; do
         read -r env_path env_owner_want env_perms_want <<< "$env_spec"

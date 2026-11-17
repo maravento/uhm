@@ -43,7 +43,6 @@ log_raw() {
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
-    log "ERROR: This script must be run as root -abort"
     exit 1
 fi
 
@@ -648,7 +647,7 @@ unifi_login() {
         login_url="${UNIFI_CONTROLLER_URL}/api/login"
     fi
 
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
     # Pass username/password to jq via environment, not --arg, so the
     # plaintext password never appears in jq's own argv (readable by any
     # local user via /proc/<pid>/cmdline). Environment is only readable by
@@ -726,7 +725,7 @@ api_get() {
     load_session
 
     local header_file
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
 
     local curl_args=(-s -k -w "\n__CODE__:%{http_code}" -D "$header_file"
         -H "Cookie: $(session_cookie_name)=${session_token}")
@@ -779,7 +778,7 @@ api_post() {
     load_session
 
     local header_file
-    header_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+    header_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
 
     local curl_args=(-s -k -w "\n__CODE__:%{http_code}" -D "$header_file"
         -X POST
@@ -1034,7 +1033,7 @@ check_malformed() {
     local check_file="$1" line_pattern="$2" check_ip="${3:-1}" on_malformed="${4:-drop}"
     [[ -f "$check_file" ]] || return 0
     local tmp_file env_line client_ip dropped_count=0 write_failed=0
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
     temp_files+=("$tmp_file")
     while IFS= read -r env_line || [[ -n "$env_line" ]]; do
         [[ -z "$env_line" ]] && continue
@@ -1110,7 +1109,7 @@ dedup_mac_lists() {
 
     if [[ -f "$ACL_BLOCK_FILE" ]]; then
         local tmp_block
-        tmp_block=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+        tmp_block=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
         temp_files+=("${tmp_block}")
         while IFS= read -r env_line || [[ -n "$env_line" ]]; do
             [[ -z "$env_line" ]] && continue
@@ -1176,7 +1175,7 @@ sort_acl_files() {
     local tmp_file
 
     if [[ -s "$UHM_MACAUTH" ]]; then
-        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+        tmp_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
         temp_files+=("${tmp_file}")
         if ! sort -t';' -k3,3V "$UHM_MACAUTH" | uniq > "$tmp_file"; then
             log "WARNING: cannot sort uhm-auth.txt -alert"
@@ -1663,7 +1662,9 @@ revoke_unauthorized() {
 # Baseline used later to decide whether a reload is needed
 snapshot_acls() {
     acl_snapshot_hotspot=$(md5sum "$UHM_MACAUTH" 2>/dev/null | awk '{print $1}')
-    acl_snapshot_block=$(md5sum "$ACL_BLOCK_FILE" 2>/dev/null | awk '{print $1}')
+    if [[ -z "$acl_snapshot_block" ]]; then
+        acl_snapshot_block=$(md5sum "$ACL_BLOCK_FILE" 2>/dev/null | awk '{print $1}')
+    fi
     acl_snapshot_queue=$(md5sum "$UHM_QUEUE" 2>/dev/null | awk '{print $1}')
     acl_snapshot_grace=$(md5sum "$UHM_GRACE" 2>/dev/null | awk '{print $1}')
 }
@@ -1720,6 +1721,7 @@ check_and_reload_if_changed() {
         log "INFO: forcing safety-net reload"
     fi
 
+    acl_snapshot_block="$cur_block"
     mac_reload_pending=0
     reload_busy_pending=0
     acl_reload_pending=0
@@ -1733,6 +1735,7 @@ check_and_reload_if_changed() {
         flock -u 201 2>/dev/null || log "INFO: failed to release cycle lock -skip"
         if "$UHM_RELOAD" >/dev/null 2>>"$log_file"; then
             reload_ok=1
+            acl_snapshot_block=$(md5sum "$ACL_BLOCK_FILE" 2>/dev/null | awk '{print $1}')
             last_reload_epoch=$now_epoch
             # Same content after the reload: the change is uhmleases.sh normalizing
             local cur_hash cur_norm

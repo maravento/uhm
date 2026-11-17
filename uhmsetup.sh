@@ -69,11 +69,11 @@ check_requirements() {
     case "$1" in
         install)
             check_repo_files
+            if [[ -d "$hotspot_dir" ]]; then
+                abort "uhm installed; use --update | --uninstall -abort"
+            fi
             check_port tcp 4048 "web interface"
             require_static_lan_candidate
-            if [[ -d "$hotspot_dir" ]]; then
-            abort "uhm installed; use --update | --uninstall -abort"
-            fi
             check_preinstalled
             select_network_interfaces
             read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
@@ -168,7 +168,7 @@ repo_service="${repo_config}/service/uhmd.service"
 # components need at runtime, not just the ones it invokes itself -- so a
 # missing package is reported here instead of failing later in uhmd,
 # uhmhotspot or uhmiptables.
-apt_deps=(python3-yaml curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect gzip diffutils arptables ebtables kmod ulogd2)
+apt_deps=(python3-yaml curl jq iptables ipset python3 openssl coreutils util-linux iproute2 cron grep sed systemd libc-bin findutils procps logrotate git zip expect gzip diffutils arptables ebtables kmod ulogd2 unbound sudo)
 
 # Output helpers
 log() {
@@ -504,8 +504,8 @@ update_stop_service() {
     systemctl stop "$unit" || update_error "cannot stop service: $unit"
     state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect stopped: $unit"
     [ "$state" = inactive ] || {
-        log "ERROR: $unit state: $state"
-        update_error "$unit did not stop"
+        log "ERROR: [1/2] $unit state: $state"
+        update_error "[2/2] $unit did not stop"
     }
 }
 
@@ -562,8 +562,8 @@ update_resume() {
         systemctl start "$unit" || update_error "cannot start service: $unit"
         state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
         [ "$state" = active ] || {
-            log "ERROR: $unit state: $state"
-            update_error "$unit did not start"
+            log "ERROR: [1/2] $unit state: $state"
+            update_error "[2/2] $unit did not start"
         }
     done
 }
@@ -650,16 +650,16 @@ confirm() {
 # PREFLIGHT CHECKS
 # Verified before anything is written to disk
 check_repo_files() {
-    [[ -r "$repo_uhmd" ]] || { err "missing $(basename "$repo_uhmd")"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "$repo_service" ]] || { err "missing $(basename "$repo_service")"; abort "run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmreload.sh" ]] || { err "[1/2] missing core/uhmreload.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmleases.sh" ]] || { err "[1/2] missing core/uhmleases.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "[1/2] missing core/uhmwatch.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_tools" ]] || { err "[1/2] missing tools/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -r "${repo_tools}/uhmenv.sh" ]] || { err "[1/2] missing tools/uhmenv.sh"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_acl" ]] || { err "[1/2] missing acl/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_web" ]] || { err "[1/2] missing web/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
-    [[ -d "$repo_config" ]] || { err "[1/2] missing config/ directory"; abort "[2/2] run uhmsetup.sh from inside the cloned repo -abort"; }
+    [[ -r "$repo_uhmd" ]] || { err "[1/2] missing $(basename "$repo_uhmd")"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -r "$repo_service" ]] || { err "[1/2] missing $(basename "$repo_service")"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmreload.sh" ]] || { err "[1/2] missing core/uhmreload.sh"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmleases.sh" ]] || { err "[1/2] missing core/uhmleases.sh"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -r "${repo_core}/uhmwatch.sh" ]] || { err "[1/2] missing core/uhmwatch.sh"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -d "$repo_tools" ]] || { err "[1/2] missing tools/ directory"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -r "${repo_tools}/uhmenv.sh" ]] || { err "[1/2] missing tools/uhmenv.sh"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -d "$repo_acl" ]] || { err "[1/2] missing acl/ directory"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -d "$repo_web" ]] || { err "[1/2] missing web/ directory"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
+    [[ -d "$repo_config" ]] || { err "[1/2] missing config/ directory"; abort "[2/2] run uhmsetup.sh inside the cloned repo -abort"; }
     info "Repo files located"
 }
 
@@ -675,8 +675,8 @@ install_apt_deps() {
     check_ipv4_interfaces
     check_internet
     retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
-    info "Installed: ${missing_pkgs[*]}"
+        || { for dep_pkg in "${missing_pkgs[@]}"; do warn "cannot install $dep_pkg -alert"; done; abort "install them with apt, then re-run -abort"; }
+    for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
 }
 
 # Aborts if software uhm would collide with is already installed. Same shape
@@ -711,7 +711,6 @@ warn_overlap() {
 }
 
 check_preinstalled() {
-    log "INFO: Checking for conflicting pre-installed packages..."
     check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
     check_conflicts "web server"  nginx lighttpd caddy
     check_conflicts "firewall"    firewalld
@@ -776,7 +775,7 @@ check_ipv4_interfaces() {
 # Select an existing interface and one of its configured IPv4 addresses
 choose_lan_interface() {
     local preset_iface="${1:-}" excluded_iface="${2:-}" iface_label="${3:-LAN}"
-    local iface_name iface_choice iface_index iface_addrs iface_state
+    local iface_name iface_choice iface_index iface_state
     local -a lan_candidates=()
     while IFS= read -r iface_name; do
         [ "$iface_name" = "$excluded_iface" ] && continue
@@ -1182,7 +1181,7 @@ ask_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "'$user_answer' is not valid, enter a positive integer -retry"
+        info "invalid value, enter a positive integer -retry"
     done
 }
 
@@ -1236,7 +1235,6 @@ discover_unifi_controller() {
     local check_ports=(8443 11443)
     local test_url http_code login_payload
 
-    log "INFO: Probing ${server_ip} on ports ${check_ports[*]} ..."
     # Pass username/password to jq via environment, not --arg, so the
     # plaintext password never appears in jq's own argv (readable by any
     # local user via /proc/<pid>/cmdline).
@@ -1293,7 +1291,7 @@ fetch_unifi() {
 
     login_payload=$(UH_JQ_USER="$unifi_user" UH_JQ_PASS="$unifi_pass" jq -n \
         '{username: env.UH_JQ_USER, password: env.UH_JQ_PASS}')
-    cookie_jar=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
+    cookie_jar=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] check space, read-only or immutable -abort"; }
 
     curl -sk -c "$cookie_jar" -o /dev/null \
         -X POST "${controller_url}${login_path}" \
@@ -1335,7 +1333,7 @@ run_setup_wizard() {
         found_url="$discovered_url"
         found_type="$discovered_type"
     else
-        { err "[1/2] no UniFi controller detected"; abort "[2/2] UniFi controller: check credentials/service -abort"; }
+        { err "[1/2] no UniFi controller detected"; abort "[2/2] check controller credentials and service -abort"; }
     fi
     # UNIFI_SITE takes the site's internal name, not the name shown in UniFi
     local site_list=() site_answer cfg_site=""
@@ -1492,8 +1490,7 @@ run_setup_wizard() {
         warn "[1/2] Could not compute TLS certificate pin"
         warn "[2/2] uhmd will connect without pinning -alert"
     fi
-    echo "Script invoked after every ACL change (must exist and be executable)"
-    ask "Path to reload script" "${core_dir}/uhmreload.sh" cfg_reload_script
+    cfg_reload_script="${core_dir}/uhmreload.sh"
     [ -f "$cfg_reload_script" ] && [ -x "$cfg_reload_script" ] \
         || abort "reload script not found or not executable -abort"
     ask_number "Daemon poll interval in seconds (POLL_INTERVAL)" "20" cfg_poll_interval
@@ -1526,7 +1523,7 @@ run_setup_wizard() {
         : > "$uhm_env"
 
         local uhm_block
-        uhm_block=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
+        uhm_block=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] check space, read-only or immutable -abort"; }
 
         cat > "$uhm_block" <<EOF
 # =============================================================================
@@ -1897,9 +1894,9 @@ install_apache2() {
     fi
 
     retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
+        || { for dep_pkg in "${missing_pkgs[@]}"; do warn "cannot install $dep_pkg -alert"; done; abort "install them with apt, then re-run -abort"; }
     systemctl enable apache2 &>/dev/null || true
-    info "Installed: ${missing_pkgs[*]}"
+    for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
 }
 
 # ------------------------------------------------------------------------------
@@ -1933,7 +1930,7 @@ do_install() {
         esac
 
         local unifisetup_tmp
-        unifisetup_tmp=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] temp file: check space, read-only, immutable -abort"; }
+        unifisetup_tmp=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] check space, read-only or immutable -abort"; }
         local unifisetup_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh"
         local unifisetup_rc=0 unifisetup_code
         unifisetup_code=$(curl -sL -w '%{http_code}' -o "$unifisetup_tmp" "$unifisetup_url") || unifisetup_rc=$?
@@ -2015,22 +2012,13 @@ EOF
     install_logrotate
     install_systemd_service
     register_project_cron || abort "cannot write uhm cron -abort"
-    if confirm "Install the web interface (log viewer, ACL editor, reports)?" "n"; then
-        install_web || true
-    fi
+    install_web
 
     final_sanity_check
 
     trap - EXIT
 
-    echo "uhm installed"
-    echo ""
-    echo "Next steps:"
-    echo "1. Firewall: ${uhm_iptables_dest}"
-    echo "   Switches: FWView tab or ${fw_conf_dest}"
-    echo "2. Check service: systemctl status uhmd"
-    echo "3. Check logs: tail -f ${uhm_log_file}"
-    echo ""
+    echo "Web interface: http://127.0.0.1:${web_port}/"
 }
 
 # ------------------------------------------------------------------------------

@@ -8,7 +8,7 @@
 #
 # USAGE:
 # COMMAND                 ACTION
-# sudo bash uhmreload.sh  (no arguments)
+# sudo bash uhmreload.sh  Run (no arguments)
 #
 # LOG: /var/log/uhm.log
 #

@@ -8,7 +8,7 @@
 #
 # USAGE:
 # COMMAND                 ACTION
-# sudo bash uhmleases.sh  (no arguments; normally invoked by uhmreload.sh)
+# sudo bash uhmleases.sh  Run (no arguments)
 #
 # LOG: /var/log/uhm.log
 #

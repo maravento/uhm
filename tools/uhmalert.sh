@@ -178,7 +178,7 @@ insert_after_last_delimiter() {
             || { log "ERROR: cannot write $(basename "$conf_file") -abort"; exit 1; }
         return
     fi
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: temp file: check space, read-only, immutable -abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: [1/2] cannot create temp file in /tmp"; log "ERROR: [2/2] check space, read-only or immutable -abort"; exit 1; }
     if ! { head -n "$last_line" "$conf_file" > "$tmp_file" \
         && printf '\n%s\n' "$env_block" >> "$tmp_file" \
         && tail -n "+$((last_line + 1))" "$conf_file" >> "$tmp_file" \
@@ -195,7 +195,7 @@ install_rollback() {
     local exit_code=$?
     trap - EXIT
     (( exit_code == 0 )) && return 0
-    log "WARNING: uhmalert install failed, removing its changes -alert"
+    log "WARNING: uhmalert install failed, removing changes -alert"
     if (( created_unit )); then
         systemctl disable uhmalert.service 2>/dev/null || true
         systemctl stop uhmalert.service 2>/dev/null || true
@@ -204,8 +204,12 @@ install_rollback() {
     fi
     (( created_script )) && rm -f "$target_path"
     if [[ -n "$env_backup" ]]; then
-        cp -p "$env_backup" "$uhm_env" || log "ERROR: cannot restore $(basename "$uhm_env")"
-        rm -f "$env_backup"
+        if cp -p "$env_backup" "$uhm_env"; then
+            rm -f "$env_backup"
+        else
+            log "WARNING: [1/2] cannot restore $(basename "$uhm_env")"
+            log "WARNING: [2/2] copy kept in $env_backup -alert"
+        fi
     fi
     exit "$exit_code"
 }
@@ -498,7 +502,7 @@ notify() {
 # timestamp. printf's %()T is bash's own strftime, no subprocess involved.
 on_term() {
     printf -v term_ts '%(%Y-%m-%d %H:%M:%S)T' -1
-    printf '%s uhmalert done\n' "$term_ts"
+    printf '%s INFO: uhmalert done\n' "$term_ts"
     exit 0
 }
 trap on_term TERM INT
