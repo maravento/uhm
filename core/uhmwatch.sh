@@ -20,6 +20,9 @@
 
 set -uo pipefail
 
+# awk is a command, not a package: check it before its first use
+command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
+
 # USAGE
 # Answered before any check: --help must work without root
 usage() {
@@ -120,7 +123,7 @@ done
 
 target_path="/etc/uhm/core/uhmwatch.sh"
 
-# validation -- integer only; use directly with =~
+# validation -integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_SINT='^(0|-?[1-9][0-9]*)$'
 UH_MAX=9223372036854775807

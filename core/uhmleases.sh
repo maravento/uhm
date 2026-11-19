@@ -87,7 +87,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -- one variable per thing validated; use directly with =~
+# validation -one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
@@ -1126,8 +1126,7 @@ is_pydhcp() {
                         elif grep -qi "^a;${mac_address};" "$UHM_GRACE" 2>/dev/null; then
                             echo "$lease_content" >> "$temp_leases"
                         else
-                            log "INFO: add $mac_address to uhm-grace"
-                            log "INFO: ip=$ip_address host=${client_name:0:20}"
+                            log "INFO: add $mac_address $ip_address to uhm-grace"
                             echo "a;${mac_address};${ip_address};${client_name};$(date +%s);" >> "$UHM_GRACE"
                             echo "$lease_content" >> "$temp_leases"
                         fi
@@ -1150,8 +1149,7 @@ is_pydhcp() {
                 # Every lease block was successfully parsed and every single one
                 # belongs to a MAC that is now in blockdhcp.txt -- a legitimately
                 # empty result, not a parsing failure. Safe to clear.
-                log "INFO: all $total_seen lease(s) belong to blocked MACs"
-                log "INFO: clearing pydhcpd.leases"
+                log "INFO: all $total_seen lease(s) blocked, clearing pydhcpd.leases"
                 if ! mv -fT -- "$temp_leases" "$leases_file"; then
                     log "ERROR: cannot replace $(basename "$leases_file") -abort"
                     exit 1
@@ -1250,13 +1248,19 @@ class "blockdhcp" {
         # fixed-address host{} block above -- join blockdhcp.txt entries in
         # the same "blockdhcp" class: pydhcpd denies them a lease outright,
         # exactly like a blocked MAC.
+        # MACs active in a higher-priority list never join blockdhcp, even if
+        # dedup_mac_vs() could not rewrite blockdhcp.txt
+        local keep_macs
+        keep_macs=$( { grep -hE '^a;' "$ACL_PATH"/mac-*.txt
+            [[ "$UNIFI_HOTSPOT_ENABLED" == true ]] && grep -hE '^a;' "$UHM_MACAUTH" "$UHM_GRACE"
+            } 2>/dev/null | cut -d ';' -f 2 | tr '[:upper:]' '[:lower:]' | sort -u)
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
             grep -h '^#a;' "$ACL_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
             if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
                 grep -h '^#a;' "$UHM_MACAUTH" 2>/dev/null | cut -d ';' -f 2 || true
             fi
-        } | grep -E "$UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u \
+        } | grep -E "$UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u | grep -vxF -f <(printf '%s\n' "$keep_macs") \
           | while IFS= read -r mac_list; do
                 printf 'subclass "blockdhcp" 1:%s;\n' "$mac_list" >>"$dhcp_conf_temp"
             done || true
@@ -1298,19 +1302,6 @@ class "blockdhcp" {
         fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
     }
 
-    # Log lines below do not carry the function name -- they use short,
-    # generic phrasing instead.
-    clean_acl() {
-        log "INFO: removing empty lines from ACL files"
-        sed '/^$/d' -i "$ACL_BLOCK_FILE"
-        sed '/^$/d' -i "$ACL_MAC_LIMITED"
-        sed '/^$/d' -i "$ACL_MAC_UNLIMITED"
-        if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
-            sed '/^$/d' -i "$UHM_MACAUTH"
-            sed '/^$/d' -i "$UHM_GRACE"
-        fi
-    }
-
     order_files_acl() {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
         if [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
@@ -1333,7 +1324,6 @@ class "blockdhcp" {
         expire_grace_entries
     fi
 
-    clean_acl
     trap 'rm -f "${temp_files[@]}" 2>/dev/null; systemctl reset-failed pydhcpd 2>/dev/null; systemctl is-active --quiet pydhcpd || systemctl start pydhcpd' EXIT
     systemctl stop pydhcpd || {
         local stop_rc=$?

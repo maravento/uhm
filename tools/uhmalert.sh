@@ -20,6 +20,9 @@
 
 set -uo pipefail
 
+# awk is a command, not a package: check it before its first use
+command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
+
 # USAGE
 # Answered before any check: --help must work without root
 usage() {
@@ -82,7 +85,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -- integer only; use directly with =~
+# validation -integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_SINT='^(0|-?[1-9][0-9]*)$'
 UH_MAX=9223372036854775807
@@ -422,7 +425,8 @@ for env_key in UHM_API_FAIL_THRESHOLD POLL_INTERVAL UHM_API_TIMEOUT_SECONDS; do
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
     elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
-        key_errors+=("$env_key invalid count")
+        [[ "$env_key" == UHM_API_FAIL_THRESHOLD ]] && key_unit=count || key_unit=seconds
+        key_errors+=("$env_key invalid $key_unit")
     elif ! uh_fits "${!env_key}"; then
         key_errors+=("$env_key exceeds the Bash integer range")
     fi
@@ -474,6 +478,7 @@ gap_limit=$(uh_calc add "$gap_limit" "$jitter_margin") || {
 # unparseable timestamp) must not kill the whole process.
 
 fail_streak=0
+first_fail_ts=""
 alert_sent=0
 last_ts_epoch=0
 last_generic_msg=""
@@ -595,6 +600,7 @@ while true; do
         fi
         last_ts_epoch=$line_epoch
         fail_streak=$(( fail_streak + 1 ))
+        (( fail_streak == 1 )) && first_fail_ts="$line_ts"
 
         if (( fail_streak == fail_threshold )) && (( alert_sent == 0 )); then
             uhmd_start=$(uhmd_started_at)
@@ -602,9 +608,8 @@ while true; do
                 log "INFO: $fail_streak failures within startup grace -skip"
                 fail_streak=0
             else
-                notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $line_ts)"
-                log "INFO: $fail_streak consecutive cycle failures"
-                log "INFO: latest at $line_ts"
+                notify "uhm: $fail_streak consecutive failed cycles reaching the controller (since $first_fail_ts)"
+                log "INFO: $fail_streak failed cycles since $first_fail_ts"
                 alert_sent=1
             fi
         fi

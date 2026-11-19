@@ -244,7 +244,7 @@ check_unifi_versions() {
     fi
 }
 
-# validation -- one variable per thing validated; use directly with =~
+# validation -one variable per thing validated; use directly with =~
 UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
@@ -1060,9 +1060,9 @@ load_pydhcp_conf() {
     done
     if (( ${#absent_keys[@]} > 0 )); then
         for env_key in "${absent_keys[@]}"; do
-            err "$(basename "$pydhcp_env"): missing key $env_key -abort"
+            warn "$env_key missing line -alert"
         done
-        exit 1
+        abort "${#absent_keys[@]} key(s) invalid in pydhcp.env -abort"
     fi
 
     # Load only these known keys instead of sourcing the whole file, so a
@@ -1202,7 +1202,7 @@ ask_ip() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "'$user_answer' is not a valid IPv4 address -retry"
+        info "invalid IPv4 address -retry"
     done
 }
 
@@ -1445,24 +1445,20 @@ run_setup_wizard() {
             ask_ip "Hotspot range start" "${net_base}.160" cfg_ini_range
             ask_ip "Hotspot range end" "${net_base}.199" cfg_end_range
             if ! ip_le "$cfg_ini_range" "$cfg_end_range"; then
-                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
                 info "Hotspot range is inverted -retry"
                 continue
             fi
             if ! ip_is_usable_host "$cfg_ini_range" "$SERV_SUBNET" "$SERV_MASK" \
                || ! ip_is_usable_host "$cfg_end_range" "$SERV_SUBNET" "$SERV_MASK"; then
-                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
                 info "range ends must be usable hosts in the subnet -retry"
                 continue
             fi
             if ranges_overlap "$cfg_ini_range" "$cfg_end_range" "$SERVER_IP" "$SERVER_IP"; then
-                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
                 info "Invalid Hotspot range: SERVER_IP is inside -retry"
                 continue
             fi
             if ranges_overlap "$cfg_ini_range" "$cfg_end_range" \
                                "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK"; then
-                info "Hotspot range ${cfg_ini_range}-${cfg_end_range}"
                 info "Invalid Hotspot range: overlaps pydhcp pool -retry"
                 continue
             fi
@@ -1885,18 +1881,20 @@ install_pydhcp() {
 install_apache2() {
     local dep_pkg missing_pkgs=()
 
-    for dep_pkg in apache2 libapache2-mod-php; do
+    for dep_pkg in apache2 apache2-bin apache2-data apache2-doc apache2-utils libapache2-mod-php; do
         [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
     done
     if (( ${#missing_pkgs[@]} == 0 )); then
         info "apache2 already present"
-        return 0
+    else
+        retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
+            || { for dep_pkg in "${missing_pkgs[@]}"; do warn "cannot install $dep_pkg -alert"; done; abort "install them with apt, then re-run -abort"; }
+        systemctl enable apache2 &>/dev/null || true
+        for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
     fi
-
-    retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { for dep_pkg in "${missing_pkgs[@]}"; do warn "cannot install $dep_pkg -alert"; done; abort "install them with apt, then re-run -abort"; }
-    systemctl enable apache2 &>/dev/null || true
-    for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
+    # apache2-doc breaks after apache2 installs or upgrades; reinstall it always
+    retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --reinstall apache2-doc \
+        || abort "cannot reinstall apache2-doc -abort"
 }
 
 # ------------------------------------------------------------------------------
@@ -1906,6 +1904,25 @@ install_apache2() {
 do_install() {
     check_requirements install
     install_apt_deps
+
+    # A reused Apache gets its existing configuration modified: ask first
+    if dpkg -s apache2 &>/dev/null; then
+        local apache_configs=() apache_php_ini
+        [[ -f "$apache_ports" ]] && apache_configs+=("$apache_ports")
+        [[ -f /etc/logrotate.d/apache2 ]] && apache_configs+=(/etc/logrotate.d/apache2)
+        for apache_php_ini in /etc/php/*/apache2/php.ini; do
+            [ -f "$apache_php_ini" ] && apache_configs+=("$apache_php_ini")
+        done
+        if (( ${#apache_configs[@]} > 0 )); then
+            echo "uhm will modify these existing Apache configurations:"
+            printf ' %s\n' "${apache_configs[@]}"
+            if ! confirm "Continue with these changes?"; then
+                info "installation cancelled"
+                log "INFO: uhmsetup done"
+                exit 0
+            fi
+        fi
+    fi
 
     lan_ip="${lan_cidr_answer%/*}"
     info "WAN interface: $wan_iface"
@@ -2207,11 +2224,6 @@ perform_remove() {
         info "Removed $logrotate_file"
     else
         info "No logrotate config found"
-    fi
-
-    # uhmbk cron entry
-    if [[ -x "$uhmbk_script" ]]; then
-        "$uhmbk_script" --uninstall || true
     fi
 
     # /etc/uhm

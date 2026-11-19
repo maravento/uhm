@@ -23,6 +23,9 @@ set -uo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# awk is a command, not a package: check it before its first use
+command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
+
 # LOGGING
 # Shared log with uhmreload.sh and uhmleases.sh
 log_file="/var/log/uhm.log"
@@ -85,7 +88,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -- one variable per thing validated; use directly with =~
+# validation -one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_UINT='^(0|[1-9][0-9]*)$'
@@ -372,7 +375,7 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../tools/uhmenv.sh"
     log "ERROR: cannot load uhmenv.sh -abort"
     exit 1
 fi
-env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERVER_IP SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
+env_keys='UNIFI_HOTSPOT_ENABLED UHM_ESSID UNIFI_CONTROLLER_URL UNIFI_USERNAME UNIFI_PASSWORD UNIFI_TYPE UNIFI_SITE UNIFI_CERT_PIN SERV_SUBNET SERV_MASK UHM_PATH UHM_INI_RANGE UHM_END_RANGE UHM_RELOAD UHM_GRACE UHM_MACAUTH ACL_BLOCK_FILE ACL_PATH UHM_QUEUE PYDHCPD_LEASES POLL_INTERVAL STARTUP_GRACE_SECONDS RELOAD_SAFETY_INTERVAL_SECONDS AUTHORIZED_LEASE_TIME UHM_LEASES_TIMEOUT_SECONDS UHM_IPTABLES_TIMEOUT_SECONDS UHM_API_TIMEOUT_SECONDS'
 
 # LOAD
 # pydhcp.env first: it owns the network, ACL and lease values, and is the
@@ -391,7 +394,7 @@ for env_key in ACL_PATH ACL_BLOCK_FILE PYDHCPD_LEASES; do
         key_errors+=("$env_key not set")
     fi
 done
-for env_key in SERVER_IP SERV_SUBNET; do
+for env_key in SERV_SUBNET; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -1234,7 +1237,6 @@ add_mac_to_acl() {
         fi
         local exp_human
         exp_human=$(date -d "@$end_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$end_time")
-        log "INFO: $mac_addr $client_ip ${client_name:0:20}"
         log "INFO: Authorized $mac_addr until $exp_human"
     fi
 
@@ -1407,15 +1409,12 @@ process_new_leases() {
                     continue
                 fi
                 echo "a;${mac_addr};${client_ip};${client_name};$(date +%s);" >> "$UHM_GRACE"
-                log "INFO: new client $mac_addr -> grace"
-                log "INFO: ip=$client_ip host=${client_name:0:20}"
+                log "INFO: new client $mac_addr $client_ip -> grace"
                 (( added_count++ )) || true
             elif [[ -n "$mac_addr" && -n "$client_ip" ]] && ! ip_in_lan "$client_ip"; then
                 outside_key="$mac_addr|$client_ip"
                 if [[ -z "${outside_seen[$outside_key]:-}" && -z "${outside_now[$outside_key]:-}" ]]; then
-                    log "INFO: lease outside LAN subnet"
-                    log "INFO: ip=$client_ip mac=$mac_addr"
-                    log "INFO: subnet is $SERV_SUBNET/$SERV_MASK -skip"
+                    log "INFO: $mac_addr $client_ip outside LAN -skip"
                 fi
                 outside_now[$outside_key]=1
             fi
@@ -1642,8 +1641,7 @@ revoke_unauthorized() {
             log "WARNING: bad MAC '$mac_addr' -alert"
             continue
         fi
-        log "INFO: Revoking $mac_addr"
-        log "INFO: authorized=false in UniFi; releasing from uhm-auth"
+        log "INFO: Revoking $mac_addr, unauthorized in UniFi"
         if ! queue_lease_removal "$mac_addr"; then
             log "INFO: keeping $mac_addr, will retry -skip"
             continue
@@ -1717,8 +1715,7 @@ check_and_reload_if_changed() {
         (( mac_reload_triggered )) && log "INFO: mac-*.txt changed, reloading now"
         (( reload_busy_retry )) && log "INFO: retrying busy reload"
     else
-        log "INFO: ${RELOAD_SAFETY_INTERVAL_SECONDS}s since last reload"
-        log "INFO: forcing safety-net reload"
+        log "INFO: no reload in ${RELOAD_SAFETY_INTERVAL_SECONDS}s, forcing safety-net reload"
     fi
 
     acl_snapshot_block="$cur_block"
@@ -1798,8 +1795,7 @@ kick_newly_authorized() {
                 continue
             fi
         else
-            log "INFO: stat/sta unavailable"
-            log "INFO: kicking $mac_addr without presence check"
+            log "INFO: kicking $mac_addr, stat/sta unavailable"
         fi
 
         kick_url=$(api_path "cmd/stamgr")
