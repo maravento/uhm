@@ -123,7 +123,7 @@ done
 
 target_path="/etc/uhm/core/uhmwatch.sh"
 
-# validation -integer only; use directly with =~
+# validation - integer only; use directly with =~
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_SINT='^(0|-?[1-9][0-9]*)$'
 UH_MAX=9223372036854775807

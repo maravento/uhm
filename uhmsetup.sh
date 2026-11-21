@@ -62,7 +62,7 @@ fi
 
 check_requirements() {
     local network_command
-    for network_command in ip awk python3; do
+    for network_command in ip timeout awk python3; do
         command -v "$network_command" >/dev/null 2>&1 \
             || abort "network command '$network_command' missing -abort"
     done
@@ -244,7 +244,7 @@ check_unifi_versions() {
     fi
 }
 
-# validation -one variable per thing validated; use directly with =~
+# validation - one variable per thing validated; use directly with =~
 UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
@@ -642,7 +642,7 @@ confirm() {
     # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
     local prompt_text="$1" default_value="${2:-n}" user_answer hint_text
     [[ "$default_value" == "y" ]] && hint_text="[Y/n]" || hint_text="[y/N]"
-    read -rp " ${prompt_text} ${hint_text}: " user_answer
+    read -rp " ${prompt_text} ${hint_text}: " user_answer || return 1
     user_answer="${user_answer:-$default_value}"
     [[ "${user_answer,,}" =~ ^y(es)?$ ]]
 }
@@ -668,7 +668,8 @@ install_apt_deps() {
         abort "awk is not installed -abort"
     fi
     local dep_pkg missing_pkgs=()
-    for dep_pkg in "${apt_deps[@]}"; do
+    (( $# > 0 )) || set -- "${apt_deps[@]}"
+    for dep_pkg in "$@"; do
         [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
     done
     (( ${#missing_pkgs[@]} == 0 )) && return 0
@@ -826,127 +827,161 @@ select_network_interfaces() {
     lan_iface="$lan_iface_answer"
 }
 
-check_static_lan() {
-    local static_result
-    static_result=$(python3 -I - "$1" "$2" <<'STATIC_LAN'
-import configparser
-import fnmatch
-import ipaddress
-import json
-import os
-from pathlib import Path
-import re
-import shutil
-import subprocess
-import sys
+# check persistent static IPv4
+static_ipv4_query() {
+    LC_ALL=C PAGER=cat SYSTEMD_PAGER=cat timeout -k 1s 3s "$@" </dev/null 2>/dev/null
+}
 
-iface, address = sys.argv[1:]
+keyfile_has_ipv4() {
+    local file="$1" uuid="$2" cidr="$3"
+    local line section='' saved_uuid='' method='' value key found=1
+    [[ -f "$file" && ! -L "$file" && -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            \[*\]) section="$line" ;;
+            *=*)
+                key="${line%%=*}"
+                value="${line#*=}"
+                case "$section:$key" in
+                    '[connection]:uuid') saved_uuid="$value" ;;
+                    '[ipv4]:method') method="$value" ;;
+                    '[ipv4]:address'*)
+                        if [[ "$key" =~ ^address[0-9]+$ && "${value%%,*}" == "$cidr" ]]; then
+                            found=0
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+    done < "$file"
+    [[ "$saved_uuid" == "$uuid" && ( "$method" == manual || "$method" == auto ) ]] &&
+        return "$found"
+    return 1
+}
 
-def run(*args):
-    return subprocess.check_output(
-        args, text=True, stderr=subprocess.DEVNULL, timeout=10,
-        env={**os.environ, 'LC_ALL': 'C', 'SYSTEMD_PAGER': 'cat'}).strip()
+netplan_has_ipv4() (
+    local id="$1" cidr="$2" uuid="${3:-}"
+    local kind path entries key value runtime netplan_root dir profile_uuid
+    local -a root_args=()
+    [[ "$id" =~ ^[[:alnum:]_.-]+$ ]] || return 1
+    id=${id//./\\.}
+    for runtime in /run/netplan/*.yaml; do
+        [[ -e "$runtime" || -L "$runtime" ]] || continue
+        [[ -n "$uuid" ]] || return 1
+        netplan_root=$(mktemp -d /tmp/static-ipv4.XXXXXXXX) || return 1
+        trap 'rm -rf -- "$netplan_root"' EXIT
+        for dir in /etc /lib /usr/lib; do
+            [[ -d "$dir/netplan" ]] || continue
+            mkdir -p -- "$netplan_root$dir" || return 1
+            ln -s -- "$dir/netplan" "$netplan_root$dir/netplan" || return 1
+        done
+        root_args=(--root-dir "$netplan_root")
+        break
+    done
+    for kind in ethernets wifis bridges bonds vlans; do
+        path="$kind.$id"
+        if [[ -n "$uuid" ]]; then
+            profile_uuid=$(static_ipv4_query netplan get "${root_args[@]}" "$path.networkmanager.uuid") || continue
+            profile_uuid=${profile_uuid//\"/}
+            [[ "$profile_uuid" == null || -z "$profile_uuid" || "$profile_uuid" == "$uuid" ]] || continue
+        fi
+        entries=$(static_ipv4_query netplan get "${root_args[@]}" "$path.addresses") || entries=
+        while read -r key value; do
+            if [[ "$key" == - && "${value//\"/}" == "$cidr" ]]; then
+                return 0
+            fi
+        done <<< "$entries"
 
-def has_address(values):
-    return any(str(ipaddress.ip_interface(value.split(',')[0]).ip)
-               == address for value in values)
+        [[ -n "$uuid" && "$profile_uuid" == "$uuid" ]] || continue
+        entries=$(static_ipv4_query netplan get "${root_args[@]}" "$path.networkmanager.passthrough") || continue
+        while read -r key value; do
+            value="${value//\"/}"
+            if [[ "$key" =~ ^ipv4[.]address[0-9]+:$ && "${value%%,*}" == "$cidr" ]]; then
+                return 0
+            fi
+        done <<< "$entries"
+    done
+    return 1
+)
 
-def persistent_static():
-    data = json.loads(run('ip', '-j', '-4', 'addr', 'show', 'dev', iface))
-    selected = [entry for link in data for entry in link['addr_info']
-                if entry.get('local') == address]
-    if len(selected) != 1:
-        return 'unknown'
-    entry = selected[0]
-    if entry.get('dynamic') or 'dynamic' in entry.get('flags', []):
-        return 'dhcp'
-
-    nm_active = False
-    if shutil.which('nmcli'):
-        try:
-            uuid = run('nmcli', '-g', 'GENERAL.CON-UUID',
-                       'device', 'show', iface)
-            if uuid and uuid != '--':
-                nm_active = True
-                method = run('nmcli', '-g', 'ipv4.method',
-                             'connection', 'show', uuid)
-                addresses = run('nmcli', '-g', 'ipv4.addresses',
-                                'connection', 'show', uuid)
-                if method != 'manual' or not has_address(
-                        addresses.split(', ')):
-                    return 'unknown'
-                rows = run('nmcli', '-t', '--escape', 'no',
-                           '-f', 'UUID,FILENAME', 'connection', 'show')
-                netplan_profile = False
-                for row in rows.splitlines():
-                    key, _, filename = row.partition(':')
-                    if key != uuid:
-                        continue
-                    netplan_profile = (filename.startswith('/run/') and
-                                       '/netplan-' in filename)
-                    if not filename.startswith('/etc/'):
-                        continue
-                    config = configparser.ConfigParser(interpolation=None)
-                    config.read(filename)
-                    if config.get('ipv4', 'method') != 'manual':
-                        return 'unknown'
-                    values = [value for key, value in config['ipv4'].items()
-                              if re.fullmatch(r'address\d+', key)]
-                    if has_address(values):
-                        return 'static'
-                if not netplan_profile:
-                    return 'unknown'
-        except (OSError, ValueError, configparser.Error,
-                subprocess.SubprocessError):
-            if nm_active:
-                return 'unknown'
-
-    if not shutil.which('netplan'):
-        return 'unknown'
-    # Runtime Netplan overrides cannot prove persistent configuration.
-    if list(Path('/run/netplan').glob('*.yaml')):
-        return 'unknown'
-    if not nm_active:
-        status = run('networkctl', '--no-pager', 'status', iface)
-        if not re.search(r'Network File: .*netplan.*\.network', status):
-            return 'unknown'
-    import yaml
-    try:
-        network = yaml.safe_load(run('netplan', 'get')).get('network', {})
-    except yaml.YAMLError:
-        return 'unknown'
-    for kind in ('ethernets', 'wifis', 'bridges', 'bonds', 'vlans'):
-        for name, config in network.get(kind, {}).items():
-            match = config.get('match', {})
-            if match:
-                mac = data[0].get('permaddr', data[0].get('address', ''))
-                matches = not (set(match) - {'name', 'macaddress'})
-                if 'name' in match:
-                    matches &= fnmatch.fnmatchcase(iface, match['name'])
-                if 'macaddress' in match:
-                    matches &= mac.lower() == match['macaddress'].lower()
-                if config.get('set-name') == iface:
-                    matches = True
-            else:
-                matches = name == iface
-            if matches and has_address(config.get('addresses', [])):
-                return 'static'
-    return 'unknown'
-
-try:
-    print(persistent_static())
-except (OSError, ValueError, KeyError, TypeError, AttributeError,
-        ImportError, subprocess.SubprocessError):
-    print('unknown')
-STATIC_LAN
-    ) || static_result=unknown
-    if [ "${3:-}" = probe ]; then
-        printf '%s\n' "$static_result"
-        return 0
+netplan_profile_id() {
+    local LC_ALL=C
+    local file="$1" uuid="$2" ssid encoded='' char escaped index
+    ssid=$(static_ipv4_query nmcli --escape no -g 802-11-wireless.ssid connection show uuid "$uuid") || ssid=
+    for (( index=0; index<${#ssid}; index++ )); do
+        char=${ssid:index:1}
+        if [[ "$char" =~ [a-zA-Z0-9._~-] || "$char" > $'\177' ]]; then
+            encoded+="$char"
+        else
+            printf -v escaped '%%%02X' "'$char"
+            encoded+="$escaped"
+        fi
+    done
+    if [[ -n "$encoded" ]]; then
+        file=${file%"-$encoded"}
     fi
-    case "$static_result" in
+    printf '%s' "$file"
+}
+
+has_persistent_ipv4() {
+    local iface="$1" cidr="$2" uuid addresses profiles key file status
+    uuid=$(static_ipv4_query nmcli -g GENERAL.CON-UUID device show "$iface") || uuid=
+    if [[ -n "$uuid" && "$uuid" != -- ]]; then
+        addresses=$(static_ipv4_query nmcli -g ipv4.addresses connection show uuid "$uuid") || return 1
+        [[ ",${addresses// /}," == *",$cidr,"* ]] || return 1
+
+        profiles=$(static_ipv4_query nmcli -t --escape no -f UUID,FILENAME connection show) || return 1
+        while IFS=: read -r key file; do
+            [[ "$key" == "$uuid" ]] || continue
+            case "$file" in
+                /etc/NetworkManager/system-connections/*)
+                    keyfile_has_ipv4 "$file" "$uuid" "$cidr"
+                    return "$?"
+                    ;;
+                /run/NetworkManager/system-connections/netplan-*.nmconnection)
+                    file="${file##*/netplan-}"
+                    file=$(netplan_profile_id "${file%.nmconnection}" "$uuid")
+                    netplan_has_ipv4 "$file" "$cidr" "$uuid"
+                    return "$?"
+                    ;;
+            esac
+        done <<< "$profiles"
+        return 1
+    fi
+
+    status=$(static_ipv4_query networkctl --no-pager status "$iface") || return 1
+    while read -r key file; do
+        if [[ "$key $file" =~ ^Network\ File:\ /run/systemd/network/10-netplan-(.+)[.]network$ ]]; then
+            netplan_has_ipv4 "${BASH_REMATCH[1]}" "$cidr"
+            return "$?"
+        fi
+    done <<< "$status"
+    return 1
+}
+
+lan_ipv4_condition() {
+    local iface="$1" address="$2" addresses cidr flags
+    if addresses=$(static_ipv4_query ip -4 -o addr show dev "$iface" scope global); then
+        while read -r _ _ _ cidr flags; do
+            [[ "${cidr%/*}" == "$address" && "$cidr" == */* ]] || continue
+            if [[ " $flags " == *" dynamic "* ]]; then
+                printf 'dynamic'
+                return 0
+            fi
+            if has_persistent_ipv4 "$iface" "$cidr"; then
+                printf 'static'
+                return 0
+            fi
+            break
+        done <<< "$addresses"
+    fi
+    printf 'unverified'
+}
+
+check_static_lan() {
+    case "$(lan_ipv4_condition "$1" "$2")" in
         static) return 0 ;;
-        dhcp)
+        dynamic)
             log "ERROR: [1/2] LAN $1: $2 uses DHCP"
             log "ERROR: [2/2] configure a static LAN IPv4 -abort"
             ;;
@@ -957,15 +992,6 @@ STATIC_LAN
     esac
     exit 1
 }
-
-lan_ipv4_condition() {
-    case "$(check_static_lan "$1" "$2" probe)" in
-        static) printf 'static' ;;
-        dhcp) printf 'dynamic' ;;
-        *) printf 'unverified' ;;
-    esac
-}
-
 describe_lan_ipv4() {
     local cidr
     while read -r cidr; do
@@ -981,7 +1007,7 @@ require_static_lan_candidate() {
     (( ${#candidates[@]} > 1 )) || return 0
     for iface in "${candidates[@]}"; do
         while read -r cidr; do
-            if [ "$(check_static_lan "$iface" "${cidr%/*}" probe)" = static ]; then
+            if [ "$(lan_ipv4_condition "$iface" "${cidr%/*}")" = static ]; then
                 return 0
             fi
         done < <(ip -4 -o addr show dev "$iface" scope global | awk '{print $4}')
@@ -1764,18 +1790,40 @@ remove_web() {
 # Apache keeps 14 rotations by default; the projects keep 7
 set_apache_logrotate() {
     local apache_rotate="/etc/logrotate.d/apache2"
-    [[ -f "$apache_rotate" ]] || { warn "apache2 has no logrotate file -alert"; return 0; }
-    if grep -qE '^[[:space:]]*rotate[[:space:]]+7$' "$apache_rotate"; then
-        info "${apache_rotate#/etc/} already rotate 7 -skip"
+    # Replaced, not edited; the package rotation and reload are kept.
+    if [[ -f "$apache_rotate" ]]; then
+        cp -f "$apache_rotate" "$apache_rotate.bak" \
+            || { warn "cannot back up ${apache_rotate#/etc/} -alert"; return 0; }
+    fi
+    if ! cat > "$apache_rotate" <<'EOF'
+/var/log/apache2/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 root adm
+    sharedscripts
+    prerotate
+        if [ -d /etc/logrotate.d/httpd-prerotate ]; then
+            run-parts /etc/logrotate.d/httpd-prerotate
+        fi
+    endscript
+    postrotate
+        if pgrep -f ^/usr/sbin/apache2 > /dev/null; then
+            invoke-rc.d apache2 reload 2>&1 | logger -t apache2.logrotate
+        fi
+    endscript
+}
+EOF
+    then
+        warn "cannot write ${apache_rotate#/etc/} -alert"
         return 0
     fi
-    cp -f "$apache_rotate"{,.bak} &>/dev/null || true
-    sed -i -E 's/^([[:space:]]*)rotate[[:space:]]+[0-9]+$/\1rotate 7/' "$apache_rotate"
-    if grep -qE '^[[:space:]]*rotate[[:space:]]+7$' "$apache_rotate"; then
-        info "${apache_rotate#/etc/} set to rotate 7 -fixed"
-    else
-        warn "cannot set rotate 7 in ${apache_rotate#/etc/} -alert"
-    fi
+    chown root:root "$apache_rotate" && chmod 644 "$apache_rotate" \
+        || { warn "cannot set ${apache_rotate#/etc/} permissions -alert"; return 0; }
+    info "${apache_rotate#/etc/} replaced, previous kept as .bak -fixed"
 }
 
 install_logrotate() {
@@ -1841,26 +1889,32 @@ install_systemd_service() {
     fi
 }
 
-# Installs pydhcp, uhm's DHCP backend, by running its own installer.
-#
-# pysetup.sh is run interactively, not driven with expect. uhm passes it the
-# interface and the IPv4 address it already asked for, so pysetup.sh only asks
-# for the pool, the DNS and the cleanup interval. It writes every value to
-# pydhcp.env, which all components then read.
+# Runs the PyDHCP installer before UHM applies its own changes.
 install_pydhcp() {
     local pydhcp_path="${script_dir}/pydhcp"
+    local pydhcp_daemon="${pydhcp_env%/*}/core/pydhcpd.py"
+    local action="--install"
 
-    if systemctl is-active --quiet pydhcpd 2>/dev/null; then
-        info "pydhcpd already active -skip"
-        return 0
+    if [[ -f "$pydhcp_env" && -f "$pydhcp_daemon" ]]; then
+        action="--update"
+        load_pydhcp_conf
+        echo "UHM will run pysetup.sh --update before installing UHM."
+        echo "DHCP service may pause. UHM will start pydhcpd if it is stopped."
+        if ! confirm "Update PyDHCP and continue?" "y"; then
+            info "installation cancelled"
+            log "INFO: uhmsetup done"
+            exit 0
+        fi
+    elif [[ -e "$pydhcp_env" || -e "$pydhcp_daemon" ]] \
+        || systemctl is-active --quiet pydhcpd 2>/dev/null; then
+        err "[1/2] incomplete PyDHCP installation"
+        abort "[2/2] check pydhcp.env and core/pydhcpd.py -abort"
+    else
+        echo "UHM requires PyDHCP. Its installer will ask for DHCP settings."
     fi
 
-    echo ""
-    echo "uhm needs pydhcp as its DHCP backend. Its installer runs next and"
-    echo "asks for network values uhm reads afterwards from pydhcp.env"
-    echo ""
-
     if [[ ! -d "$pydhcp_path" ]]; then
+        command -v git >/dev/null || abort "git is needed to obtain pydhcp sources -abort"
         retry_cmd "clone project sources" git clone https://github.com/maravento/pydhcp "$pydhcp_path" \
             || { err "[1/2] cannot clone pydhcp"; abort "[2/2] check network access, then re-run -abort"; }
     fi
@@ -1868,12 +1922,16 @@ install_pydhcp() {
     [[ -r "${pydhcp_path}/pysetup.sh" ]] \
         || { err "[1/2] pysetup.sh not found in $pydhcp_path"; abort "[2/2] remove that directory and re-run -abort"; }
 
-    ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" PYDHCP_SERVER_IP="$lan_ip" bash pysetup.sh --install ) \
-        || { err "[1/2] pydhcp install failed"; abort "[2/2] see ${pydhcp_path}/pysetup.log -abort"; }
+    ( cd "$pydhcp_path" && PYDHCP_LAN_IFACE="$lan_iface" PYDHCP_SERVER_IP="$lan_ip" bash pysetup.sh "$action" ) \
+        || { err "[1/2] pysetup.sh $action failed"; abort "[2/2] see ${pydhcp_path}/pysetup.log -abort"; }
 
+    # Standalone updates preserve the inactive state of a stopped DHCP service.
+    if [[ "$action" == --update ]] && ! systemctl is-active --quiet pydhcpd; then
+        systemctl start pydhcpd || abort "cannot start pydhcpd -abort"
+    fi
     systemctl is-active --quiet pydhcpd 2>/dev/null \
-        || { err "[1/2] pydhcpd is not active after install"; abort "[2/2] check it with: systemctl status pydhcpd -abort"; }
-    info "pydhcp installed, pydhcpd active"
+        || { err "[1/2] pydhcpd is not active after $action"; abort "[2/2] check it with: systemctl status pydhcpd -abort"; }
+    info "pydhcpd active after $action"
 }
 
 # Installs apache2, which uhm needs for the web panel. Kept apart from
@@ -1901,42 +1959,42 @@ install_apache2() {
 # INSTALL
 # ------------------------------------------------------------------------------
 
+confirm_install_replacements() {
+    local existing_config answer
+    for existing_config in "$apache_ports" "$vhost_dest" "$sudoers_dest" "$logrotate_file" \
+        /etc/logrotate.d/apache2 /etc/php/*/apache2/php.ini /etc/cron.d/uhm "$service_dest"; do
+        [ ! -f "$existing_config" ] || existing_configs+=("$existing_config")
+    done
+    (( ${#existing_configs[@]} > 0 )) || return 0
+    printf '%s\n' "Existing configurations to change:"
+    printf ' %s\n' "${existing_configs[@]}"
+    echo "Apache modules and the UHM site will be configured. Apache will be restarted."
+    read -r -p "Continue with these changes? [Y/n]: " answer || answer=n
+    case "${answer,,}" in
+        ""|y|yes) ;;
+        *) info "installation cancelled"; log "INFO: uhmsetup done"; exit 0 ;;
+    esac
+}
+
 do_install() {
     check_requirements install
-    install_apt_deps
-
-    # A reused Apache gets its existing configuration modified: ask first
-    if dpkg -s apache2 &>/dev/null; then
-        local apache_configs=() apache_php_ini
-        [[ -f "$apache_ports" ]] && apache_configs+=("$apache_ports")
-        [[ -f /etc/logrotate.d/apache2 ]] && apache_configs+=(/etc/logrotate.d/apache2)
-        for apache_php_ini in /etc/php/*/apache2/php.ini; do
-            [ -f "$apache_php_ini" ] && apache_configs+=("$apache_php_ini")
-        done
-        if (( ${#apache_configs[@]} > 0 )); then
-            echo "uhm will modify these existing Apache configurations:"
-            printf ' %s\n' "${apache_configs[@]}"
-            if ! confirm "Continue with these changes?"; then
-                info "installation cancelled"
-                log "INFO: uhmsetup done"
-                exit 0
-            fi
-        fi
+    local existing_config apache_ports_before=""
+    local -a existing_configs=()
+    confirm_install_replacements
+    if [ -f "$apache_ports" ]; then
+        apache_ports_before=$(cksum < "$apache_ports") || abort "cannot read ports.conf -abort"
     fi
 
     lan_ip="${lan_cidr_answer%/*}"
     info "WAN interface: $wan_iface"
     info "LAN interface: $lan_iface ($lan_cidr_answer)"
-    if dpkg -s unifi &>/dev/null || [[ -f /var/lib/uosserver/server.conf ]]; then
+    local unifi_action=""
+    if [ "$(dpkg-query -W -f='${db:Status-Status}' unifi 2>/dev/null)" = installed ] \
+        || [[ -f /var/lib/uosserver/server.conf ]]; then
         info "UniFi already installed"
     else
-        local unifi_reply unifi_choice unifi_action
-        read -rp " UniFi is not installed. Install it now? (y/N) " unifi_reply
-        case "$unifi_reply" in
-            [Yy]*) ;;
-            *) abort "UniFi is required, install it then re-run -abort" ;;
-        esac
-
+        local unifi_choice
+        echo "Select the UniFi component required by UHM."
         echo "1) UniFi Network Application"
         echo "2) UniFi OS Server"
         ask "Select an option (1-2)" 1 unifi_choice
@@ -1945,7 +2003,32 @@ do_install() {
             2) unifi_action="osserver" ;;
             *) abort "invalid option -abort" ;;
         esac
+    fi
 
+    install_pydhcp
+    for existing_config in "${existing_configs[@]}"; do
+        # PyDHCP may already have backed up this version while deploying WPAD.
+        if [ "$existing_config" = "$apache_ports" ] && [ -n "$apache_ports_before" ] \
+            && [ -f "$apache_ports.bak" ] \
+            && [ "$(cksum < "$apache_ports.bak")" = "$apache_ports_before" ]; then
+            continue
+        fi
+        cp -p -- "$existing_config" "${existing_config}.bak" \
+            || abort "cannot back up $(basename "$existing_config") -abort"
+    done
+
+    local dep_pkg
+    local -a script_packages=() component_packages=()
+    for dep_pkg in "${apt_deps[@]}"; do
+        case "$dep_pkg" in
+            unbound|ulogd2) component_packages+=("$dep_pkg") ;;
+            *) script_packages+=("$dep_pkg") ;;
+        esac
+    done
+    install_apt_deps "${script_packages[@]}"
+    install_apt_deps "${component_packages[@]}"
+
+    if [ -n "$unifi_action" ]; then
         local unifisetup_tmp
         unifisetup_tmp=$(mktemp) || { err "[1/2] cannot create temp file in /tmp"; abort "[2/2] check space, read-only or immutable -abort"; }
         local unifisetup_url="https://raw.githubusercontent.com/maravento/vault/refs/heads/master/scripts/bash/unifisetup.sh"
@@ -1986,7 +2069,8 @@ EOF
         rm -f "$unifi_expect"
         rm -f "$unifisetup_tmp"
 
-        if ! dpkg -s unifi &>/dev/null && [[ ! -f /var/lib/uosserver/server.conf ]]; then
+        if [ "$(dpkg-query -W -f='${db:Status-Status}' unifi 2>/dev/null)" != installed ] \
+            && [[ ! -f /var/lib/uosserver/server.conf ]]; then
             abort "UniFi install incomplete; see unifisetup.log -abort"
         fi
 
@@ -1998,8 +2082,8 @@ EOF
 
     trap 'install_exit_code=$?; trap - EXIT; (( install_exit_code != 0 )) && { warn "Installation failed, rolling back changes -alert"; perform_remove; }' EXIT
     install_apache2
-    install_pydhcp
 
+    local apache_php_ini
     for apache_php_ini in /etc/php/*/apache2/php.ini; do
         [ -f "$apache_php_ini" ] || continue
         if ! { [ -f "${apache_php_ini}.bak" ] || cp -p "$apache_php_ini" "${apache_php_ini}.bak"; }; then
@@ -2014,9 +2098,6 @@ EOF
 
     systemctl restart apache2 || abort "cannot restart apache2 -abort"
 
-    # Both run here, after pydhcp: detect_dhcp_backend needs pydhcpd active
-    # and load_pydhcp_conf needs pydhcp.env written, and neither exists on a
-    # host where uhm installs pydhcp itself.
     detect_dhcp_backend
     load_pydhcp_conf
     deploy_directories

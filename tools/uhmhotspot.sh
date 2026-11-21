@@ -96,7 +96,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -one variable per thing validated; use directly with =~
+# validation - one variable per thing validated; use directly with =~
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 UH_BOOL='^(true|false)$'
