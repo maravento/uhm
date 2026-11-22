@@ -36,14 +36,14 @@ set -uo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
-# awk is a command, not a package: check it before its first use
-command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo '{"error":"This script must be run as root"}'
     exit 1
 fi
+
+# awk is a command, not a package: check it before its first use
+command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
 
 # dependencies
 for dep_pkg in curl jq coreutils util-linux grep sed systemd gzip findutils; do

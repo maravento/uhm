@@ -23,6 +23,12 @@ set -uo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
+    exit 1
+fi
+
 # awk is a command, not a package: check it before its first use
 command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
 
@@ -42,12 +48,6 @@ log() {
 log_raw() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$log_file" 2>/dev/null || true
 }
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
-    exit 1
-fi
 
 # log file perms (as installed by uhmsetup.sh)
 log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)

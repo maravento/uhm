@@ -286,7 +286,7 @@ sudo bash uhmsetup.sh --help   # or -h
 | `sudo bash uhmsetup.sh --update` | Updates the scripts and preserves the configuration, the ACL lists and the firewall | Actualiza los scripts y conserva la configuración, las listas ACL y el firewall |
 | `sudo bash uhmsetup.sh --uninstall` | Uninstalls uhm, with two confirmations up front | Desinstala uhm, con dos confirmaciones al inicio |
 | `sudo bash uhmsetup.sh --status` | Reports the services, the panel port, the configuration file and the last log lines. Modifies nothing | Informa los servicios, el puerto del panel, el archivo de configuración y las últimas líneas del log. No modifica nada |
-| `sudo bash uhmsetup.sh --help` | Shows the usage. Works without root | Muestra el uso. Funciona sin root |
+| `sudo bash uhmsetup.sh --help` | Shows the usage | Muestra el uso |
 
 > `uhmsetup.sh` takes one action per run. Without arguments it opens the interactive menu, with the same four actions and an exit option.
 >

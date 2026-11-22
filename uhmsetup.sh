@@ -27,7 +27,13 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 
 # USAGE
-# Answered before any check: --help must work without root
+# root check
+if [[ "$(id -u)" != "0" ]]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
+    exit 1
+fi
+
+# Help exits before logging
 usage() {
     cat <<EOF
 Usage: sudo bash $(basename "$0") [OPTION]
@@ -54,12 +60,6 @@ case "${1:-}" in
         ;;
 esac
 
-# root check
-if [[ "$(id -u)" != "0" ]]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
-    exit 1
-fi
-
 check_requirements() {
     local network_command
     for network_command in ip timeout awk python3; do
@@ -73,11 +73,18 @@ check_requirements() {
                 abort "uhm installed; use --update | --uninstall -abort"
             fi
             check_port tcp 4048 "web interface"
-            require_static_lan_candidate
+            check_ipv4_interfaces
+            check_internet
+            lan_change_requested=false
             check_preinstalled
             select_network_interfaces
             read_lan_ipv4 "$lan_iface" "${UHM_SERVER_IP:-}"
-            check_static_lan "$lan_iface" "${lan_cidr_answer%/*}"
+            if [[ -t 0 && -z "${UHM_LAN_IFACE:-}${UHM_SERVER_IP:-}" ]]; then
+                select_setup_lan_settings "$lan_iface" || exit 1
+            else
+                check_static_lan "$lan_iface" "${lan_cidr_answer%/*}"
+            fi
+            return 0
             ;;
         update)
             detect_dhcp_backend
@@ -97,18 +104,14 @@ check_requirements() {
             ;;
     esac
     check_ipv4_interfaces
-    if [ "$1" = install ]; then
-        check_internet
-    else
-        local package
-        for package in "${apt_deps[@]}"; do
-            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
-                | grep -q "ok installed"; then
-                check_internet
-                break
-            fi
-        done
-    fi
+    local package
+    for package in "${apt_deps[@]}"; do
+        if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+            | grep -q "ok installed"; then
+            check_internet
+            break
+        fi
+    done
 }
 
 # prevent overlapping runs
@@ -956,7 +959,7 @@ has_persistent_ipv4() {
             return "$?"
         fi
     done <<< "$status"
-    return 1
+    setup_networkd_has_ipv4 "$iface" "$cidr"
 }
 
 lan_ipv4_condition() {
@@ -1000,21 +1003,494 @@ describe_lan_ipv4() {
     done < <(ip -4 -o addr show dev "$1" scope global | awk '{print $4}')
 }
 
-require_static_lan_candidate() {
-    local iface cidr
-    local -a candidates=()
-    mapfile -t candidates < <(list_ipv4_ifaces)
-    (( ${#candidates[@]} > 1 )) || return 0
-    for iface in "${candidates[@]}"; do
-        while read -r cidr; do
-            if [ "$(lan_ipv4_condition "$iface" "${cidr%/*}")" = static ]; then
-                return 0
-            fi
-        done < <(ip -4 -o addr show dev "$iface" scope global | awk '{print $4}')
+# Prepare the selected LAN before deployment.
+setup_ipv4_number() {
+    local a b c d
+    IFS=. read -r a b c d <<< "$1"
+    printf '%u\n' "$(( (a << 24) | (b << 16) | (c << 8) | d ))"
+}
+
+setup_lan_mask() {
+    local mask=$(( (0xffffffff << (32 - $1)) & 0xffffffff ))
+    printf '%d.%d.%d.%d\n' "$((mask >> 24))" "$((mask >> 16 & 255))" \
+        "$((mask >> 8 & 255))" "$((mask & 255))"
+}
+
+setup_lan_prefix() {
+    local mask="$1" prefix
+    [[ "$mask" =~ $UH_IPV4 ]] || return 1
+    for ((prefix=0; prefix<=30; prefix++)); do
+        if [[ "$(setup_lan_mask "$prefix")" == "$mask" ]]; then
+            printf '%s\n' "$prefix"
+            return 0
+        fi
     done
-    log "ERROR: [1/2] no interface has a verified static IPv4"
-    log "ERROR: [2/2] configure a static LAN IPv4 -abort"
-    exit 1
+    return 1
+}
+
+setup_lan_host() {
+    local address="$1" cidr="$2" ip network mask
+    [[ "$address" =~ $UH_IPV4 ]] || return 1
+    ip=$(setup_ipv4_number "$address")
+    network=$(setup_ipv4_number "${cidr%/*}")
+    mask=$(( (0xffffffff << (32 - ${cidr#*/})) & 0xffffffff ))
+    (( (ip & mask) == (network & mask) && (ip & ~mask) != 0 &&
+       (ip & ~mask) != (0xffffffff ^ mask) ))
+}
+
+setup_lan_default_route() {
+    local iface="$1" routes
+    routes=$(static_ipv4_query ip -4 -o route show default dev "$iface") || return 1
+    [[ "$routes" != *$'\n'* ]] || return 1
+    lan_gateway=''
+    lan_metric=''
+    if [[ -n "$routes" ]]; then
+        [[ "$routes" =~ [[:space:]]via[[:space:]]([^[:space:]]+) ]] || return 1
+        lan_gateway="${BASH_REMATCH[1]}"
+        [[ "$lan_gateway" =~ $UH_IPV4 ]] || return 1
+        if [[ "$routes" =~ [[:space:]]metric[[:space:]]([0-9]+) ]]; then
+            lan_metric="${BASH_REMATCH[1]}"
+        else
+            lan_metric=0
+        fi
+    fi
+}
+
+select_setup_lan_settings() {
+    local iface="$1" condition mask address prefix answer
+    local lan_gateway lan_metric
+    lan_original_cidr="$lan_cidr_answer"
+    condition=$(lan_ipv4_condition "$iface" "${lan_original_cidr%/*}")
+    mask=$(setup_lan_mask "${lan_original_cidr#*/}")
+    setup_lan_default_route "$iface" || abort "cannot identify the LAN default route -abort"
+    case "$condition" in
+        static)
+            printf 'LAN %s: IPv4 %s, mask %s, gateway %s\n' \
+                "$iface" "${lan_original_cidr%/*}" "$mask" "${lan_gateway:-none}"
+            if (( ${lan_original_cidr#*/} < 31 )) &&
+                setup_lan_host "${lan_original_cidr%/*}" "$lan_original_cidr"; then
+                while true; do
+                    read -r -p 'Keep the LAN IPv4 settings? [Y/n]: ' answer \
+                        || abort "cannot read LAN confirmation -abort"
+                    case "$answer" in
+                        ''|y|Y) return 0 ;;
+                        n|N) break ;;
+                        *) info "answer y or n -retry" ;;
+                    esac
+                done
+            fi
+            ;;
+        dynamic) ;;
+        *) abort "cannot verify current LAN IPv4 -abort" ;;
+    esac
+    while true; do
+        read -r -p 'Enter static LAN IPv4: ' address || abort "cannot read LAN IPv4 -abort"
+        read -r -p "Enter LAN netmask [$mask]: " answer || abort "cannot read LAN mask -abort"
+        prefix=$(setup_lan_prefix "${answer:-$mask}") || prefix=
+        if [[ -n "$prefix" ]] && setup_lan_host "$address" "$address/$prefix"; then
+            lan_cidr_answer="$address/$prefix"
+            lan_change_requested=true
+            return 0
+        fi
+        info "invalid LAN IPv4 or netmask -retry"
+    done
+}
+
+setup_lan_origin() {
+    local iface="$1" status file kind id definition match mac expected_mac
+    lan_backend=''
+    lan_uuid=$(static_ipv4_query nmcli -g GENERAL.CON-UUID device show "$iface") || lan_uuid=
+    if [[ -n "$lan_uuid" && "$lan_uuid" != -- ]]; then
+        status=$(static_ipv4_query nmcli -g GENERAL.STATE device show "$iface") || return 1
+        [[ "$status" == '100 (connected)' ]] || return 1
+        file=$(static_ipv4_query nmcli -t --escape no -f UUID,FILENAME connection show |
+            awk -v uuid="$lan_uuid" 'index($0, uuid ":") == 1 {print substr($0, length(uuid) + 2)}') || return 1
+        case "$file" in
+            /etc/NetworkManager/system-connections/*)
+                [[ -f "$file" && ! -L "$file" ]] || return 1
+                match=$(static_ipv4_query nmcli -g connection.interface-name connection show uuid "$lan_uuid") || return 1
+                [[ "$match" == "$iface" ]] || return 1
+                lan_backend=nm
+                lan_origin="$file"
+                return 0
+                ;;
+            /run/NetworkManager/system-connections/netplan-*.nmconnection)
+                lan_backend=netplan-nm
+                id="${file##*/netplan-}"
+                id=$(netplan_profile_id "${id%.nmconnection}" "$lan_uuid")
+                ;;
+            *) return 1 ;;
+        esac
+    else
+        status=$(static_ipv4_query networkctl --no-pager status "$iface") || return 1
+        file=$(awk '/^[[:space:]]*Network File: / {print $3}' <<< "$status")
+        case "$file" in
+            /run/systemd/network/10-netplan-*.network)
+                lan_backend=netplan-networkd
+                id="${file##*/10-netplan-}"
+                id="${id%.network}"
+                ;;
+            /etc/systemd/network/*.network)
+                setup_networkd_file "$iface" "$file" || return 1
+                lan_backend=networkd
+                lan_origin="$file"
+                return 0
+                ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    [[ "$id" =~ ^[[:alnum:]_.-]+$ ]] || return 1
+    id=${id//./\\.}
+    for kind in ethernets wifis bridges bonds vlans; do
+        definition=$(static_ipv4_query netplan get "$kind.$id") || return 1
+        [[ -n "$definition" && "$definition" != null ]] || continue
+        match=$(static_ipv4_query netplan get "$kind.$id.match") || return 1
+        if [[ -z "$match" || "$match" == null || "$match" == '{}' ]]; then
+            [[ "$id" == "${iface//./\\.}" ]] || return 1
+        else
+            expected_mac=$(static_ipv4_query netplan get "$kind.$id.match.macaddress") || return 1
+            expected_mac=${expected_mac//\"/}
+            mac=$(static_ipv4_query ip -br link show "$iface" | awk '{print $3}') || return 1
+            match=$(static_ipv4_query netplan get "$kind.$id.match.name") || return 1
+            match=${match//\"/}
+            [[ "$match" == "$iface" || ( -n "$mac" && "${expected_mac,,}" == "${mac,,}" ) ]] || return 1
+        fi
+        lan_origin="$kind.$id"
+        return 0
+    done
+    return 1
+}
+
+setup_lan_reload() {
+    local iface="$1"
+    case "$lan_backend" in
+        netplan-*) timeout -k 2s 20s netplan generate || return 1 ;;
+    esac
+    case "$lan_backend" in
+        nm|netplan-nm)
+            timeout -k 2s 20s nmcli connection reload &&
+                timeout -k 2s 20s nmcli --wait 15 connection up uuid "$lan_uuid" ifname "$iface"
+            ;;
+        networkd|netplan-networkd)
+            timeout -k 2s 20s networkctl reload &&
+                timeout -k 2s 20s networkctl reconfigure "$iface"
+            ;;
+    esac
+}
+
+setup_lan_stage_netplan() {
+    local stage="$1" old="$2" new="$3"
+    local dir file raw key value gateway existing_routes address_list= dns_csv
+    for file in /run/netplan/*.yaml; do
+        [[ ! -e "$file" && ! -L "$file" ]] || return 1
+    done
+    mkdir -p "$stage/etc/netplan" || return 1
+    for file in /etc/netplan/*.yaml; do
+        [[ -e "$file" || -L "$file" ]] || continue
+        [[ -f "$file" && ! -L "$file" ]] || return 1
+        cp -p -- "$file" "$stage/etc/netplan/" || return 1
+    done
+    for dir in /lib /usr/lib; do
+        [[ -d "$dir/netplan" ]] || continue
+        mkdir -p "$stage$dir/netplan" || return 1
+        for file in "$dir/netplan/"*.yaml; do
+            [[ -f "$file" ]] || continue
+            cp -- "$file" "$stage$dir/netplan/" || return 1
+        done
+    done
+    raw=$(static_ipv4_query netplan get "$lan_origin.networkmanager.passthrough") || return 1
+    if [[ "$raw" =~ (^|$'\n')ipv4\.(address[0-9]+|method|gateway|route[0-9]+): ]]; then
+        return 1
+    fi
+    raw=$(static_ipv4_query netplan get "$lan_origin.addresses") || return 1
+    if [[ "$raw" != null && -n "$raw" && "$raw" != '[]' ]]; then
+        while read -r key value; do
+            value=${value//\"/}
+            [[ "$key" == - && "$value" =~ ^[0-9a-fA-F.:]+/[0-9]+$ ]] || return 1
+            [[ "$value" == "$old" || "$value" == "$new" ]] || address_list+="$value, "
+        done <<< "$raw"
+        timeout -k 1s 8s netplan set --root-dir "$stage" "$lan_origin.addresses=null" || return 1
+    fi
+    timeout -k 1s 8s netplan set --root-dir "$stage" "$lan_origin.addresses=[$address_list$new]" &&
+        timeout -k 1s 8s netplan set --root-dir "$stage" "$lan_origin.dhcp4=false" || return 1
+
+    if [[ -n "$lan_gateway" ]]; then
+        gateway=$(static_ipv4_query netplan get "$lan_origin.gateway4") || return 1
+        gateway=${gateway//\"/}
+        existing_routes=$(static_ipv4_query netplan get "$lan_origin.routes") || return 1
+        if [[ "$gateway" != null && -n "$gateway" ]]; then
+            if [[ "$gateway" != "$lan_gateway" ]]; then
+                timeout -k 1s 8s netplan set --root-dir "$stage" "$lan_origin.gateway4=$lan_gateway" || return 1
+            fi
+        elif grep -Eq '(to: (-?default|0\.0\.0\.0/0)|^- to: ("default"|"0\.0\.0\.0/0"))$' <<< "$existing_routes"; then
+            [[ "$lan_gateway" == "$lan_previous_gateway" ]] || return 1
+        else
+            timeout -k 1s 8s netplan set --root-dir "$stage" \
+                "$lan_origin.routes=[{to: default, via: $lan_gateway, metric: $lan_metric}]" || return 1
+        fi
+    fi
+    if (( ${#lan_dns[@]} )); then
+        printf -v dns_csv '%s, ' "${lan_dns[@]}"
+        timeout -k 1s 8s netplan set --root-dir "$stage" \
+            "$lan_origin.nameservers.addresses=[${dns_csv%, }]" || return 1
+    fi
+}
+
+setup_lan_is_active() {
+    [[ "$(static_ipv4_query ip -br link show "$1" | awk '{print $2}')" == UP ]] &&
+        static_ipv4_query ip -4 -o addr show dev "$1" scope global |
+        awk -v address="$2" '$4 == address {found=1} END {exit !found}'
+}
+
+apply_setup_lan() (
+    local iface="$1" old="$2" new="$3" temp file base current addresses address dns_raw
+    local lan_backend lan_origin lan_uuid lan_gateway lan_metric lan_previous_gateway
+    local committed=false changed=false mode old_condition
+    local -a modified=() lan_dns=() options=()
+    setup_lan_is_active "$iface" "$old" || abort "LAN settings changed during setup -abort"
+    old_condition=$(lan_ipv4_condition "$iface" "${old%/*}")
+    [[ "$old_condition" == static || "$old_condition" == dynamic ]] \
+        || abort "cannot verify current LAN IPv4 -abort"
+    setup_lan_origin "$iface" || abort "cannot identify a supported LAN configuration -abort"
+    setup_lan_default_route "$iface" || abort "cannot identify the LAN default route -abort"
+    lan_previous_gateway="$lan_gateway"
+    if [[ -n "$lan_gateway" ]]; then
+        while [[ "$lan_gateway" == "${new%/*}" ]] || ! setup_lan_host "$lan_gateway" "$new"; do
+            read -r -p 'Enter LAN gateway for the new subnet: ' lan_gateway \
+                || abort "cannot read LAN gateway -abort"
+        done
+    fi
+    if [[ "$lan_backend" == *nm ]]; then
+        dns_raw=$(static_ipv4_query nmcli -g IP4.DNS device show "$iface") || dns_raw=
+    else
+        dns_raw=$(static_ipv4_query resolvectl dns "$iface") || dns_raw=
+        dns_raw=${dns_raw#*:}
+    fi
+    for address in $dns_raw; do
+        if [[ "$address" =~ $UH_IPV4 ]]; then
+            lan_dns+=("$address")
+        fi
+    done
+    if [[ -n "$lan_gateway" ]] && (( ${#lan_dns[@]} == 0 )); then
+        while true; do
+            read -r -p 'Enter LAN DNS IPv4 [keep system resolver]: ' address \
+                || abort "cannot read LAN DNS -abort"
+            [[ -n "$address" ]] || break
+            if [[ "$address" =~ $UH_IPV4 ]]; then
+                lan_dns+=("$address")
+                break
+            fi
+            info "invalid DNS IPv4 -retry"
+        done
+    fi
+    current=$(static_ipv4_query ip -4 -o addr show scope global) || abort "cannot read IPv4 addresses -abort"
+    if awk -v iface="$iface" -v address="${new%/*}" \
+        '{split($4, ip, "/")} $2 != iface && ip[1] == address {found=1} END {exit !found}' <<< "$current"; then
+        abort "requested IPv4 is active on another interface -abort"
+    fi
+
+    temp=$(mktemp -d /tmp/pydhcp-lan.XXXXXXXX) || abort "cannot stage LAN configuration -abort"
+    restore_setup_lan() {
+        local status=$? target attempt restore_ok=true
+        trap - EXIT
+        trap '' HUP INT TERM
+        if "$changed" && ! "$committed"; then
+            for target in "${modified[@]}"; do
+                base="${target##*/}"
+                if [[ -f "$temp/before/$base" ]]; then
+                    cp -p -- "$temp/before/$base" "$target" || restore_ok=false
+                else
+                    rm -f -- "$target" || restore_ok=false
+                fi
+            done
+            if setup_lan_reload "$iface" >/dev/null; then
+                for (( attempt=1; attempt<=12; attempt++ )); do
+                    if setup_lan_is_active "$iface" "$old" &&
+                        [[ "$(lan_ipv4_condition "$iface" "${old%/*}")" == "$old_condition" ]]; then
+                        break
+                    fi
+                    sleep 1
+                done
+                (( attempt <= 12 )) || restore_ok=false
+            else
+                restore_ok=false
+            fi
+            if "$restore_ok"; then
+                info "previous LAN configuration restored -fixed"
+            else
+                err "[1/2] cannot restore LAN configuration"
+                err "[2/2] backup at $temp -abort"
+                exit 1
+            fi
+        fi
+        rm -rf -- "$temp"
+        exit "$status"
+    }
+    trap restore_setup_lan EXIT
+    trap 'exit 1' HUP INT TERM
+    mkdir "$temp/before" || abort "cannot prepare LAN backup -abort"
+
+    if [[ "$lan_backend" == nm ]]; then
+        cp -p -- "$lan_origin" "$temp/before/" || abort "cannot back up LAN profile -abort"
+        addresses=$(static_ipv4_query nmcli -g ipv4.addresses connection show uuid "$lan_uuid") \
+            || abort "cannot read LAN profile addresses -abort"
+        addresses=${addresses// /}
+        local -a profile_addresses=()
+        IFS=, read -r -a profile_addresses <<< "$addresses"
+        addresses="$new"
+        for address in "${profile_addresses[@]}"; do
+            [[ -z "$address" || "$address" == "$old" || "$address" == "$new" ]] || addresses+=",$address"
+        done
+        options=(ipv4.method manual ipv4.addresses "$addresses")
+        if [[ -n "$lan_gateway" ]]; then
+            options+=(ipv4.gateway "$lan_gateway" ipv4.route-metric "$lan_metric")
+        fi
+        for address in "${lan_dns[@]}"; do options+=(+ipv4.dns "$address"); done
+        timeout -k 2s 20s nmcli --offline connection modify "${options[@]}" \
+            < "$lan_origin" > "$temp/staged-profile" || abort "cannot stage the LAN profile -abort"
+        keyfile_has_ipv4 "$temp/staged-profile" "$lan_uuid" "$new" \
+            || abort "cannot validate the staged LAN profile -abort"
+        modified+=("$lan_origin")
+        changed=true
+        install -m 600 -- "$temp/staged-profile" "$lan_origin" \
+            || abort "cannot publish the LAN profile -abort"
+    elif [[ "$lan_backend" == networkd ]]; then
+        cp -p -- "$lan_origin" "$temp/before/" || abort "cannot back up the LAN file -abort"
+        setup_stage_networkd "$lan_origin" "$old" "$new" > "$temp/staged-profile" \
+            || abort "cannot stage the networkd LAN file -abort"
+        modified+=("$lan_origin")
+        changed=true
+        cp -- "$temp/staged-profile" "$lan_origin" || abort "cannot write the LAN file -abort"
+    else
+        setup_lan_stage_netplan "$temp/staged" "$old" "$new" \
+            || abort "cannot stage the selected LAN definition -abort"
+        for file in /etc/netplan/*.yaml "$temp"/staged/etc/netplan/*.yaml; do
+            [[ -f "$file" ]] || continue
+            base="${file##*/}"
+            [[ ! -L "/etc/netplan/$base" ]] || abort "LAN YAML is a symbolic link -abort"
+            if [[ -f "$temp/before/$base" ]]; then continue; fi
+            if cmp -s "/etc/netplan/$base" "$temp/staged/etc/netplan/$base"; then continue; fi
+            if [[ -f "/etc/netplan/$base" ]]; then
+                cp -p -- "/etc/netplan/$base" "$temp/before/$base" \
+                    || abort "cannot back up Netplan LAN configuration -abort"
+            fi
+            modified+=("/etc/netplan/$base")
+        done
+        changed=true
+        for file in "${modified[@]}"; do
+            base="${file##*/}"
+            if [[ -f "$temp/staged/etc/netplan/$base" ]]; then
+                install -m 600 -- "$temp/staged/etc/netplan/$base" "$file" \
+                    || abort "cannot publish the LAN YAML -abort"
+            else
+                rm -f -- "$file" || abort "cannot remove obsolete LAN YAML -abort"
+            fi
+        done
+    fi
+
+    setup_lan_reload "$iface" >/dev/null || abort "cannot apply LAN configuration -abort"
+    setup_lan_gateway_matches() {
+        [[ -z "$lan_gateway" ]] || static_ipv4_query ip -4 route show default dev "$iface" |
+            awk -v gateway="$lan_gateway" '$1 == "default" && $2 == "via" && $3 == gateway {found=1} END {exit !found}'
+    }
+    for (( mode=1; mode<=12; mode++ )); do
+        if setup_lan_is_active "$iface" "$new" && setup_lan_gateway_matches &&
+            [[ "$(lan_ipv4_condition "$iface" "${new%/*}")" == static ]]; then
+            break
+        fi
+        sleep 1
+    done
+    (( mode <= 12 )) || abort "configured LAN IPv4 could not be verified -abort"
+    check_internet || exit 1
+    committed=true
+)
+
+setup_networkd_file() {
+    local iface="$1" file="$2" path base suffix
+    [[ -f "$file" && ! -L "$file" ]] || return 1
+    base="${file##*/}"
+    for path in /etc/systemd/network /run/systemd/network /usr/lib/systemd/network; do
+        for suffix in "$path/$base.d/"*.conf "$path/network.d/"*.conf; do
+            [[ ! -e "$suffix" && ! -L "$suffix" ]] || return 1
+        done
+    done
+    awk -v iface="$iface" '
+        /^[[:space:]]*\[/ { section=$0; gsub(/[[:space:]]/, "", section) }
+        section == "[Match]" && /^[[:space:]]*Name[[:space:]]*=/ {
+            name=$0
+            sub(/^[^=]*=[[:space:]]*/, "", name)
+            sub(/[[:space:]]*$/, "", name)
+            if(name == iface) matched++
+            else failed=1
+        }
+        END {exit (failed || matched != 1)}
+    ' "$file"
+}
+
+setup_networkd_has_ipv4() {
+    local iface="$1" cidr="$2" file status
+    status=$(static_ipv4_query networkctl --no-pager status "$iface") || return 1
+    file=$(awk '/^[[:space:]]*Network File: / {print $3}' <<< "$status")
+    [[ "$file" == /etc/systemd/network/*.network ]] || return 1
+    setup_networkd_file "$iface" "$file" || return 1
+    awk -v cidr="$cidr" '
+        /^[[:space:]]*\[/ { section=$0; gsub(/[[:space:]]/, "", section) }
+        (section == "[Network]" || section == "[Address]") && /^[[:space:]]*Address[[:space:]]*=/ {
+            value=$0
+            sub(/^[^=]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]*$/, "", value)
+            if (value == "") found=0
+            else if (value == cidr) found=1
+        }
+        END {exit !found}
+    ' "$file"
+}
+
+setup_stage_networkd() {
+    local file="$1" old="$2" new="$3"
+    awk -v old="$old" -v new="$new" -v gateway="$lan_gateway" \
+        -v previous="$lan_previous_gateway" -v metric="$lan_metric" -v dns="${lan_dns[*]}" '
+        function finish_network() {
+            print "DHCP=" (dhcp ~ /^(yes|true|on|1|ipv6)$/ ? "ipv6" : "no")
+            print "Address=" new
+            if (dns != "") print "DNS=" dns
+        }
+        /^[[:space:]]*\[/ {
+            if (section == "[Network]") finish_network()
+            section=$0
+            gsub(/[[:space:]]/, "", section)
+            if (section == "[Network]") networks++
+            if (section == "[Route]") routes++
+            print
+            next
+        }
+        {
+            value=$0
+            sub(/^[^=]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]*$/, "", value)
+        }
+        section == "[Network]" && /^[[:space:]]*DHCP[[:space:]]*=/ { dhcp=value; next }
+        section == "[Network]" && /^[[:space:]]*Address[[:space:]]*=/ && (value == old || value == new) { next }
+        section == "[Address]" && /^[[:space:]]*Address[[:space:]]*=/ && value == old && old != new { failed=1 }
+        section == "[Network]" && /^[[:space:]]*Gateway[[:space:]]*=/ && value == previous {
+            if (gateway != "") print "Gateway=" gateway
+            direct_gateway=1
+            next
+        }
+        { print }
+        END {
+            if (section == "[Network]") finish_network()
+            if (failed || networks != 1 || (routes && gateway != previous)) exit 1
+            if (gateway != "" && !direct_gateway && !routes) {
+                print ""
+                print "[Route]"
+                print "Destination=0.0.0.0/0"
+                print "Gateway=" gateway
+                print "Metric=" metric
+            }
+        }
+    ' "$file"
 }
 
 read_lan_ipv4() {
@@ -2005,6 +2481,11 @@ do_install() {
         esac
     fi
 
+    if "$lan_change_requested"; then
+        apply_setup_lan "$lan_iface" "$lan_original_cidr" "$lan_cidr_answer" || exit 1
+    else
+        check_static_lan "$lan_iface" "${lan_cidr_answer%/*}"
+    fi
     install_pydhcp
     for existing_config in "${existing_configs[@]}"; do
         # PyDHCP may already have backed up this version while deploying WPAD.
