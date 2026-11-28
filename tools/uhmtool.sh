@@ -32,18 +32,18 @@
 
 set -uo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo '{"error":"This script must be run as root"}'
     exit 1
 fi
 
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
 # awk is a command, not a package: check it before its first use
-command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
+command -v awk >/dev/null 2>&1 || { printf '{"error":"awk not found"}\n'; exit 1; }
 
 # dependencies
 for dep_pkg in curl jq coreutils util-linux grep sed systemd gzip findutils; do
@@ -271,8 +271,10 @@ load_env() {
         key_errors+=("UNIFI_SITE invalid characters")
     fi
     if [[ "${UNIFI_HOTSPOT_ENABLED:-}" == true ]]; then
-        if [[ -z "${UHM_ESSID:-}" ]]; then
-            key_errors+=("UHM_ESSID is required in Hotspot mode")
+        if ! grep -q "^UHM_ESSID=" "$uhm_env"; then
+            key_errors+=("UHM_ESSID missing line")
+        elif [[ -z "${UHM_ESSID:-}" ]]; then
+            key_errors+=("UHM_ESSID not set")
         fi
         if ! grep -q "^BLOCKDHCP_GRACE_SECONDS=" "$uhm_env"; then
             key_errors+=("BLOCKDHCP_GRACE_SECONDS missing line")

@@ -11,8 +11,8 @@
 # sudo bash uhmwatch.sh --install    Deploy the script and its per-minute cron entry
 # sudo bash uhmwatch.sh --uninstall  Remove the cron entry
 # sudo bash uhmwatch.sh              Run the checks (what cron invokes)
-# bash uhmwatch.sh -h                Show this help
-# bash uhmwatch.sh --help            Show this help
+# sudo bash uhmwatch.sh -h           Show this help
+# sudo bash uhmwatch.sh --help       Show this help
 #
 # LOG: /var/log/uhm.log
 #
@@ -26,10 +26,16 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# path for cron
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # awk is a command, not a package: check it before its first use
 command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
 
-# USAGE
 # Help exits before logging
 usage() {
     awk 'NR==1{next} /^#{20,}$/{c++; if(c==2){exit}} {print}' "$0" | sed 's/^# \{0,1\}//'
@@ -41,13 +47,6 @@ case "${1:-}" in
         usage
         ;;
 esac
-
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
-# path for cron
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # logging
 log_file="/var/log/uhm.log"
@@ -194,7 +193,7 @@ install_module() {
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Deploying script to $target_path..."
+        log "INFO: deploying to $target_path"
         if ! { mkdir -p "$(dirname "$target_path")" \
             && mkdir -p "$(dirname "$target_path")/../tools" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/../tools/uhmenv.sh" "$(dirname "$target_path")/../tools/uhmenv.sh" \
@@ -627,5 +626,8 @@ else
     check_unifi_classic
 fi
 
-# end
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
+
 echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: uhmwatch done"

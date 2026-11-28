@@ -16,20 +16,24 @@
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
 # logging
 log_file="/var/log/uhm.log"
 log() {
-    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    local log_date="$(date '+%Y-%m-%d %H:%M:%S')"
+    local log_msg="$log_date $1"
+    if (( $# == 2 )); then
+        log_msg+=$'\n'"$log_date $2"
+    fi
     echo "$log_msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then
         echo "$log_msg" >&2
@@ -137,9 +141,7 @@ uh_fits() {
 #
 # Held for the rest of the script execution, covering the whole
 # stop->modify->start pydhcpd window, and released automatically on exit.
-# uhmwatch.sh probes this same lock before deciding pydhcpd is OFFLINE, so
-# holding it here is what tells the watchdog that the DHCP daemon is down on
-# purpose and must not be restarted.
+# uhmwatch.sh checks script_lock above before restarting pydhcpd.
 cycle_lock="/var/lock/uhmd-cycle.lock"
 exec 201>"$cycle_lock"
 cycle_lock_rc=0
@@ -230,7 +232,7 @@ if changed:
     print("changed")
 PY
     ); then
-        log "ERROR: $(basename "$1") is not a regular file -abort"
+        log "ERROR: cannot set owner and mode of $(basename "$1") -abort"
         exit 1
     fi
     if [[ "${5:-}" == report && "$fix_result" == changed ]]; then
@@ -395,7 +397,10 @@ normalize_acl_file() {
     [ -f "$acl_file" ] || return 0
 
     # Remove blank (now-empty) lines.
-    sed -i '/^$/d' "$acl_file"
+    if grep -q '^$' "$acl_file"; then
+        sed -i '/^$/d' "$acl_file"
+        log "INFO: $(basename "$acl_file") blank lines removed -fixed"
+    fi
 
     if [[ -n "$line_pattern" ]]; then
         tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
@@ -616,7 +621,7 @@ check_duplicate() {
     local acl_mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     if (( ${#acl_mac_files[@]} > 0 )); then
-        local field_count field_name dup_macs dup_mac has_error=0
+        local field_count field_name dup_macs dup_mac duplicate_message has_error=0
         for field_count in 2 3 4; do
             case $field_count in 2) field_name="MAC" ;; 3) field_name="IP" ;; 4) field_name="hostname" ;; esac
             if [[ "$field_count" == 2 || "$field_count" == 4 ]]; then
@@ -627,7 +632,12 @@ check_duplicate() {
             if [[ -n "$dup_macs" ]]; then
                 while IFS= read -r dup_mac; do
                     [[ -z "$dup_mac" ]] && continue
-                    log "WARNING: duplicate $field_name ${dup_mac:0:20} -alert"
+                    duplicate_message="WARNING: duplicate $field_name $dup_mac -alert"
+                    if (( ${#duplicate_message} + 20 > 80 )); then
+                        log "WARNING: [1/2] $dup_mac" "WARNING: [2/2] duplicate $field_name -alert"
+                    else
+                        log "$duplicate_message"
+                    fi
                     has_error=1
                 done <<< "$dup_macs"
             fi
@@ -648,6 +658,7 @@ check_duplicate() {
     # reservations vs each other (MAC/IP): fatal, admin fixes by hand
     # Only active "a;" rows become host{} blocks, so commented rows are out
     local resv_lines resv_field resv_name dup_values dup_value resv_error=0
+    local reservation_value reservation_message
     resv_lines=$(grep -hE '^a;' "${voucher_acl[@]}" "${acl_mac_files[@]}" /dev/null 2>/dev/null || true)
     for resv_field in 2 3; do
         case $resv_field in 2) resv_name="MAC" ;; 3) resv_name="IP" ;; esac
@@ -656,7 +667,13 @@ check_duplicate() {
         [[ -z "$dup_values" ]] && continue
         while IFS= read -r dup_value; do
             [[ -z "$dup_value" ]] && continue
-            log "WARNING: duplicate reservation $resv_name ${dup_value:0:20} -alert"
+            printf -v reservation_value '%q' "$dup_value"
+            reservation_message="WARNING: duplicate reservation $resv_name $reservation_value -alert"
+            if (( ${#reservation_message} + 20 > 80 )); then
+                log "WARNING: [1/2] $reservation_value" "WARNING: [2/2] duplicate reservation $resv_name -alert"
+            else
+                log "$reservation_message"
+            fi
             resv_error=1
         done <<< "$dup_values"
     done
@@ -922,32 +939,33 @@ fi
 # already stopped the daemon and rewritten pydhcpd.conf. Catching every
 # combination here, before any destructive action, avoids leaving the daemon
 # down over a config mistake that could have been caught up front.
-range_conflict=$(python3 -c "
-import ipaddress, sys
-server_ip = ipaddress.IPv4Address(sys.argv[1])
-pool_start = ipaddress.IPv4Address(sys.argv[2])
-pool_end = ipaddress.IPv4Address(sys.argv[3])
-if pool_start <= server_ip <= pool_end:
-    print('SERVER_IP overlaps DHCP block range')
-elif sys.argv[6] == 'true':
-    hotspot_start = ipaddress.IPv4Address(sys.argv[4])
-    hotspot_end = ipaddress.IPv4Address(sys.argv[5])
-    net = ipaddress.IPv4Network(sys.argv[7] + '/' + sys.argv[8], strict=False)
-    if not net.network_address < hotspot_start <= hotspot_end < net.broadcast_address:
-        print('hotspot range not usable in pydhcp.env subnet')
-    elif hotspot_start <= server_ip <= hotspot_end:
-        print('SERVER_IP overlaps hotspot range')
-    elif pool_start <= hotspot_end and hotspot_start <= pool_end:
-        print('DHCP block range overlaps hotspot range')
-" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" "${UHM_INI_RANGE:-}" "${UHM_END_RANGE:-}" "$UNIFI_HOTSPOT_ENABLED" "$SERV_SUBNET" "$SERV_MASK" 2>/dev/null) || {
-    log "ERROR: cannot validate DHCP and Hotspot ranges -abort"
-    exit 1
-}
+server_ip_int=$(ip_to_int "$SERVER_IP")
+pool_start_int=$(ip_to_int "$SERV_INI_RANGE_BLOCK")
+pool_end_int=$(ip_to_int "$SERV_END_RANGE_BLOCK")
+range_conflict=""
+if (( pool_start_int <= server_ip_int && server_ip_int <= pool_end_int )); then
+    range_conflict="SERVER_IP overlaps DHCP block range"
+elif [[ "$UNIFI_HOTSPOT_ENABLED" == true ]]; then
+    hotspot_start_int=$(ip_to_int "$UHM_INI_RANGE")
+    hotspot_end_int=$(ip_to_int "$UHM_END_RANGE")
+    netmask_int=$(ip_to_int "$SERV_MASK")
+    network_int=$(( $(ip_to_int "$SERV_SUBNET") & netmask_int ))
+    broadcast_int=$(( network_int | (0xFFFFFFFF ^ netmask_int) ))
+    if ! (( network_int < hotspot_start_int && hotspot_start_int <= hotspot_end_int \
+            && hotspot_end_int < broadcast_int )); then
+        range_conflict="hotspot range not usable in pydhcp.env subnet"
+    elif (( hotspot_start_int <= server_ip_int && server_ip_int <= hotspot_end_int )); then
+        range_conflict="SERVER_IP overlaps hotspot range"
+    elif (( pool_start_int <= hotspot_end_int && hotspot_start_int <= pool_end_int )); then
+        range_conflict="DHCP block range overlaps hotspot range"
+    fi
+fi
 if [[ -n "$range_conflict" ]]; then
     log "ERROR: $range_conflict -abort"
     exit 1
 fi
-unset range_conflict
+unset range_conflict server_ip_int pool_start_int pool_end_int hotspot_start_int \
+      hotspot_end_int netmask_int network_int broadcast_int
 
 # ------------------------------------------------------------------------------
 # DHCPD CONFIG
@@ -960,7 +978,7 @@ if [ "$WPAD_ENABLED" = true ]; then
        && [ "$wpad_http_code" = 200 ]; then
         wpad_ready=1
     else
-        log "WARNING: WPAD_ENABLED=true but not served -fallback"
+        log "WARNING: WPAD_ENABLED=true but not served -alert"
     fi
 fi
 
@@ -1189,6 +1207,7 @@ is_pydhcp() {
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
     update_dhcp_conf() {
+        local invalid_hostname
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
@@ -1234,7 +1253,12 @@ $ping_timeout_line
                     continue
                 fi
                 if ! [[ $user_source =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then
-                    log "INFO: invalid hostname ${user_source:0:20} -skip"
+                    printf -v invalid_hostname '%q' "$user_source"
+                    if (( ${#invalid_hostname} > 31 )); then
+                        log "INFO: [1/2] $invalid_hostname" "INFO: [2/2] invalid hostname -skip"
+                    else
+                        log "INFO: invalid hostname $invalid_hostname -skip"
+                    fi
                     continue
                 fi
                 echo "

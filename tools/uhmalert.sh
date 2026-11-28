@@ -11,8 +11,8 @@
 # sudo bash uhmalert.sh --install    Deploy and start uhmalert.service
 # sudo bash uhmalert.sh --uninstall  Stop the service and remove the unit
 # sudo bash uhmalert.sh              Run the watch loop (the service ExecStart)
-# bash uhmalert.sh -h                Show this help
-# bash uhmalert.sh --help            Show this help
+# sudo bash uhmalert.sh -h           Show this help
+# sudo bash uhmalert.sh --help       Show this help
 #
 # LOG: /var/log/uhm.log
 #
@@ -26,10 +26,13 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
 # awk is a command, not a package: check it before its first use
 command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
 
-# USAGE
 # Help exits before logging
 usage() {
     awk 'NR==1{next} /^#{20,}$/{c++; if(c==2){exit}} {print}' "$0" | sed 's/^# \{0,1\}//'
@@ -41,10 +44,6 @@ case "${1:-}" in
         usage
         ;;
 esac
-
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
 
 # logging
 log_file="/var/log/uhm.log"
@@ -259,7 +258,7 @@ UHM_ALERT_DEDUP_SECONDS=300
     local self_path
     self_path="$(readlink -f "$0")"
     if [[ "$self_path" != "$target_path" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Deploying script to $target_path..."
+        log "INFO: deploying to $target_path"
         [[ -e "$target_path" ]] || created_script=1
         if ! { mkdir -p "$(dirname "$target_path")" \
             && install -m 644 -o root -g root "$(dirname "$self_path")/uhmenv.sh" "$(dirname "$target_path")/uhmenv.sh" \
@@ -269,7 +268,7 @@ UHM_ALERT_DEDUP_SECONDS=300
         fi
     fi
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Writing systemd unit ($unit_path)..."
+    log "INFO: writing unit $unit_path"
     [[ -e "$unit_path" ]] || created_unit=1
     if ! cat > "$unit_path" <<'UNITEOF'
 [Unit]
@@ -320,7 +319,7 @@ UNITEOF
 }
 
 uninstall_module() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Stopping and disabling uhmalert.service..."
+    log "INFO: stopping and disabling uhmalert.service"
     systemctl stop uhmalert.service 2>/dev/null || true
     systemctl disable uhmalert.service 2>/dev/null || true
     if ! { rm -f "$unit_path" && systemctl daemon-reload; }; then
@@ -497,7 +496,16 @@ uhmd_started_at() {
 }
 
 notify() {
-    curl -s --connect-timeout 60 --max-time 300 -d "$1" "https://ntfy.sh/${UHM_NTFY_TOPIC}" >/dev/null 2>&1 &
+    (
+        local push_code push_rc=0
+        push_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 60 --max-time 300 \
+            -d "$1" "https://ntfy.sh/${UHM_NTFY_TOPIC}") || push_rc=$?
+        if (( push_rc != 0 )); then
+            log "WARNING: ntfy push failed (curl $push_rc) -alert"
+        elif [[ "$push_code" != 2[0-9][0-9] ]]; then
+            log "WARNING: ntfy push failed (HTTP $push_code) -alert"
+        fi
+    ) &
 }
 
 # Bash builtins only, no fork -- systemd's default KillMode=control-group
@@ -541,6 +549,8 @@ while true; do
         else
             log_msg="$log_line"
         fi
+
+        [[ "$log_msg" == "WARNING: ntfy push failed ("* ]] && continue
 
         # Known-benign -- expected/already handled, must never alert.
         [[ "$log_msg" == *"cycle lock held unexpectedly"* ]] && continue

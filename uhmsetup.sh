@@ -13,8 +13,8 @@
 # sudo bash uhmsetup.sh --uninstall  Uninstall
 # sudo bash uhmsetup.sh --status     Report services, port, config and log
 # sudo bash uhmsetup.sh              Interactive menu
-# bash uhmsetup.sh -h                Usage
-# bash uhmsetup.sh --help            Usage
+# sudo bash uhmsetup.sh -h           Usage
+# sudo bash uhmsetup.sh --help       Usage
 #
 # LOG: uhmsetup.log, in the directory containing this script
 #
@@ -22,18 +22,16 @@
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
-# USAGE
 # root check
 if [[ "$(id -u)" != "0" ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
-# Help exits before logging
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
 install_php_hardening() (
     local conf_dir="${1%/*}/conf.d" target staged
     [ -d "$conf_dir" ] || return 1
@@ -86,6 +84,7 @@ Run from inside the cloned uhm repository. See the README for details.
 EOF
 }
 
+# Help exits before logging
 case "${1:-}" in
     --help|-h)
         usage
@@ -158,6 +157,74 @@ if ! flock -n 200; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -abort" >&2
     exit 1
 fi
+
+# check ipv4 interfaces
+list_ifaces() {
+    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
+}
+
+list_ipv4_ifaces() {
+    local iface state
+    while read -r iface state; do
+        [ "$state" = UP ] || continue
+        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
+            | awk '$4 != "" {found=1} END {exit !found}'; then
+            printf '%s\n' "$iface"
+        fi
+    done < <(list_ifaces)
+}
+
+check_ipv4_interfaces() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if [ -n "$(list_ipv4_ifaces)" ]; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for an interface with IPv4..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no interface with IPv4 -abort"
+    exit 1
+}
+
+# check internet
+check_internet() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if getent hosts www.google.com >/dev/null 2>&1; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for internet..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no internet connection -abort"
+    exit 1
+}
+
+check_static_lan() {
+    case "$(lan_ipv4_condition "$1" "$2")" in
+        static) return 0 ;;
+        dynamic)
+            log "ERROR: [1/2] LAN $1: $2 uses DHCP"
+            log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+            ;;
+        *)
+            log "ERROR: [1/2] LAN $1: $2"
+            log "ERROR: [2/2] cannot verify persistent static IPv4 -abort"
+            ;;
+    esac
+    exit 1
+}
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -246,6 +313,12 @@ PY
     fi
 }
 
+query_port_listeners() {
+    local port_error
+    port_error=$(ss -lnH "--$1" "sport = :$2" 2>&1 >&3) || return 1
+    [[ "$port_error" != *[![:space:]]* ]]
+} 3>&1
+
 version_ge() {
     # version_ge A B -- returns 0 if version A >= version B
     [[ "$1" == "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" ]]
@@ -316,25 +389,6 @@ retry_cmd() {
         fi
         sleep 5
     done
-}
-
-# check internet
-check_internet() {
-    local max_attempts=24 attempt=1
-
-    while (( attempt <= max_attempts )); do
-        if getent hosts www.google.com >/dev/null 2>&1; then
-            return 0
-        fi
-        if (( attempt == 1 )); then
-            log "INFO: waiting for internet..."
-        fi
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-
-    log "ERROR: no internet connection -abort"
-    exit 1
 }
 
 # UPDATE CHECKS
@@ -716,10 +770,7 @@ install_apt_deps() {
     for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
 }
 
-# Aborts if software uhm would collide with is already installed. Same shape
-# as gateproxy's own check, but a shorter list: apache2 and pydhcp are uhm's
-# own components, and squid is what the reference ruleset expects, so none of
-# the three is a conflict here.
+# conflicting packages
 check_conflicts() {
     local role="$1"; shift
     local found=()
@@ -736,7 +787,7 @@ check_conflicts() {
     fi
 }
 
-# Installed but not necessarily in the way -- reported, never fatal
+# overlapping packages
 warn_overlap() {
     local feature="$1"; shift
     local dep_pkg
@@ -770,44 +821,6 @@ detect_dhcp_backend() {
     fi
 }
 
-# IFACES
-# List network interfaces other than loopback
-list_ifaces() {
-    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
-}
-
-# IPV4 INTERFACES
-# Offer only interfaces with an active link and configured global IPv4
-list_ipv4_ifaces() {
-    local iface state
-    while read -r iface state; do
-        [ "$state" = UP ] || continue
-        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
-            | awk '$4 != "" {found=1} END {exit !found}'; then
-            printf '%s\n' "$iface"
-        fi
-    done < <(list_ifaces)
-}
-
-# check ipv4 interfaces
-check_ipv4_interfaces() {
-    local max_attempts=24 attempt=1
-
-    while (( attempt <= max_attempts )); do
-        if [ -n "$(list_ipv4_ifaces)" ]; then
-            return 0
-        fi
-        if (( attempt == 1 )); then
-            log "INFO: waiting for an interface with IPv4..."
-        fi
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-
-    log "ERROR: no interface with IPv4 -abort"
-    exit 1
-}
-
 # LAN SELECTION
 # Select an existing interface and one of its configured IPv4 addresses
 choose_lan_interface() {
@@ -832,7 +845,8 @@ choose_lan_interface() {
         log "ERROR: $iface_label must be an eligible IPv4 interface -abort"
         exit 1
     fi
-    echo "Available $iface_label interfaces:"
+    echo ""
+    echo "==== Available $iface_label Interfaces ===="
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
         iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
@@ -844,6 +858,7 @@ choose_lan_interface() {
             log "ERROR: cannot read $iface_label interface selection -abort"
             exit 1
         }
+        echo ""
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
            && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
@@ -1014,20 +1029,6 @@ lan_ipv4_condition() {
     printf 'unverified'
 }
 
-check_static_lan() {
-    case "$(lan_ipv4_condition "$1" "$2")" in
-        static) return 0 ;;
-        dynamic)
-            log "ERROR: [1/2] LAN $1: $2 uses DHCP"
-            log "ERROR: [2/2] configure a static LAN IPv4 -abort"
-            ;;
-        *)
-            log "ERROR: [1/2] LAN $1: $2"
-            log "ERROR: [2/2] cannot verify persistent static IPv4 -abort"
-            ;;
-    esac
-    exit 1
-}
 describe_lan_ipv4() {
     local cidr
     while read -r cidr; do
@@ -1554,7 +1555,8 @@ read_lan_ipv4() {
         lan_cidr_answer="${lan_addresses[0]}"
         return 0
     fi
-    echo "IPv4 addresses on LAN '$selected_iface':"
+    echo ""
+    echo "==== IPv4 Addresses on LAN '$selected_iface' ===="
     for ipv4_index in "${!lan_addresses[@]}"; do
         printf ' [%d] %s (%s)\n' "$((ipv4_index + 1))" \
             "${lan_addresses[$ipv4_index]}" \
@@ -1566,6 +1568,7 @@ read_lan_ipv4() {
             log "ERROR: cannot read LAN IPv4 selection -abort"
             exit 1
         }
+        echo ""
         if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
            && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
             lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
@@ -1722,10 +1725,7 @@ ask_number() {
 
 # ip_le A B -- returns 0 if address A is lower than or equal to address B
 ip_le() {
-    python3 -c "
-import ipaddress, sys
-sys.exit(0 if ipaddress.IPv4Address(sys.argv[1]) <= ipaddress.IPv4Address(sys.argv[2]) else 1)
-" "$1" "$2"
+    (( $(setup_ipv4_number "$1") <= $(setup_ipv4_number "$2") ))
 }
 
 ask_ip() {
@@ -1743,21 +1743,18 @@ ask_ip() {
 
 # Return success for a usable host address in the configured subnet.
 ip_is_usable_host() {
-    python3 -c "
-import ipaddress, sys
-net = ipaddress.IPv4Network(sys.argv[2] + '/' + sys.argv[3], strict=False)
-sys.exit(0 if net.network_address < ipaddress.IPv4Address(sys.argv[1]) < net.broadcast_address else 1)
-" "$1" "$2" "$3"
+    local address mask network broadcast
+    address=$(setup_ipv4_number "$1")
+    mask=$(setup_ipv4_number "$3")
+    network=$(( $(setup_ipv4_number "$2") & mask ))
+    broadcast=$(( network | (0xffffffff ^ mask) ))
+    (( network < address && address < broadcast ))
 }
 
 # Returns 0 (true) if dotted-quad IP ranges [s1,e1] and [s2,e2] intersect.
 ranges_overlap() {
-    local start_ip_1="$1" end_ip_1="$2" start_ip_2="$3" end_ip_2="$4"
-    python3 -c "
-import ipaddress, sys
-s1, e1, s2, e2 = (ipaddress.IPv4Address(a) for a in sys.argv[1:5])
-sys.exit(0 if s1 <= e2 and s2 <= e1 else 1)
-" "$start_ip_1" "$end_ip_1" "$start_ip_2" "$end_ip_2"
+    (( $(setup_ipv4_number "$1") <= $(setup_ipv4_number "$4") &&
+       $(setup_ipv4_number "$3") <= $(setup_ipv4_number "$2") ))
 }
 
 # UNIFI DISCOVERY
@@ -1839,6 +1836,45 @@ fetch_unifi() {
     rm -f "$cookie_jar"
 }
 
+hotspot_range_defaults() {
+    local mask network pool_first pool_last server dhcp_start dhcp_end preferred_start start end
+    local start_offset=160 end_offset=199
+    local best_start=1 best_end=0
+    mask=$(setup_ipv4_number "$SERV_MASK")
+    network=$(( $(setup_ipv4_number "$SERV_SUBNET") & mask ))
+    pool_first=$(( network + 1 ))
+    pool_last=$(( (network | (0xffffffff ^ mask)) - 1 ))
+    server=$(setup_ipv4_number "$SERVER_IP")
+    dhcp_start=$(setup_ipv4_number "$SERV_INI_RANGE_BLOCK")
+    dhcp_end=$(setup_ipv4_number "$SERV_END_RANGE_BLOCK")
+    preferred_start=$(( network + start_offset ))
+    (( preferred_start <= pool_last )) || preferred_start=$pool_last
+
+    for start in "$preferred_start" "$pool_first" "$((server + 1))" "$((dhcp_end + 1))"; do
+        (( pool_first <= start && start <= pool_last && start != server )) || continue
+        end=$(( start + end_offset - start_offset ))
+        (( end <= pool_last )) || end=$pool_last
+        if (( start < server && server <= end )); then
+            end=$(( server - 1 ))
+        fi
+        if (( start <= dhcp_end )); then
+            (( start < dhcp_start )) || continue
+            (( end < dhcp_start )) || end=$(( dhcp_start - 1 ))
+        fi
+        if (( end - start > best_end - best_start )); then
+            best_start=$start
+            best_end=$end
+        fi
+        (( end - start < end_offset - start_offset )) || break
+    done
+    (( best_start <= best_end )) || abort "LAN has no free Hotspot range -abort"
+    printf '%u.%u.%u.%u %u.%u.%u.%u\n' \
+        "$(( best_start >> 24 ))" "$(( best_start >> 16 & 255 ))" \
+        "$(( best_start >> 8 & 255 ))" "$(( best_start & 255 ))" \
+        "$(( best_end >> 24 ))" "$(( best_end >> 16 & 255 ))" \
+        "$(( best_end >> 8 & 255 ))" "$(( best_end & 255 ))"
+}
+
 # SETUP WIZARD
 # Collects every value uhm.env needs and writes the block
 run_setup_wizard() {
@@ -1882,7 +1918,8 @@ run_setup_wizard() {
         info "UniFi site detected: $cfg_site"
     else
         local site_index site_default=1
-        echo "Available UniFi sites:"
+        echo ""
+        echo "==== Available UniFi Sites ===="
         for site_index in "${!site_list[@]}"; do
             printf ' [%d] %s (%s)\n' "$((site_index + 1))" "${site_list[$site_index]%%$'\t'*}" "${site_list[$site_index]#*$'\t'}"
             [[ "${site_list[$site_index]%%$'\t'*}" == default ]] && site_default=$((site_index + 1))
@@ -1890,6 +1927,7 @@ run_setup_wizard() {
         while true; do
             read -rp "Select UniFi site [1-${#site_list[@]}] [Default: ${site_default}]: " site_answer \
                 || abort "cannot read UniFi site selection -abort"
+            echo ""
             site_answer="${site_answer:-$site_default}"
             if [[ "$site_answer" =~ $UH_UINT ]] && [ "${#site_answer}" -le 5 ] \
                && [ "$site_answer" -ge 1 ] && [ "$site_answer" -le "${#site_list[@]}" ]; then
@@ -1908,13 +1946,15 @@ run_setup_wizard() {
         info "SSID detected: $cfg_essid"
     elif (( ${#ssid_list[@]} > 1 )); then
         local ssid_index ssid_answer
-        echo "Available SSIDs:"
+        echo ""
+        echo "==== Available SSIDs ===="
         for ssid_index in "${!ssid_list[@]}"; do
             printf ' [%d] %s\n' "$((ssid_index + 1))" "${ssid_list[$ssid_index]}"
         done
         while true; do
             read -rp "Select SSID [1-${#ssid_list[@]}] [Default: 1]: " ssid_answer \
                 || abort "cannot read SSID selection -abort"
+            echo ""
             ssid_answer="${ssid_answer:-1}"
             if [[ "$ssid_answer" =~ $UH_UINT ]] && [ "${#ssid_answer}" -le 5 ] \
                && [ "$ssid_answer" -ge 1 ] && [ "$ssid_answer" -le "${#ssid_list[@]}" ]; then
@@ -1974,11 +2014,12 @@ run_setup_wizard() {
         echo "Range of fixed addresses handed to voucher-authorized guests"
         echo "Network: ${SERV_SUBNET}/${SERV_MASK}"
         echo "pydhcp block pool: ${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}"
-        local net_base
-        net_base=$(echo "$SERV_SUBNET" | cut -d'.' -f1-3)
+        local default_range range_start_default range_end_default
+        default_range=$(hotspot_range_defaults)
+        read -r range_start_default range_end_default <<< "$default_range"
         while true; do
-            ask_ip "Hotspot range start" "${net_base}.160" cfg_ini_range
-            ask_ip "Hotspot range end" "${net_base}.199" cfg_end_range
+            ask_ip "Hotspot range start" "$range_start_default" cfg_ini_range
+            ask_ip "Hotspot range end" "$range_end_default" cfg_end_range
             if ! ip_le "$cfg_ini_range" "$cfg_end_range"; then
                 info "Hotspot range is inverted -retry"
                 continue
@@ -2300,7 +2341,7 @@ remove_web() {
 set_apache_logrotate() {
     local apache_rotate="/etc/logrotate.d/apache2"
     # Replaced, not edited; the package rotation and reload are kept.
-    if [[ -f "$apache_rotate" ]]; then
+    if [[ -f "$apache_rotate" && ! -f "$apache_rotate.bak" ]]; then
         cp -f "$apache_rotate" "$apache_rotate.bak" \
             || { warn "cannot back up ${apache_rotate#/etc/} -alert"; return 0; }
     fi
@@ -2469,14 +2510,19 @@ install_apache2() {
 # ------------------------------------------------------------------------------
 
 confirm_install_replacements() {
-    local existing_config answer
+    local existing_config answer apache_php_ini
+    local -a php_configs=()
     for existing_config in "$apache_ports" "$vhost_dest" "$sudoers_dest" "$logrotate_file" \
-        /etc/logrotate.d/apache2 /etc/php/*/apache2/php.ini /etc/cron.d/uhm "$service_dest"; do
+        /etc/logrotate.d/apache2 /etc/cron.d/uhm "$service_dest"; do
         [ ! -f "$existing_config" ] || existing_configs+=("$existing_config")
     done
-    (( ${#existing_configs[@]} > 0 )) || return 0
-    printf '%s\n' "Existing configurations to change:"
-    printf ' %s\n' "${existing_configs[@]}"
+    for apache_php_ini in /etc/php/*/apache2/php.ini; do
+        [ -f "$apache_php_ini" ] || continue
+        php_configs+=("${apache_php_ini%/*}/conf.d/99-project-php-hardening.ini")
+    done
+    (( ${#existing_configs[@]} + ${#php_configs[@]} > 0 )) || return 0
+    printf '%s\n' "Configuration targets:"
+    printf ' %s\n' "${existing_configs[@]}" "${php_configs[@]}"
     echo "Apache modules and the UHM site will be configured. Apache will be restarted."
     read -r -p "Continue with these changes? [Y/n]: " answer || answer=n
     case "${answer,,}" in
@@ -2503,10 +2549,12 @@ do_install() {
         info "UniFi already installed"
     else
         local unifi_choice
-        echo "Select the UniFi component required by UHM."
+        echo ""
+        echo "==== UniFi Component for UHM ===="
         echo "1) UniFi Network Application"
         echo "2) UniFi OS Server"
         ask "Select an option (1-2)" 1 unifi_choice
+        echo ""
         case "$unifi_choice" in
             1) unifi_action="network" ;;
             2) unifi_action="osserver" ;;
@@ -2527,7 +2575,7 @@ do_install() {
             && [ "$(cksum < "$apache_ports.bak")" = "$apache_ports_before" ]; then
             continue
         fi
-        cp -p -- "$existing_config" "${existing_config}.bak" \
+        [ -f "${existing_config}.bak" ] || cp -p -- "$existing_config" "${existing_config}.bak" \
             || abort "cannot back up $(basename "$existing_config") -abort"
     done
 
@@ -2720,7 +2768,7 @@ do_update() {
 }
 
 # ------------------------------------------------------------------------------
-# REMOVE
+# UNINSTALL
 # ------------------------------------------------------------------------------
 
 do_uninstall() {
@@ -2867,23 +2915,7 @@ do_status() {
     echo ""
     echo "=== Panel Port ==="
     local port_listeners
-    if ! port_listeners=$(python3 - tcp "$web_port" <<'PY'
-import subprocess
-import sys
-
-try:
-    result = subprocess.run(
-        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
-        capture_output=True,
-        text=True,
-    )
-except OSError:
-    sys.exit(1)
-if result.returncode != 0 or result.stderr.strip():
-    sys.exit(1)
-sys.stdout.write(result.stdout)
-PY
-    ); then
+    if ! port_listeners=$(query_port_listeners tcp "$web_port"); then
         echo ":$web_port UNKNOWN"
     elif [ -n "$port_listeners" ]; then
         echo ":$web_port OPEN"
@@ -2919,14 +2951,14 @@ show_menu() {
     local menu_option
     while true; do
         echo ""
-        echo "uhm installer"
+        echo "==== UHM Installation Menu ===="
         echo "1) Install"
         echo "2) Update"
         echo "3) Uninstall"
         echo "4) Status"
         echo "5) Exit"
-        echo ""
         read -p "Select option [5]: " menu_option
+        echo ""
         menu_option="${menu_option:-5}"
         case "$menu_option" in
             1) do_install; break ;;
@@ -2945,7 +2977,9 @@ show_menu() {
 
 # LOAD_CONF
 # Read known key=value pairs from a config file, without sourcing it
-source "$repo_tools/uhmenv.sh"
+if ! source "$repo_tools/uhmenv.sh" 2>/dev/null; then
+    abort "cannot load uhmenv.sh -abort"
+fi
 env_keys='INTERFACESv4 SERVER_IP SERV_MASK SERV_SUBNET SERV_BROADCAST SERV_DNS SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK'
 
 # ------------------------------------------------------------------------------
@@ -2967,5 +3001,9 @@ case "${1:-}" in
         exit 1
         ;;
 esac
+
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
 
 log "INFO: uhmsetup done"

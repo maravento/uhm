@@ -19,15 +19,15 @@
 
 set -uo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
 
 # awk is a command, not a package: check it before its first use
 command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
@@ -443,8 +443,10 @@ elif ! [[ "$UNIFI_HOTSPOT_ENABLED" =~ $UH_BOOL ]]; then
     key_errors+=("UNIFI_HOTSPOT_ENABLED invalid boolean")
 fi
 if [[ "${UNIFI_HOTSPOT_ENABLED:-}" == true ]]; then
-    if [[ -z "${UHM_ESSID:-}" ]]; then
-        key_errors+=("UHM_ESSID is required in Hotspot mode")
+    if ! grep -q "^UHM_ESSID=" "$uhm_env"; then
+        key_errors+=("UHM_ESSID missing line")
+    elif [[ -z "${UHM_ESSID:-}" ]]; then
+        key_errors+=("UHM_ESSID not set")
     fi
     for env_key in UHM_INI_RANGE UHM_END_RANGE; do
         if ! grep -q "^${env_key}=" "$uhm_env"; then

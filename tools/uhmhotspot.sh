@@ -16,15 +16,15 @@
 
 set -uo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
 
 # awk is a command, not a package: check it before its first use
 command -v awk >/dev/null 2>&1 || { echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: awk not found -abort" >&2; exit 1; }
@@ -83,6 +83,9 @@ case "$log_stat" in
         ;;
 esac
 unset log_stat
+
+# start
+log "INFO: uhmhotspot start..."
 
 # dependencies
 for dep_pkg in curl jq coreutils util-linux grep sed diffutils; do
@@ -373,8 +376,7 @@ voucher_rc=$(echo "$voucher_json" | jq -r '.meta.rc // "error"' 2>/dev/null)
 # no results rather than an error.
 for endpoint_rc in "stat/sta:$sta_rc" "stat/guest:$guest_rc" "stat/voucher:$voucher_rc"; do
     if [[ "${endpoint_rc#*:}" != "ok" ]]; then
-        log "ERROR: [1/2] controller may be unavailable, try again later"
-        log "ERROR: [2/2] ${endpoint_rc%%:*} query failed -abort"
+        log "ERROR: ${endpoint_rc%%:*} query failed, retry later -abort"
         exit 1
     fi
 done
@@ -1166,9 +1168,7 @@ actions_menu() {
     local menu_option
     while true; do
         echo ""
-        echo "============================================================================"
-        echo "ACTIONS"
-        echo "============================================================================"
+        echo "==== Hotspot Actions ===="
         printf "%-5s%-26s- %s\n" "[1]" "Delete unused vouchers" "never activated"
         printf "%-5s%-26s- %s\n" "[2]" "Forget clients no voucher" "never used, not connected now"
         printf "%-5s%-26s- %s\n" "[3]" "Delete expired vouchers" "remove + forget clients"
@@ -1176,8 +1176,8 @@ actions_menu() {
         printf "%-5s%-26s- %s\n" "[5]" "Forget sessions (!)" "unauthorize + forget non-voucher"
         printf "%-5s%-26s- %s\n" "[6]" "Purge everything" "DELETE all vouchers + history"
         echo "[b] Back"
-        echo ""
         read -rp " Select option [b]: " menu_option
+        echo ""
         menu_option="${menu_option:-b}"
         case "$menu_option" in
             1) interactive_delete_unused; return 0 ;;
@@ -1200,14 +1200,12 @@ main_menu() {
     local menu_option
     while true; do
         echo ""
-        echo "============================================================================"
-        echo "AVAILABLE OPTIONS"
-        echo "============================================================================"
+        echo "==== Hotspot Menu ===="
         echo "[1] Check MAC"
         echo "[2] Actions"
         echo "[q] Quit"
-        echo ""
         read -rp " Select option [q]: " menu_option
+        echo ""
         menu_option="${menu_option:-q}"
         case "$menu_option" in
             1) check_mac_menu; break ;;
@@ -1219,16 +1217,16 @@ main_menu() {
                     *) return 1 ;;
                 esac
                 ;;
-            q|Q) log "INFO: Exiting"; break ;;
+            q|Q) break ;;
             *) info "invalid option -retry"; sleep 1 ;;
         esac
     done
 }
 
-# start
-log "INFO: uhmhotspot start..."
-
 main_menu || { log "ERROR: revocation incomplete -abort"; exit 1; }
 
-# end
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
+
 log "INFO: uhmhotspot done"

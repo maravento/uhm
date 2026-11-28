@@ -16,15 +16,15 @@
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
 
 # logging
 log_file="/var/log/uhm.log"
@@ -128,7 +128,7 @@ ensure_executable() {
 # Both scripts log their own output via log(); stdout here is a duplicate
 # and is discarded, stderr is kept for uncaught bash errors.
 #
-# Each step is run under `bash -x` so a failure leaves a full trace behind --
+# Each step is run under `bash -x` so a failure leaves a diagnostic trace behind --
 # a bare "$script_name failed" with no further detail (e.g. a command that fails
 # silently, like `sysctl -w ... >/dev/null 2>&1` with no key present) gives
 # no way to diagnose after the fact. The trace is discarded on success and
